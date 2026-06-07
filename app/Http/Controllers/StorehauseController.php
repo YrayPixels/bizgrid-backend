@@ -122,7 +122,7 @@ class StorehauseController extends Controller
         ])->save();
 
         $slug = $this->uniqueStoreSlug($data['business_name']);
-        $platformDomain = config('storehause.platform_domain', 'storehause.vercel.app');
+        $platformDomain = config('storehause.platform_domain', 'yrayhostings.com.ng');
 
         $store = Store::create([
             'merchant_id' => $merchant->id,
@@ -609,7 +609,7 @@ class StorehauseController extends Controller
     private function formatStore(Store $store): array
     {
         $store->loadMissing('merchant');
-        $platformDomain = config('storehause.platform_domain', 'storehause.vercel.app');
+        $platformDomain = config('storehause.platform_domain', 'yrayhostings.com.ng');
         $subdomainHost = "{$store->slug}.{$platformDomain}";
 
         return [
@@ -852,7 +852,7 @@ class StorehauseController extends Controller
 
     private function findStoreByHost(string $host): ?Store
     {
-        $platformDomain = config('storehause.platform_domain', 'storehause.vercel.app');
+        $platformDomain = config('storehause.platform_domain', 'yrayhostings.com.ng');
 
         if (str_ends_with($host, '.'.$platformDomain)) {
             $prefix = substr($host, 0, -strlen($platformDomain) - 1);
