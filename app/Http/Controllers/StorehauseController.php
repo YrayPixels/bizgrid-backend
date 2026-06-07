@@ -244,6 +244,14 @@ class StorehauseController extends Controller
             'storefront.template' => 'nullable|array',
             'storefront.template.id' => 'nullable|string|in:classic,editorial,bold_grid,fashion_lookbook,minimalistic',
             'storefront.template.source' => 'nullable|string|in:merchant_selected,ai_selected',
+            'storefront.palette' => 'nullable|array',
+            'storefront.palette.primary' => ['nullable', 'string', 'regex:/^#[0-9A-Fa-f]{6}$/'],
+            'storefront.palette.accent' => ['nullable', 'string', 'regex:/^#[0-9A-Fa-f]{6}$/'],
+            'storefront.palette.background' => ['nullable', 'string', 'regex:/^#[0-9A-Fa-f]{6}$/'],
+            'storefront.palette.surface' => ['nullable', 'string', 'regex:/^#[0-9A-Fa-f]{6}$/'],
+            'storefront.palette.text' => ['nullable', 'string', 'regex:/^#[0-9A-Fa-f]{6}$/'],
+            'storefront.palette.muted' => ['nullable', 'string', 'regex:/^#[0-9A-Fa-f]{6}$/'],
+            'storefront.palette.border' => ['nullable', 'string', 'regex:/^#[0-9A-Fa-f]{6}$/'],
             'storefront.data_plugs' => 'nullable|array',
             'storefront.data_plugs.home_products_source' => 'nullable|string|in:merchant_products,theme_products',
             'storefront.media' => 'nullable|array',
@@ -662,6 +670,7 @@ class StorehauseController extends Controller
                 'id' => $templateId,
                 'source' => ($store->storefront_template_id ?? 'ai_pick') === 'ai_pick' ? 'ai_selected' : 'merchant_selected',
             ],
+            'palette' => $this->defaultStorefrontPalette($templateId, $store->brand_color ?? null),
             'data_plugs' => [
                 'home_products_source' => 'merchant_products',
             ],
@@ -788,6 +797,57 @@ class StorehauseController extends Controller
         }
 
         return 'classic';
+    }
+
+    private function defaultStorefrontPalette(string $templateId, ?string $brandColor = null): array
+    {
+        return match ($templateId) {
+            'minimalistic' => [
+                'primary' => $brandColor ?: '#073E3F',
+                'accent' => '#D99359',
+                'background' => '#FBFBDC',
+                'surface' => '#FFFFFF',
+                'text' => '#073E3F',
+                'muted' => '#5F7A6F',
+                'border' => '#D8DEC1',
+            ],
+            'fashion_lookbook' => [
+                'primary' => $brandColor ?: '#111111',
+                'accent' => '#80131B',
+                'background' => '#FFFFFF',
+                'surface' => '#EEF0EF',
+                'text' => '#111111',
+                'muted' => '#6E6E6E',
+                'border' => '#E3E3E3',
+            ],
+            'editorial' => [
+                'primary' => $brandColor ?: '#7C3A2D',
+                'accent' => '#D8A48F',
+                'background' => '#FFFFFF',
+                'surface' => '#F8F3F0',
+                'text' => '#241613',
+                'muted' => '#75615B',
+                'border' => '#E8DAD5',
+            ],
+            'bold_grid' => [
+                'primary' => $brandColor ?: '#0F4C81',
+                'accent' => '#F59E0B',
+                'background' => '#FFFFFF',
+                'surface' => '#F3F7FB',
+                'text' => '#102033',
+                'muted' => '#607085',
+                'border' => '#DCE7F2',
+            ],
+            default => [
+                'primary' => $brandColor ?: '#1F6F5B',
+                'accent' => '#F4B860',
+                'background' => '#FFFFFF',
+                'surface' => '#F7FAF8',
+                'text' => '#10201B',
+                'muted' => '#64736E',
+                'border' => '#DCE7E1',
+            ],
+        };
     }
 
     private function findStoreByHost(string $host): ?Store
