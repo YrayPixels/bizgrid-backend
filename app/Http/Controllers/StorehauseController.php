@@ -87,7 +87,7 @@ class StorehauseController extends Controller
             'description' => 'required|string|max:1000',
             'brand_color' => ['required', 'string', 'regex:/^#[0-9A-Fa-f]{6}$/'],
             'logo_url' => 'nullable|url|max:2048',
-            'storefront_template_id' => 'nullable|string|in:ai_pick,classic,editorial,bold_grid,fashion_lookbook',
+            'storefront_template_id' => 'nullable|string|in:ai_pick,classic,editorial,bold_grid,fashion_lookbook,minimalistic',
         ]);
 
         $user = $request->user();
@@ -208,7 +208,7 @@ class StorehauseController extends Controller
     {
         $data = $request->validate([
             'store_id' => 'required|integer',
-            'storefront_template_id' => 'nullable|string|in:classic,editorial,bold_grid,fashion_lookbook',
+            'storefront_template_id' => 'nullable|string|in:classic,editorial,bold_grid,fashion_lookbook,minimalistic',
         ]);
 
         $store = $this->findOwnedStore($request, (int) $data['store_id']);
@@ -242,7 +242,7 @@ class StorehauseController extends Controller
         $data = $request->validate([
             'storefront' => 'required|array',
             'storefront.template' => 'nullable|array',
-            'storefront.template.id' => 'nullable|string|in:classic,editorial,bold_grid,fashion_lookbook',
+            'storefront.template.id' => 'nullable|string|in:classic,editorial,bold_grid,fashion_lookbook,minimalistic',
             'storefront.template.source' => 'nullable|string|in:merchant_selected,ai_selected',
             'storefront.data_plugs' => 'nullable|array',
             'storefront.data_plugs.home_products_source' => 'nullable|string|in:merchant_products,theme_products',
@@ -273,7 +273,7 @@ class StorehauseController extends Controller
             'storefront.seo' => 'required|array',
             'storefront.seo.title' => 'required|string|max:160',
             'storefront.seo.description' => 'required|string|max:300',
-            'storefront_template_id' => 'nullable|string|in:classic,editorial,bold_grid,fashion_lookbook',
+            'storefront_template_id' => 'nullable|string|in:classic,editorial,bold_grid,fashion_lookbook,minimalistic',
         ]);
 
         $store = $this->findOwnedStore($request, $storeId);
@@ -769,13 +769,17 @@ class StorehauseController extends Controller
     {
         $templateId = $store->storefront_template_id ?? 'ai_pick';
 
-        if (in_array($templateId, ['classic', 'editorial', 'bold_grid', 'fashion_lookbook'], true)) {
+        if (in_array($templateId, ['classic', 'editorial', 'bold_grid', 'fashion_lookbook', 'minimalistic'], true)) {
             return $templateId;
         }
 
         $industry = $store->merchant?->industry ?? 'other';
 
-        if (in_array($industry, ['fashion_and_apparel', 'beauty_and_skincare', 'home_and_living'], true)) {
+        if ($industry === 'beauty_and_skincare') {
+            return 'minimalistic';
+        }
+
+        if (in_array($industry, ['fashion_and_apparel', 'home_and_living'], true)) {
             return 'editorial';
         }
 
