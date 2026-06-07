@@ -1,0 +1,51 @@
+name: Build & Deploy Laravel Incremental
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      # 1️⃣ Checkout repo
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      # 2️⃣ Setup PHP
+      - name: Setup PHP 8.2
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: 8.2
+
+      # 3️⃣ Install Composer dependencies
+      - name: Install dependencies
+        run: composer install --no-dev --optimize-autoloader
+
+      # 4️⃣ Upload only changed files via FTP (incremental)
+      - name: Upload changed files to FTP
+        uses: SamKirkland/FTP-Deploy-Action@v4.3.6
+        with:
+          server: ftp.yraytestings.com.ng
+          username: ${{ secrets.FTP_USERNAME }} # URL-encoded if needed
+          password: ${{ secrets.FTP_PASSWORD }}
+          local-dir: ./
+          server-dir: /
+          exclude: |
+            .git*
+            node_modules/
+            storage/
+            deploy/
+            release.zip
+
+      # # 5️⃣ Run migrations (after files are uploaded)
+      # - name: Run migrations
+      #   run: |
+      #     curl -f -sS "https://hey.yraytestings.com.ng/maintenance/migrate?key=${{ secrets.DEPLOY_KEY }}"
+
+      # # 6️⃣ Clear and rebuild Laravel caches
+      # - name: Clear Laravel cache
+      #   run: |
+      #     curl -f -sS "https://hey.yraytestings.com.ng/maintenance/cache-clear?key=${{ secrets.DEPLOY_KEY }}"
