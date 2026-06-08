@@ -809,18 +809,18 @@ class StorehauseController extends Controller
             ->first(fn (string $id): bool => in_array($id, $activeTemplateIds, true), $fallback);
 
         if ($industry === 'beauty_and_skincare') {
-            return $firstActive(['cosmetics', 'beauty', 'minimalistic', 'editorial'], 'classic');
+            return $firstActive(['cosmetics', 'beauty', 'minimalistic'], 'minimalistic');
         }
 
-        if (in_array($industry, ['fashion_and_apparel', 'home_and_living'], true)) {
-            return $firstActive(['fashion_lookbook', 'editorial'], 'classic');
+        if ($industry === 'fashion_and_apparel') {
+            return $firstActive(['fashion_lookbook', 'minimalistic'], 'minimalistic');
         }
 
-        if (in_array($industry, ['electronics', 'food_and_beverage'], true)) {
-            return $firstActive(['bold_grid', 'classic'], 'classic');
+        if (in_array($industry, ['electronics', 'food_and_beverage', 'home_and_living'], true)) {
+            return $firstActive(['minimalistic', 'cosmetics'], 'minimalistic');
         }
 
-        return in_array('classic', $activeTemplateIds, true) ? 'classic' : ($activeTemplateIds[0] ?? 'classic');
+        return in_array('minimalistic', $activeTemplateIds, true) ? 'minimalistic' : ($activeTemplateIds[0] ?? 'minimalistic');
     }
 
     private function defaultStorefrontPalette(string $templateId, ?string $brandColor = null): array

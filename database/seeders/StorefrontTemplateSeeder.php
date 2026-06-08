@@ -16,6 +16,7 @@ class StorefrontTemplateSeeder extends Seeder
                 'description' => 'A balanced storefront with a clear hero, featured products, and trust blocks.',
                 'best_for' => 'Most shops',
                 'preview' => 'balanced',
+                'is_active' => false,
                 'sort_order' => 10,
                 'default_palette' => [
                     'primary' => '#1F6F5B',
@@ -33,6 +34,7 @@ class StorefrontTemplateSeeder extends Seeder
                 'description' => 'A more premium, story-led layout for lifestyle and beauty businesses.',
                 'best_for' => 'Fashion, beauty, home',
                 'preview' => 'editorial',
+                'is_active' => false,
                 'sort_order' => 20,
                 'default_palette' => [
                     'primary' => '#7C3A2D',
@@ -118,6 +120,7 @@ class StorefrontTemplateSeeder extends Seeder
                 'description' => 'A product-forward template with stronger catalog emphasis.',
                 'best_for' => 'Electronics, food, high-volume catalog',
                 'preview' => 'grid',
+                'is_active' => false,
                 'sort_order' => 60,
                 'default_palette' => [
                     'primary' => '#0F4C81',

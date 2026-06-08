@@ -11,6 +11,7 @@ class StorefrontTemplateController extends Controller
     {
         $templates = StorefrontTemplate::query()
             ->where('is_active', true)
+            ->whereIn('id', StorefrontTemplate::defaultActiveConcreteIds())
             ->orderBy('sort_order')
             ->get()
             ->map(fn (StorefrontTemplate $template) => $template->toCatalogArray())

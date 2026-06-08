@@ -38,10 +38,16 @@ class StorefrontTemplate extends Model
     }
 
     /** @return list<string> */
+    public static function defaultActiveConcreteIds(): array
+    {
+        return ['fashion_lookbook', 'beauty', 'cosmetics', 'minimalistic'];
+    }
+
+    /** @return list<string> */
     public static function activeConcreteIds(): array
     {
         if (! Schema::hasTable('storefront_templates')) {
-            return self::concreteIds();
+            return self::defaultActiveConcreteIds();
         }
 
         $templates = self::query()
@@ -50,11 +56,14 @@ class StorefrontTemplate extends Model
             ->all();
 
         if (! $templates) {
-            return self::concreteIds();
+            return self::defaultActiveConcreteIds();
         }
 
-        $activeIds = array_keys(array_filter($templates));
-        $missingBuiltIns = array_values(array_diff(self::concreteIds(), array_keys($templates)));
+        $activeIds = array_values(array_intersect(
+            array_keys(array_filter($templates)),
+            self::defaultActiveConcreteIds(),
+        ));
+        $missingBuiltIns = array_values(array_diff(self::defaultActiveConcreteIds(), array_keys($templates)));
 
         return array_values(array_unique(array_merge($activeIds, $missingBuiltIns)));
     }
