@@ -182,6 +182,7 @@ class AdminMerchantController extends Controller
                     'slug' => $store->slug,
                     'status' => $store->status,
                     'primary_domain' => $store->primary_domain,
+                    'storefront_template_id' => $store->storefront_template_id,
                     'products_count' => (int) $store->products_count,
                     'orders_count' => (int) $store->orders_count,
                     'gross_revenue' => (float) $store->gross_revenue,

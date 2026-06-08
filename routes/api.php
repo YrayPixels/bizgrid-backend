@@ -19,7 +19,9 @@ use App\Http\Controllers\AdminNotificationController;
 use App\Http\Controllers\BugReportController;
 use App\Http\Controllers\AdminBugReportController;
 use App\Http\Controllers\AdminMerchantController;
+use App\Http\Controllers\AdminStorefrontTemplateController;
 use App\Http\Controllers\StorehauseController;
+use App\Http\Controllers\StorefrontTemplateController;
 
 // Route::get('/user', function (Request $request) {
 //     return $request->user();
@@ -169,6 +171,10 @@ Route::middleware('auth:sanctum')->prefix('admin')->group(function () {
     Route::get('/merchants/{id}', [AdminMerchantController::class, 'show']);
     Route::patch('/merchants/{id}/status', [AdminMerchantController::class, 'updateStatus']);
 
+    Route::get('/storefront-templates', [AdminStorefrontTemplateController::class, 'index']);
+    Route::patch('/storefront-templates/{id}', [AdminStorefrontTemplateController::class, 'update']);
+    Route::patch('/storefront-templates/{id}/status', [AdminStorefrontTemplateController::class, 'updateStatus']);
+
     Route::get('/notifications/recipients', [AdminNotificationController::class, 'listRecipients']);
     Route::post('/notifications/preview', [AdminNotificationController::class, 'preview']);
     Route::post('/notifications/send', [AdminNotificationController::class, 'send']);
@@ -185,6 +191,7 @@ Route::middleware('auth:sanctum')->prefix('admin')->group(function () {
 Route::prefix('storehause')->group(function () {
     Route::post('/auth/register', [StorehauseController::class, 'register']);
     Route::post('/auth/login', [StorehauseController::class, 'login']);
+    Route::get('/storefront-templates', [StorefrontTemplateController::class, 'active']);
     Route::get('/public/storefronts/by-host', [StorehauseController::class, 'publicStorefrontByHost']);
     Route::get('/public/storefronts/{slug}', [StorehauseController::class, 'publicStorefront']);
     Route::post('/public/storefronts/{slug}/orders', [StorehauseController::class, 'placeOrder']);
