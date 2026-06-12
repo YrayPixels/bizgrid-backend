@@ -20,6 +20,15 @@ class StorefrontTemplate extends Model
         'is_active',
         'sort_order',
         'default_palette',
+        'industries',
+        'tone_tags',
+        'visual_tags',
+        'product_types',
+        'required_content_slots',
+        'optional_content_slots',
+        'origin',
+        'base_template_id',
+        'generation_status',
     ];
 
     protected function casts(): array
@@ -28,6 +37,12 @@ class StorefrontTemplate extends Model
             'is_active' => 'boolean',
             'sort_order' => 'integer',
             'default_palette' => 'array',
+            'industries' => 'array',
+            'tone_tags' => 'array',
+            'visual_tags' => 'array',
+            'product_types' => 'array',
+            'required_content_slots' => 'array',
+            'optional_content_slots' => 'array',
         ];
     }
 
@@ -80,6 +95,16 @@ class StorefrontTemplate extends Model
             'is_active' => $this->is_active,
             'sort_order' => $this->sort_order,
             'default_palette' => $this->default_palette,
+            'best_for' => $this->best_for ? array_map('trim', explode(',', $this->best_for)) : [],
+            'industries' => $this->industries ?? [],
+            'tone_tags' => $this->tone_tags ?? [],
+            'visual_tags' => $this->visual_tags ?? [],
+            'product_types' => $this->product_types ?? [],
+            'required_content_slots' => $this->required_content_slots ?? [],
+            'optional_content_slots' => $this->optional_content_slots ?? [],
+            'origin' => $this->origin ?? 'platform',
+            'base_template_id' => $this->base_template_id,
+            'generation_status' => $this->generation_status ?? ($this->is_active ? 'active' : 'inactive'),
         ];
     }
 }

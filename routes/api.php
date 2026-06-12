@@ -20,6 +20,7 @@ use App\Http\Controllers\BugReportController;
 use App\Http\Controllers\AdminBugReportController;
 use App\Http\Controllers\AdminMerchantController;
 use App\Http\Controllers\AdminStorefrontTemplateController;
+use App\Http\Controllers\StorefrontBuilderController;
 use App\Http\Controllers\StorehauseController;
 use App\Http\Controllers\StorefrontTemplateController;
 
@@ -192,6 +193,7 @@ Route::prefix('storehause')->group(function () {
     Route::post('/auth/register', [StorehauseController::class, 'register']);
     Route::post('/auth/login', [StorehauseController::class, 'login']);
     Route::get('/storefront-templates', [StorefrontTemplateController::class, 'active']);
+    Route::post('/storefront-builder/recommend-templates', [StorefrontTemplateController::class, 'recommend']);
     Route::get('/public/storefronts/by-host', [StorehauseController::class, 'publicStorefrontByHost']);
     Route::get('/public/storefronts/{slug}', [StorehauseController::class, 'publicStorefront']);
     Route::post('/public/storefronts/{slug}/orders', [StorehauseController::class, 'placeOrder']);
@@ -211,6 +213,15 @@ Route::prefix('storehause')->group(function () {
         Route::post('/ai/storefront/generate', [StorehauseController::class, 'generateStorefront']);
         Route::get('/ai/storefront/{storeId}', [StorehauseController::class, 'getStorefront']);
         Route::patch('/ai/storefront/{storeId}', [StorehauseController::class, 'updateStorefront']);
+
+        Route::prefix('storefront-builder')->group(function () {
+            Route::post('/sessions', [StorefrontBuilderController::class, 'startSession']);
+            Route::get('/sessions/current', [StorefrontBuilderController::class, 'currentSession']);
+            Route::post('/sessions/{sessionId}/messages', [StorefrontBuilderController::class, 'sendMessage']);
+            Route::post('/sessions/{sessionId}/select-template', [StorefrontBuilderController::class, 'selectTemplate']);
+            Route::post('/sessions/{sessionId}/generate', [StorefrontBuilderController::class, 'generateDraft']);
+            Route::post('/sessions/{sessionId}/edit', [StorefrontBuilderController::class, 'applyEdit']);
+        });
     });
 });
 

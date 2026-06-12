@@ -1,5 +1,7 @@
 <?php
 
+use App\Services\StorefrontAiAgentService;
+
 /*
 |--------------------------------------------------------------------------
 | Test Case
@@ -45,7 +47,22 @@ expect()->extend('toBeOne', function () {
 |
 */
 
-function something()
+function mockStorefrontAiAgent(callable $configure): void
 {
-    // ..
+    $mock = Mockery::mock(StorefrontAiAgentService::class);
+    $mock->shouldReceive('available')->andReturn(true);
+    $configure($mock);
+
+    app()->instance(StorefrontAiAgentService::class, $mock);
+}
+
+function glowRitualsProfile(): array
+{
+    return [
+        'business_name' => 'Glow Rituals',
+        'description' => 'Organic skincare for busy professionals.',
+        'industry' => 'beauty_and_skincare',
+        'brand_color' => '#0E7C66',
+        'tone' => ['premium', 'natural'],
+    ];
 }

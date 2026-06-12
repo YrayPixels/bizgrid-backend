@@ -36,6 +36,14 @@ function findAvailablePort(startPort = 8000, maxAttempts = 10) {
   return null;
 }
 
+function clearCache() {
+  execSync(`php artisan config:clear`);
+  execSync(`php artisan cache:clear`);
+  execSync(`php artisan route:clear`);
+  execSync(`php artisan view:clear`);
+  console.log('Cache cleared');
+}
+
 function startServer(ip, port) {
   console.log(`🚀 Starting Laravel server at http://${ip}:${port}`);
   execSync(`php artisan serve --host=${ip} --port=${port}`, { stdio: 'inherit' });
@@ -48,6 +56,7 @@ try {
   const port = findAvailablePort(8000, 10);
   if (!port) throw new Error('Could not find an open port after 10 attempts');
 
+  clearCache()
   startServer(ip, port);
 } catch (err) {
   console.error(`❌ ${err.message}`);
