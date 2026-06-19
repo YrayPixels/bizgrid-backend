@@ -69,7 +69,8 @@ class StorefrontAiAgentService
                 'role' => 'system',
                 'content' => implode("\n", [
                     'You are the Storehaus storefront builder assistant.',
-                    'Reply in 1-3 short sentences. Be warm and practical.',
+                    'Return ONLY valid JSON with key: assistant_message.',
+                    'assistant_message should be 1-3 short sentences. Be warm and practical.',
                     'If the merchant only greeted you, greet them back and explain the next step for their current session state.',
                     'Do not repeat template recommendation boilerplate unless they asked about templates.',
                     'If a draft exists, invite them to request copy changes.',
@@ -105,23 +106,21 @@ class StorefrontAiAgentService
         array $recommendations,
         array $availableTemplateIds,
     ): ?array {
-        $result = $this->chatJson([
+        $result = $this->chatWithTools([
             [
                 'role' => 'system',
                 'content' => implode("\n", [
                     'You are the Storehaus Builder Orchestrator agent.',
-                    'Plan the next builder turn and choose structured tool calls.',
-                    'Return ONLY valid JSON with keys: assistant_message, plan, tool_calls.',
-                    'tool_calls must be an array of objects: {"name": string, "arguments": object}.',
-                    'Allowed tool names:',
-                    '- recommend_templates: show ranked template choices. Use when merchant asks for options or has enough profile but no selected template.',
-                    '- select_template: select one template. Arguments: {"template_id": string, "source": "ai_selected"|"merchant_selected"}. Use only with available template IDs.',
-                    '- generate_draft: generate the storefront draft. Use only if a template is selected, or include select_template first.',
-                    '- ask_clarifying_question: ask for missing info. Arguments: {"question": string}.',
-                    'Never invent template IDs. Available template IDs: '.implode(', ', $availableTemplateIds).'.',
+                    'Use the provided tools to advance the merchant through storefront setup.',
+                    'Call one or more tools when they help move the session forward.',
+                    'Use recommend_templates when the merchant asks for options or has enough profile but no selected template.',
+                    'Use select_template only with available template IDs. Never invent template IDs.',
+                    'Use generate_draft only when a template is selected, or call select_template first.',
+                    'Use ask_clarifying_question when required profile or intent is still missing.',
                     'If the merchant asks you to build, create, draft, generate, or "go ahead", prefer selecting the top recommendation if no template is selected, then generate_draft.',
                     'If a storefront draft already exists and the user asks for copy changes, do not use these tools; the edit endpoint handles that separately.',
-                    'assistant_message should briefly say what you are doing or what you need next.',
+                    'Briefly explain what you are doing in your assistant message when you call tools.',
+                    'Available template IDs: '.implode(', ', $availableTemplateIds).'.',
                 ]),
             ],
             [
@@ -133,16 +132,29 @@ class StorefrontAiAgentService
                     'recommendations' => $recommendations,
                 ]),
             ],
-        ], 0.25);
+        ], $this->builderToolDefinitions($availableTemplateIds), 0.25);
 
         if (! is_array($result)) {
             return null;
         }
 
-        $assistantMessage = is_string($result['assistant_message'] ?? null)
-            ? trim($result['assistant_message'])
-            : '';
-        $toolCalls = $this->sanitizeToolCalls($result['tool_calls'] ?? [], $availableTemplateIds);
+        $assistantMessage = is_string($result['content'] ?? null) ? trim($result['content']) : '';
+        $toolCalls = $this->sanitizeToolCalls(
+            $this->parseNativeToolCalls($result['tool_calls'] ?? []),
+            $availableTemplateIds,
+        );
+
+        if ($assistantMessage === '' && $toolCalls !== []) {
+            foreach ($toolCalls as $toolCall) {
+                if ($toolCall['name'] === 'ask_clarifying_question') {
+                    $question = $toolCall['arguments']['question'] ?? null;
+                    if (is_string($question) && trim($question) !== '') {
+                        $assistantMessage = trim($question);
+                        break;
+                    }
+                }
+            }
+        }
 
         if ($assistantMessage === '' && $toolCalls === []) {
             return null;
@@ -150,7 +162,7 @@ class StorefrontAiAgentService
 
         return [
             'assistant_message' => $assistantMessage !== '' ? $assistantMessage : 'I have a plan for the next storefront step.',
-            'plan' => is_array($result['plan'] ?? null) ? array_values($result['plan']) : [],
+            'plan' => [],
             'tool_calls' => $toolCalls,
         ];
     }
@@ -270,6 +282,167 @@ class StorefrontAiAgentService
                 ? trim($result['assistant_message'])
                 : null,
         ];
+    }
+
+    /**
+     * @param  list<string>  $availableTemplateIds
+     * @return list<array<string, mixed>>
+     */
+    private function builderToolDefinitions(array $availableTemplateIds): array
+    {
+        return [
+            [
+                'type' => 'function',
+                'function' => [
+                    'name' => 'recommend_templates',
+                    'description' => 'Show ranked storefront template recommendations for the merchant.',
+                    'parameters' => [
+                        'type' => 'object',
+                        'properties' => (object) [],
+                        'additionalProperties' => false,
+                    ],
+                ],
+            ],
+            [
+                'type' => 'function',
+                'function' => [
+                    'name' => 'select_template',
+                    'description' => 'Select one storefront template for the merchant.',
+                    'parameters' => [
+                        'type' => 'object',
+                        'properties' => [
+                            'template_id' => [
+                                'type' => 'string',
+                                'enum' => array_values($availableTemplateIds),
+                                'description' => 'The template ID to select.',
+                            ],
+                            'source' => [
+                                'type' => 'string',
+                                'enum' => ['ai_selected', 'merchant_selected'],
+                                'description' => 'Whether the AI or merchant chose the template.',
+                            ],
+                        ],
+                        'required' => ['template_id'],
+                        'additionalProperties' => false,
+                    ],
+                ],
+            ],
+            [
+                'type' => 'function',
+                'function' => [
+                    'name' => 'generate_draft',
+                    'description' => 'Generate the first storefront draft with hero copy, about section, FAQs, SEO, and sample products.',
+                    'parameters' => [
+                        'type' => 'object',
+                        'properties' => (object) [],
+                        'additionalProperties' => false,
+                    ],
+                ],
+            ],
+            [
+                'type' => 'function',
+                'function' => [
+                    'name' => 'ask_clarifying_question',
+                    'description' => 'Ask the merchant for missing business details or intent before proceeding.',
+                    'parameters' => [
+                        'type' => 'object',
+                        'properties' => [
+                            'question' => [
+                                'type' => 'string',
+                                'description' => 'A short clarifying question for the merchant.',
+                            ],
+                        ],
+                        'required' => ['question'],
+                        'additionalProperties' => false,
+                    ],
+                ],
+            ],
+        ];
+    }
+
+    /**
+     * @param  list<array{role: string, content: string}>  $messages
+     * @param  list<array<string, mixed>>  $tools
+     * @return array{content: ?string, tool_calls: list<array<string, mixed>>}|null
+     */
+    private function chatWithTools(array $messages, array $tools, float $temperature): ?array
+    {
+        if (! $this->available()) {
+            return null;
+        }
+
+        try {
+            $response = Http::withToken((string) config('openai.api_key'))
+                ->acceptJson()
+                ->timeout(30)
+                ->post('https://api.openai.com/v1/chat/completions', [
+                    'model' => config('openai.chat_model', 'gpt-4o-mini'),
+                    'temperature' => $temperature,
+                    'messages' => $messages,
+                    'tools' => $tools,
+                    'tool_choice' => 'auto',
+                ]);
+
+            if (! $response->successful()) {
+                Log::warning('Storefront AI agent tool request failed', [
+                    'status' => $response->status(),
+                    'body' => Str::limit($response->body(), 500),
+                ]);
+
+                return null;
+            }
+
+            $message = $response->json('choices.0.message');
+            if (! is_array($message)) {
+                return null;
+            }
+
+            $toolCalls = $message['tool_calls'] ?? [];
+
+            return [
+                'content' => is_string($message['content'] ?? null) ? $message['content'] : null,
+                'tool_calls' => is_array($toolCalls) ? $toolCalls : [],
+            ];
+        } catch (\Throwable $e) {
+            Log::warning('Storefront AI agent tool exception', ['message' => $e->getMessage()]);
+
+            return null;
+        }
+    }
+
+    /**
+     * @param  list<array<string, mixed>>  $nativeToolCalls
+     * @return list<array{name: string, arguments: array<string, mixed>}>
+     */
+    private function parseNativeToolCalls(array $nativeToolCalls): array
+    {
+        $calls = [];
+
+        foreach ($nativeToolCalls as $toolCall) {
+            if (! is_array($toolCall)) {
+                continue;
+            }
+
+            $function = $toolCall['function'] ?? null;
+            if (! is_array($function)) {
+                continue;
+            }
+
+            $name = $function['name'] ?? null;
+            if (! is_string($name) || trim($name) === '') {
+                continue;
+            }
+
+            $argumentsRaw = $function['arguments'] ?? '{}';
+            $decoded = json_decode(is_string($argumentsRaw) ? $argumentsRaw : '{}', true);
+
+            $calls[] = [
+                'name' => $name,
+                'arguments' => is_array($decoded) ? $decoded : [],
+            ];
+        }
+
+        return $calls;
     }
 
     /**

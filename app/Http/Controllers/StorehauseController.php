@@ -216,13 +216,20 @@ class StorehauseController extends Controller
         $data = $request->validate([
             'store_id' => 'required|integer',
             'storefront_template_id' => ['nullable', 'string', Rule::in(StorefrontTemplate::activeConcreteIds())],
+            'storefront' => 'nullable|array',
         ]);
 
         $store = $this->findOwnedStore($request, (int) $data['store_id']);
         if (isset($data['storefront_template_id'])) {
             $store->storefront_template_id = $data['storefront_template_id'];
         }
-        $storefront = $this->builderService->synthesizeStorefront($store);
+
+        if (! empty($data['storefront'])) {
+            $storefront = $data['storefront'];
+        } else {
+            $storefront = $this->builderService->synthesizeStorefront($store);
+        }
+
         $generationId = (string) Str::uuid();
 
         $store->storefront_content = $storefront;

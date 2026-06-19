@@ -23,29 +23,18 @@ class StorefrontBuilderController extends Controller
 
     public function startSession(Request $request): JsonResponse
     {
-        $data = $request->validate([
-            'prompt' => 'nullable|string|max:2000',
-        ]);
+        $user = $request->user();
+        $session = $this->findOrCreateActiveSession($user);
 
-        try {
-            $user = $request->user();
-            $session = $this->findOrCreateActiveSession($user);
-
-            if (! empty($data['prompt'])) {
-                $this->appendUserMessage($session, $data['prompt']);
-                $this->processUserMessage($session, $data['prompt']);
-            } elseif ($session->messages()->count() === 0) {
-                $this->appendAssistantMessage(
-                    $session,
-                    $this->builderService->conversationalReply($this->sessionContext($session), ''),
-                    ['type' => 'welcome'],
-                );
-            }
-
-            return response()->json($this->formatSessionPayload($session->fresh(['messages', 'store.merchant'])));
-        } catch (StorefrontAiUnavailableException $exception) {
-            return $this->aiUnavailableResponse($exception);
+        if ($session->messages()->count() === 0) {
+            $this->appendAssistantMessage(
+                $session,
+                'Hi! Tell me about your business, what you sell, who it is for, and the vibe you want. I will design and build your website.',
+                ['type' => 'welcome'],
+            );
         }
+
+        return response()->json($this->formatSessionPayload($session->fresh(['messages', 'store.merchant'])));
     }
 
     public function currentSession(Request $request): JsonResponse
@@ -70,17 +59,28 @@ class StorefrontBuilderController extends Controller
     {
         $data = $request->validate([
             'message' => 'required|string|max:2000',
+            'business_profile' => 'nullable|array',
+            'status' => 'nullable|string|in:collecting_requirements,template_recommendation,content_generated,products_pending,review_ready,published',
+            'assistant_message' => 'nullable|string|max:4000',
+            'assistant_payload' => 'nullable|array',
+            'selected_template_id' => ['nullable', 'string', Rule::in(StorefrontTemplate::activeConcreteIds())],
+            'storefront_snapshot' => 'nullable|array',
         ]);
 
-        try {
-            $session = $this->findOwnedSession($request, $sessionId);
-            $this->appendUserMessage($session, $data['message']);
-            $this->processUserMessage($session, $data['message']);
+        $session = $this->findOwnedSession($request, $sessionId);
+        $this->appendUserMessage($session, $data['message']);
 
-            return response()->json($this->formatSessionPayload($session->fresh(['messages', 'store.merchant'])));
-        } catch (StorefrontAiUnavailableException $exception) {
-            return $this->aiUnavailableResponse($exception);
+        if (! empty($data['assistant_message'])) {
+            $this->persistClientTurn($session, $request->user(), $data);
+        } else {
+            try {
+                $this->processUserMessage($session, $data['message']);
+            } catch (StorefrontAiUnavailableException $exception) {
+                return $this->aiUnavailableResponse($exception);
+            }
         }
+
+        return response()->json($this->formatSessionPayload($session->fresh(['messages', 'store.merchant'])));
     }
 
     public function selectTemplate(Request $request, int $sessionId): JsonResponse
@@ -102,9 +102,9 @@ class StorefrontBuilderController extends Controller
 
         $this->appendAssistantMessage(
             $session,
-            'Great choice. I can generate a first draft with hero copy, about section, FAQs, SEO, and sample products for this template.',
+            'Got it. Say “build my website” and I will generate your first draft with homepage copy, about section, FAQs, SEO, and starter products.',
             [
-                'type' => 'template_selected',
+                'type' => 'design_selected',
                 'template_id' => $data['template_id'],
                 'source' => $data['source'] ?? 'merchant_selected',
             ],
@@ -115,98 +115,182 @@ class StorefrontBuilderController extends Controller
 
     public function generateDraft(Request $request, int $sessionId): JsonResponse
     {
-        try {
-            $session = $this->findOwnedSession($request, $sessionId);
-            $store = $this->ensureStoreForSession($session, $request->user());
+        $data = $request->validate([
+            'storefront' => 'nullable|array',
+            'selected_template_id' => ['nullable', 'string', Rule::in(StorefrontTemplate::activeConcreteIds())],
+        ]);
 
-            if ($session->selected_template_id) {
-                $store->storefront_template_id = $session->selected_template_id;
-                $store->save();
-            }
+        $session = $this->findOwnedSession($request, $sessionId);
+        $store = $this->ensureStoreForSession($session, $request->user());
+        $templateId = $data['selected_template_id'] ?? $session->selected_template_id;
 
-            $storefront = $this->builderService->synthesizeStorefront($store->fresh('merchant'));
-            $generationId = (string) Str::uuid();
-
-            $store->storefront_content = $storefront;
-            $store->storefront_generation_id = $generationId;
+        if ($templateId) {
+            $session->selected_template_id = $templateId;
+            $store->storefront_template_id = $templateId;
             $store->save();
-
-            $session->store_id = $store->id;
-            $session->storefront_snapshot = $storefront;
-            $session->status = 'content_generated';
-            $session->save();
-
-            $this->appendAssistantMessage(
-                $session,
-                'Your storefront draft is ready. Preview it on the right, or ask me to refine the hero, about section, FAQ, or SEO.',
-                [
-                    'type' => 'draft_generated',
-                    'generation_id' => $generationId,
-                ],
-            );
-
-            return response()->json([
-                ...$this->formatSessionPayload($session->fresh(['messages', 'store.merchant'])),
-                'generation_id' => $generationId,
-                'storefront' => $storefront,
-            ]);
-        } catch (StorefrontAiUnavailableException $exception) {
-            return $this->aiUnavailableResponse($exception);
         }
+
+        if (! empty($data['storefront'])) {
+            $storefront = $data['storefront'];
+        } else {
+            try {
+                $storefront = $this->builderService->synthesizeStorefront($store->fresh('merchant'));
+            } catch (StorefrontAiUnavailableException $exception) {
+                return $this->aiUnavailableResponse($exception);
+            }
+        }
+
+        $generationId = (string) Str::uuid();
+        $store->storefront_content = $storefront;
+        $store->storefront_generation_id = $generationId;
+        $store->save();
+
+        $session->store_id = $store->id;
+        $session->storefront_snapshot = $storefront;
+        $session->status = 'content_generated';
+        $session->save();
+
+        $this->appendAssistantMessage(
+            $session,
+            'Your website is ready. Preview it on the right, then tell me what to refine — headline, about section, CTA, or SEO.',
+            [
+                'type' => 'website_generated',
+                'generation_id' => $generationId,
+            ],
+        );
+
+        return response()->json([
+            ...$this->formatSessionPayload($session->fresh(['messages', 'store.merchant'])),
+            'generation_id' => $generationId,
+            'storefront' => $storefront,
+        ]);
     }
 
     public function applyEdit(Request $request, int $sessionId): JsonResponse
     {
         $data = $request->validate([
             'instruction' => 'required|string|max:2000',
+            'storefront' => 'nullable|array',
+            'changed_paths' => 'nullable|array',
+            'changed_paths.*' => 'string',
+            'assistant_message' => 'nullable|string|max:4000',
         ]);
 
-        try {
-            $session = $this->findOwnedSession($request, $sessionId);
-            $store = $session->store;
+        $session = $this->findOwnedSession($request, $sessionId);
+        $store = $session->store;
 
-            if (! $store) {
-                return response()->json([
-                    'message' => 'Generate a draft before applying chat edits.',
-                ], 422);
-            }
-
-            $storefront = $session->storefront_snapshot
-                ?? $store->storefront_content
-                ?? $this->builderService->synthesizeStorefront($store->load('merchant'));
-
-            $result = $this->builderService->applyChatEdit($storefront, $data['instruction']);
-
-            $store->storefront_content = $result['storefront'];
-            $store->save();
-
-            $session->storefront_snapshot = $result['storefront'];
-            $session->status = 'review_ready';
-            $session->save();
-
-            $summary = ! empty($result['assistant_message'])
-                ? $result['assistant_message']
-                : ($result['changed_paths']
-                    ? 'Updated: '.implode(', ', $result['changed_paths']).'.'
-                    : 'I reviewed your request but did not change any protected fields.');
-
-            $this->appendAssistantMessage(
-                $session,
-                $summary,
-                [
-                    'type' => 'edit_applied',
-                    'changed_paths' => $result['changed_paths'],
-                ],
-            );
-
+        if (! $store) {
             return response()->json([
-                ...$this->formatSessionPayload($session->fresh(['messages', 'store.merchant'])),
-                'storefront' => $result['storefront'],
-                'changed_paths' => $result['changed_paths'],
-            ]);
-        } catch (StorefrontAiUnavailableException $exception) {
-            return $this->aiUnavailableResponse($exception);
+                'message' => 'Generate a website before applying chat edits.',
+            ], 422);
         }
+
+        if (! empty($data['storefront'])) {
+            $storefront = $data['storefront'];
+            $changedPaths = $data['changed_paths'] ?? [];
+            $summary = $data['assistant_message']
+                ?? ($changedPaths
+                    ? 'Updated: '.implode(', ', $changedPaths).'.'
+                    : 'I reviewed your request but did not change any protected fields.');
+        } else {
+            try {
+                $baseStorefront = $session->storefront_snapshot
+                    ?? $store->storefront_content
+                    ?? $this->builderService->synthesizeStorefront($store->load('merchant'));
+                $result = $this->builderService->applyChatEdit($baseStorefront, $data['instruction']);
+                $storefront = $result['storefront'];
+                $changedPaths = $result['changed_paths'];
+                $summary = ! empty($result['assistant_message'])
+                    ? $result['assistant_message']
+                    : ($changedPaths
+                        ? 'Updated: '.implode(', ', $changedPaths).'.'
+                        : 'I reviewed your request but did not change any protected fields.');
+            } catch (StorefrontAiUnavailableException $exception) {
+                return $this->aiUnavailableResponse($exception);
+            }
+        }
+
+        $store->storefront_content = $storefront;
+        $store->save();
+
+        $session->storefront_snapshot = $storefront;
+        $session->status = 'review_ready';
+        $session->save();
+
+        $this->appendAssistantMessage(
+            $session,
+            $summary,
+            [
+                'type' => 'website_refined',
+                'changed_paths' => $changedPaths,
+            ],
+        );
+
+        return response()->json([
+            ...$this->formatSessionPayload($session->fresh(['messages', 'store.merchant'])),
+            'storefront' => $storefront,
+            'changed_paths' => $changedPaths,
+        ]);
+    }
+
+    /**
+     * @param  array<string, mixed>  $data
+     */
+    private function persistClientTurn(StorefrontBuilderSession $session, User $user, array $data): void
+    {
+        if (! empty($data['business_profile']) && is_array($data['business_profile'])) {
+            $session->business_profile = $data['business_profile'];
+        }
+
+        if (! empty($data['status'])) {
+            $session->status = $data['status'];
+        }
+
+        if (! empty($data['selected_template_id'])) {
+            $session->selected_template_id = $data['selected_template_id'];
+        }
+
+        $profile = $session->business_profile ?? [];
+        $hasMinimum = ! empty($profile['business_name'])
+            && ! empty($profile['description'])
+            && strlen((string) $profile['description']) >= 10;
+
+        if ($hasMinimum && ! $session->store_id) {
+            $store = $this->createStoreFromProfile($user, $profile);
+            $session->store_id = $store->id;
+        } elseif ($hasMinimum && $session->store) {
+            $session->store->fill([
+                'name' => $profile['business_name'] ?? $session->store->name,
+                'description' => $profile['description'] ?? $session->store->description,
+                'brand_color' => $profile['brand_color'] ?? $session->store->brand_color,
+            ])->save();
+            $session->store->merchant?->fill([
+                'business_name' => $profile['business_name'] ?? $session->store->merchant?->business_name,
+                'industry' => $profile['industry'] ?? $session->store->merchant?->industry,
+            ])->save();
+        }
+
+        if ($session->selected_template_id && $session->store) {
+            $session->store->storefront_template_id = $session->selected_template_id;
+            $session->store->save();
+        }
+
+        if (! empty($data['storefront_snapshot']) && is_array($data['storefront_snapshot']) && $session->store) {
+            $generationId = (string) Str::uuid();
+            $session->storefront_snapshot = $data['storefront_snapshot'];
+            $session->store->storefront_content = $data['storefront_snapshot'];
+            $session->store->storefront_generation_id = $generationId;
+            $session->store->save();
+            $session->status = 'content_generated';
+        }
+
+        $session->save();
+
+        $this->appendAssistantMessage(
+            $session,
+            (string) $data['assistant_message'],
+            is_array($data['assistant_payload'] ?? null) ? $data['assistant_payload'] : null,
+        );
     }
 
     private function findOrCreateActiveSession(User $user): StorefrontBuilderSession
