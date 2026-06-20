@@ -68,6 +68,7 @@ class StorefrontBuilderController extends Controller
             'selected_template_id' => ['nullable', 'string', Rule::in(StorefrontTemplate::activeConcreteIds())],
             'storefront_snapshot' => 'nullable|array',
             'brand_color' => 'nullable|string|regex:/^#[0-9A-Fa-f]{6}$/',
+            'color_label' => 'nullable|string|max:120',
             'media_updates' => 'nullable|array',
             'apply_stock_images' => 'nullable|boolean',
         ]);
@@ -299,7 +300,7 @@ class StorefrontBuilderController extends Controller
             ])->save();
         }
 
-        if ($session->selected_template_id && $session->store) {
+        if (! empty($data['selected_template_id']) && $session->selected_template_id && $session->store) {
             $session->store->storefront_template_id = $session->selected_template_id;
             $session->store->save();
         }
@@ -310,6 +311,16 @@ class StorefrontBuilderController extends Controller
                 $session->store,
                 $data['storefront_snapshot'],
             );
+            if (! empty($data['selected_template_id']) && $session->selected_template_id) {
+                data_set($storefront, 'template.id', $session->selected_template_id);
+                data_set($storefront, 'template.source', 'merchant_selected');
+            }
+
+            $snapshotTemplateId = data_get($storefront, 'template.id');
+            if (is_string($snapshotTemplateId) && $snapshotTemplateId !== '' && $snapshotTemplateId !== 'ai_pick') {
+                $session->store->storefront_template_id = $snapshotTemplateId;
+            }
+
             $session->storefront_snapshot = $storefront;
             $session->store->storefront_content = $storefront;
             $session->store->storefront_generation_id = $generationId;
@@ -437,8 +448,15 @@ class StorefrontBuilderController extends Controller
         }
 
         if ($hasDraft && $this->builderService->isColorIntent($message)) {
-            $color = $this->builderService->extractColorFromMessage($message);
-            if ($color && $this->applyVisualBuilderUpdates($session, ['brand_color' => $color])) {
+            $resolved = $this->builderService->resolveBrandColorFromMessage(
+                $message,
+                $profile,
+                $session->store,
+            );
+            if ($resolved && $this->applyVisualBuilderUpdates($session, [
+                'brand_color' => $resolved['brand_color'],
+                'color_label' => $resolved['label'],
+            ])) {
                 return;
             }
         }
@@ -456,8 +474,8 @@ class StorefrontBuilderController extends Controller
             $result = $this->executeGenerateDraftTool($session, $recommendations);
             if ($result['ok'] ?? false) {
                 $templateLabel = $templateId ?? $session->selected_template_id ?? 'new';
-                $rebuildMessage = $this->builderService->isRebuildIntent($message)
-                    ? "Great — I rebuilt your site with the {$templateLabel} layout. Check the preview on the right, then tell me what to refine."
+                $rebuildMessage = $this->builderService->isDesignChangeIntent($message) || $this->builderService->isRebuildIntent($message)
+                    ? "Done — I refreshed your website with a {$templateLabel} look. Check the preview on the right, then tell me what to refine."
                     : 'Your website is ready. Preview it on the right, then tell me what to refine — headline, about section, CTA, or SEO.';
                 $this->appendAssistantMessage(
                     $session,
@@ -984,7 +1002,12 @@ class StorefrontBuilderController extends Controller
             $profile = $session->business_profile ?? [];
             $profile['brand_color'] = $data['brand_color'];
             $session->business_profile = $profile;
-            $summary = 'Done — I updated your brand color. Check the preview on the right.';
+            $label = is_string($data['color_label'] ?? null) && trim($data['color_label']) !== ''
+                ? trim($data['color_label'])
+                : null;
+            $summary = $label
+                ? "Done — I updated your brand color to {$label}. Check the preview on the right."
+                : 'Done — I updated your brand color. Check the preview on the right.';
             $payloadType = 'brand_color_applied';
         }
 

@@ -64,6 +64,64 @@ class StorefrontAiAgentService
     }
 
     /**
+     * @param  array<string, mixed>  $context
+     * @return array{brand_color: string, label: string}|null
+     */
+    public function resolveBrandColorFromMessage(string $message, array $context = [], bool $randomPick = false): ?array
+    {
+        $systemLines = [
+            'You choose website brand colors for small business storefronts.',
+            'Return ONLY valid JSON: {"brand_color": "#RRGGBB", "label": "short color name"}.',
+            'brand_color must be a six-digit hex code suitable as the primary brand/button color.',
+            'Pick a refined, on-brand shade — not neon unless the merchant asked for neon.',
+            'Interpret ANY color name or description the merchant gives: pink, chartreuse, salmon, midnight blue, etc.',
+            'You are not limited to a preset list — if they name a color, pick an appropriate hex for it.',
+            'Interpret descriptive requests naturally: soft lavender, earthy brown, metallic silver, warm sunset, muted sage.',
+            'Ensure enough contrast for white button text.',
+        ];
+
+        if ($randomPick) {
+            $systemLines[] = 'The merchant asked for a random or surprise color — pick a distinctive, attractive brand color that fits their industry and is DIFFERENT from current_brand_color if provided. Be creative.';
+        }
+
+        $result = $this->chatJson([
+            [
+                'role' => 'system',
+                'content' => implode("\n", $systemLines),
+            ],
+            [
+                'role' => 'user',
+                'content' => json_encode([
+                    'merchant_request' => $message,
+                    'business_name' => $context['business_name'] ?? null,
+                    'industry' => $context['industry'] ?? null,
+                    'description' => $context['description'] ?? null,
+                    'current_brand_color' => $context['brand_color'] ?? null,
+                    'wants_random_color' => $randomPick,
+                ]),
+            ],
+        ], $randomPick ? 0.95 : 0.35);
+
+        if (! is_array($result)) {
+            return null;
+        }
+
+        $brandColor = is_string($result['brand_color'] ?? null) ? trim($result['brand_color']) : '';
+        if (preg_match('/^#[0-9A-Fa-f]{6}$/', $brandColor) !== 1) {
+            return null;
+        }
+
+        $label = is_string($result['label'] ?? null) && trim($result['label']) !== ''
+            ? trim($result['label'])
+            : ($randomPick ? 'Surprise color' : 'Custom color');
+
+        return [
+            'brand_color' => strtoupper($brandColor),
+            'label' => $label,
+        ];
+    }
+
+    /**
      * @param  array<string, mixed>  $sessionContext
      */
     public function respondToConversation(string $message, array $sessionContext): ?string

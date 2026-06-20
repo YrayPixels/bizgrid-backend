@@ -715,12 +715,24 @@ class StorefrontBuilderService
             || preg_match('/\b(sell|store|brand|business|template|skincare|fashion|product|shop|vibe|style|candle|website|site|build)\b/i', $trimmed) === 1;
     }
 
+    public function isDesignChangeIntent(string $message): bool
+    {
+        $trimmed = strtolower(trim($message));
+
+        return preg_match('/\b(another|different|new|other|change|pick|try|switch|choose|select)\b.*\bdesign\b/', $trimmed) === 1
+            || preg_match('/\bdesign\b.*\b(for|for a|for my|that fits)\b/', $trimmed) === 1
+            || preg_match('/\b(redesign|re-design|new look|fresh look|different look|another look|new layout|different layout|switch layout|change layout)\b/', $trimmed) === 1
+            || preg_match('/\b(pick|choose|try|switch to|use)\b.*\b(cosmetics|cosmetic|beauty|skincare|fashion|lookbook|minimalistic|minimal)\b.*\b(design|look|layout|style)\b/', $trimmed) === 1
+            || preg_match('/\b(cosmetics|cosmetic|beauty|skincare|fashion|lookbook|minimalistic|minimal)\b.*\b(design|look|layout|style)\b/', $trimmed) === 1;
+    }
+
     public function isRebuildIntent(string $message): bool
     {
         $trimmed = strtolower(trim($message));
 
-        return (preg_match('/\b(build|create|generate|make|switch|rebuild|redo)\b.*\bfor\b/', $trimmed) === 1
-            && preg_match('/\b(cosmetics|beauty|skincare|fashion|lookbook|minimalistic|minimal|candle|food|electronics)\b/', $trimmed) === 1)
+        return $this->isDesignChangeIntent($message)
+            || (preg_match('/\b(build|create|generate|make|switch|rebuild|redo)\b.*\bfor\b/', $trimmed) === 1
+                && preg_match('/\b(cosmetics|cosmetic|beauty|skincare|fashion|lookbook|minimalistic|minimal|candle|food|electronics)\b/', $trimmed) === 1)
             || preg_match('/\blets?\s+build\s+for\b/', $trimmed) === 1;
     }
 
@@ -752,11 +764,170 @@ class StorefrontBuilderService
 
     public function isColorIntent(string $message): bool
     {
+        if ($this->isDesignChangeIntent($message)) {
+            return false;
+        }
+
         $trimmed = strtolower(trim($message));
 
-        return preg_match('/\b(brand color|colour|color palette|use .+#([0-9a-f]{3}|[0-9a-f]{6}))\b/i', $message) === 1
-            || preg_match('/\b(make it|try|use|switch to|go with)\b.*\b(green|teal|terracotta|navy|blush|black|burgundy|sage|amber|coral|cream)\b/', $trimmed) === 1
-            || preg_match('/^#[0-9a-f]{6}$/i', $trimmed) === 1;
+        if (preg_match('/^#[0-9a-f]{6}$/i', $trimmed) === 1) {
+            return true;
+        }
+
+        if (preg_match('/\b(brand color|brand colour|colour scheme|color scheme|color palette|colour palette|pallete|palette)\b/i', $message) === 1) {
+            return true;
+        }
+
+        if (preg_match('/\buse .+#([0-9a-f]{3}|[0-9a-f]{6})\b/i', $message) === 1) {
+            return true;
+        }
+
+        if (preg_match('/\b(make it|try|use|switch to|go with|want|lets|let\'s)\b.*\b(color|colour|palette|pallete|scheme)\b/', $trimmed) === 1) {
+            return true;
+        }
+
+        if ($this->extractColorHintFromMessage($message) !== null) {
+            if (preg_match('/\b(ley|let\s*(?:\'s|s)?|lets|i\s+want|want|wanna|get|go|try|use|make\s+it|switch\s+to|change\s+to|can\s+we|could\s+we|how\s+about|give me)\b/i', $message) === 1) {
+                return true;
+            }
+
+            if (preg_match('/\b(color|colour|brand|palette|tone|shade|hue)\b/i', $message) === 1) {
+                return true;
+            }
+
+            if (strlen($trimmed) <= 40
+                && preg_match('/\b(headline|subheadline|tagline|cta|button|about|contact|faq|seo|hero|copy|premium|minimal|luxury|warmer|friendlier|professional|playful|bold|shorter|longer)\b/', $trimmed) !== 1) {
+                return true;
+            }
+        }
+
+        if ($this->isOpenEndedColorRequest($message)) {
+            return true;
+        }
+
+        if (preg_match('/\b(give me|pick|choose|select|suggest)\b.*\b(color|colour|shade|hue)\b/i', $message) === 1) {
+            return true;
+        }
+
+        return preg_match('/\b(make it|try|use|switch to|go with)\b.*\b(green|teal|terracotta|navy|blush|black|burgundy|sage|amber|coral|cream|blue|ocean(?:ic)?|pink|red|purple|rose|gold|mint)\b/', $trimmed) === 1
+            || preg_match('/\b(terracotta|teal|navy|blush|burgundy|sage|amber|coral|cream|black|green|blue|ocean(?:ic)?|pink|red|purple|rose|gold|mint|lavender|peach|mauve|indigo|maroon|ruby|emerald|crimson|charcoal|ivory|beige)\b/', $trimmed) === 1;
+    }
+
+    public function extractColorHintFromMessage(string $message): ?string
+    {
+        $lower = strtolower(trim($message));
+
+        if (preg_match('/\bcoral\s+blue\b/i', $message, $matches) === 1) {
+            return trim($matches[0]);
+        }
+
+        if (preg_match('/\bocean(?:ic)?(?:\s+(?:blue|palette|pallete|scheme))?\b/i', $message, $matches) === 1) {
+            return trim($matches[0]);
+        }
+
+        if (preg_match('/\bmake\s+it\s+(?:a|an|the|some\s+)?([a-z][a-z\s-]{1,30}?)(?:\s+please|\?|!|$|\.)/i', $message, $matches) === 1) {
+            $hint = trim($matches[1]);
+            if ($hint !== '' && ! preg_match('/^(color|colour|palette|scheme|brand|more|less)$/i', $hint)) {
+                return $hint;
+            }
+        }
+
+        if (preg_match('/\b(?:ley|let\s*(?:\'s|s)?|lets)\s+try\s+(?:a|an|the|some\s+)?([a-z][a-z\s-]{1,30}?)(?:\s+please|\?|!|$|\.)/i', $message, $matches) === 1) {
+            $hint = trim($matches[1]);
+            if ($hint !== '') {
+                return $hint;
+            }
+        }
+
+        $words = [
+            'terracotta', 'teal', 'navy', 'blush', 'burgundy', 'sage', 'amber', 'coral', 'cream', 'black', 'green',
+            'blue', 'oceanic', 'ocean', 'pink', 'rose', 'red', 'purple', 'gold', 'mint', 'lavender', 'peach', 'mauve',
+            'indigo', 'maroon', 'ruby', 'emerald', 'crimson', 'charcoal', 'ivory', 'beige', 'yellow', 'orange', 'grey', 'gray',
+        ];
+
+        foreach ($words as $word) {
+            if (preg_match('/\b'.preg_quote($word, '/').'\b/', $lower) === 1) {
+                return $word;
+            }
+        }
+
+        if (preg_match('/\b(?:ley|let\s*(?:\'s|s)?|lets|want|get|go|try|use|make\s+it|switch\s+to|change\s+to|can\s+we|could\s+we)\s+(?:an?\s+|the\s+|some\s+|a\s+)?([a-z][a-z\s-]{1,30}?)(?:\s+please|\?|!|$|\.)/i', $message, $matches) === 1) {
+            $hint = trim($matches[1]);
+            if ($hint !== '' && ! preg_match('/^(color|colour|palette|scheme|brand)$/i', $hint)) {
+                return $hint;
+            }
+        }
+
+        if (preg_match('/^[a-z][a-z\s-]{1,24}$/', $lower) === 1) {
+            return $lower;
+        }
+
+        return null;
+    }
+
+    /**
+     * @param  array<string, mixed>  $profile
+     * @return array{brand_color: string, label: string}|null
+     */
+    public function resolveBrandColorFromMessage(string $message, array $profile = [], ?Store $store = null): ?array
+    {
+        $context = [
+            'business_name' => $profile['business_name'] ?? $store?->name,
+            'industry' => $profile['industry'] ?? $store?->merchant?->industry,
+            'description' => $profile['description'] ?? $store?->description,
+            'brand_color' => $profile['brand_color'] ?? $store?->brand_color,
+        ];
+
+        if ($this->shouldResolveColorWithAi($message)) {
+            $resolved = $this->aiAgent->resolveBrandColorFromMessage($message, $context, $this->isOpenEndedColorRequest($message));
+            if (is_array($resolved)) {
+                return $resolved;
+            }
+        }
+
+        $hardcoded = $this->extractColorFromMessage($message);
+        if (is_string($hardcoded) && $hardcoded !== '') {
+            $hint = $this->extractColorHintFromMessage($message);
+
+            return [
+                'brand_color' => $hardcoded,
+                'label' => $hint ? ucwords($hint) : 'Brand color',
+            ];
+        }
+
+        return null;
+    }
+
+    public function shouldResolveColorWithAi(string $message): bool
+    {
+        return preg_match('/#([0-9A-Fa-f]{6})\b/', $message) !== 1;
+    }
+
+    public function isOpenEndedColorRequest(string $message): bool
+    {
+        $trimmed = strtolower(trim($message));
+
+        if (preg_match('/\bsurprise me\b/', $trimmed) === 1) {
+            return true;
+        }
+
+        if (preg_match('/\b(random|surprise|unexpected|different|fresh|wild|crazy|fun)\b.*\b(color|colour|shade|hue|palette)\b/i', $message) === 1) {
+            return true;
+        }
+
+        if (preg_match('/\b(give me|pick|choose|select|suggest|show me)\b.*\b(random|any|a?\s*color|a?\s*colour|something|anything)\b/i', $message) === 1) {
+            return true;
+        }
+
+        if (preg_match('/\b(very\s+)?random\s+(color|colour)\b/i', $message) === 1) {
+            return true;
+        }
+
+        if (preg_match('/\bgive me a very random color\b/', $trimmed) === 1) {
+            return true;
+        }
+
+        return false;
     }
 
     public function isImageIntent(string $message): bool
@@ -789,6 +960,19 @@ class StorefrontBuilderService
             return '#'.$matches[1];
         }
 
+        $phrases = [
+            '/\bcoral\s+blue\b/i' => '#3D8DAE',
+            '/\bocean(?:ic)?(?:\s+(?:blue|palette|pallete|scheme))?\b/i' => '#0077B6',
+            '/\belectric\s+blue\b/i' => '#0F4C81',
+            '/\bsky\s+blue\b/i' => '#4A90A4',
+        ];
+
+        foreach ($phrases as $pattern => $color) {
+            if (preg_match($pattern, $message) === 1) {
+                return $color;
+            }
+        }
+
         $lower = strtolower($message);
         $named = [
             'terracotta' => '#C47A2C',
@@ -802,10 +986,30 @@ class StorefrontBuilderService
             'cream' => '#F5E6D3',
             'black' => '#111111',
             'green' => '#2D6A4F',
+            'blue' => '#0F4C81',
+            'oceanic' => '#0077B6',
+            'ocean' => '#0077B6',
+            'pink' => '#D4577A',
+            'rose' => '#C76B7F',
+            'red' => '#B42318',
+            'purple' => '#6B4EFF',
+            'gold' => '#B8860B',
+            'mint' => '#5CB8A8',
+            'lavender' => '#9B8EC4',
+            'peach' => '#E8A87C',
+            'mauve' => '#9D7E9E',
+            'indigo' => '#4338CA',
+            'maroon' => '#7B2D3B',
+            'ruby' => '#9B1B30',
+            'emerald' => '#047857',
+            'crimson' => '#991B1B',
+            'charcoal' => '#36454F',
+            'ivory' => '#FFFFF0',
+            'beige' => '#C8B89A',
         ];
 
         foreach ($named as $name => $color) {
-            if (str_contains($lower, $name)) {
+            if (preg_match('/\b'.preg_quote($name, '/').'\b/', $lower) === 1) {
                 return $color;
             }
         }
@@ -819,6 +1023,7 @@ class StorefrontBuilderService
         $active = StorefrontTemplate::activeConcreteIds();
         $map = [
             'cosmetics' => 'cosmetics',
+            'cosmetic' => 'cosmetics',
             'skincare' => 'cosmetics',
             'beauty' => 'beauty',
             'fashion' => 'fashion_lookbook',
@@ -1063,9 +1268,17 @@ class StorefrontBuilderService
      */
     public function applyBrandColor(array $storefront, Store $store, string $brandColor): array
     {
-        $templateId = $store->storefront_template_id && $store->storefront_template_id !== 'ai_pick'
-            ? $store->storefront_template_id
-            : ($storefront['template']['id'] ?? 'minimalistic');
+        $templateId = $storefront['template']['id'] ?? null;
+        if (! is_string($templateId) || $templateId === '' || $templateId === 'ai_pick') {
+            $templateId = $store->storefront_template_id && $store->storefront_template_id !== 'ai_pick'
+                ? $store->storefront_template_id
+                : 'minimalistic';
+        }
+
+        $storefront['template'] = [
+            'id' => $templateId,
+            'source' => $storefront['template']['source'] ?? 'merchant_selected',
+        ];
         $storefront['palette'] = $this->defaultStorefrontPalette((string) $templateId, $brandColor);
         $store->brand_color = $brandColor;
         $store->save();
