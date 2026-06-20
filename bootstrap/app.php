@@ -15,9 +15,6 @@ return Application::configure(basePath: dirname(__DIR__))
     $middleware->api(prepend: [
         \App\Http\Middleware\Cors::class,
     ]);
-    $middleware->api(append: [
-        \App\Http\Middleware\CaptureApiBugReports::class,
-    ]);
 
     $middleware->web(prepend: [
         \App\Http\Middleware\Cors::class,

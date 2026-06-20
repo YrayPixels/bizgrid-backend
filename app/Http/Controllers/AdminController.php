@@ -89,7 +89,7 @@ class AdminController extends Controller
 
         Mail::raw("Hello {$admin->name}, your verification code is: {$verification_code}", function ($message) use ($admin) {
             $message->to($admin->email)
-                ->subject('HeySolana Admin Verification Code');
+                ->subject('StoreHause Admin Verification Code');
         });
 
         return response()->json([

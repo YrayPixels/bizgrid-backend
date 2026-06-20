@@ -15,7 +15,6 @@ class DatabaseSeeder extends Seeder
         $this->call([
             AdminSeeder::class,
             StorefrontTemplateSeeder::class,
-            SchoolOsDemoSeeder::class,
         ]);
     }
 }

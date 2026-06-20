@@ -113,11 +113,4 @@ return [
         'name' => env('MAIL_FROM_NAME', 'Example'),
     ],
 
-    /*
-    |--------------------------------------------------------------------------
-    | Admin email for Jumia order notifications
-    |--------------------------------------------------------------------------
-    */
-    'admin_email' => env('JUMIA_ADMIN_EMAIL', env('MAIL_FROM_ADDRESS')),
-
 ];
