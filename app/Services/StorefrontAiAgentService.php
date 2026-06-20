@@ -122,6 +122,144 @@ class StorefrontAiAgentService
     }
 
     /**
+     * @param  array<string, mixed>  $context
+     * @param  list<string>  $availableTemplateIds
+     * @param  list<array<string, mixed>>  $templateCatalog
+     * @return array{
+     *     template_id: string,
+     *     brand_color: string,
+     *     color_label: string,
+     *     palette: list<array{color: string, label: string}>,
+     *     industry: string|null,
+     *     tone: list<string>,
+     *     merchant_summary: string
+     * }|null
+     */
+    public function resolveDesignDirectionFromMessage(
+        string $message,
+        array $context = [],
+        array $availableTemplateIds = [],
+        array $templateCatalog = [],
+    ): ?array {
+        if (! $availableTemplateIds) {
+            $availableTemplateIds = StorefrontTemplate::activeConcreteIds();
+        }
+
+        $result = $this->chatJson([
+            [
+                'role' => 'system',
+                'content' => implode("\n", [
+                    'You are a storefront design director for small business websites.',
+                    'Given a merchant request, pick the BEST matching website design from the catalog and a cohesive brand color palette.',
+                    'Return ONLY valid JSON with keys:',
+                    '- "template_id": string — must be one of the catalog ids exactly',
+                    '- "brand_color": "#RRGGBB" — primary button/brand color with enough contrast for white text',
+                    '- "color_label": string — short name for the primary color',
+                    '- "palette": array of 3-4 objects {"color": "#RRGGBB", "label": "short name"} — harmonious palette including brand_color first',
+                    '- "industry": optional string — one of food_and_beverage, fashion_and_apparel, beauty_and_skincare, electronics, home_and_living, services, other',
+                    '- "tone": optional array of tone words',
+                    '- "merchant_summary": string — one short phrase describing the look in plain language WITHOUT the words template, theme, or layout',
+                    'Match the merchant\'s described business type, vibe, and aesthetic — not just keywords.',
+                    'Cosmetic/skincare/beauty shops → prefer cosmetics or beauty.',
+                    'Clothing/streetwear/fashion → prefer fashion_lookbook.',
+                    'Wellness/minimal/calm catalogs → prefer minimalistic.',
+                ]),
+            ],
+            [
+                'role' => 'user',
+                'content' => json_encode([
+                    'merchant_request' => $message,
+                    'business_name' => $context['business_name'] ?? null,
+                    'industry' => $context['industry'] ?? null,
+                    'description' => $context['description'] ?? null,
+                    'current_brand_color' => $context['brand_color'] ?? null,
+                    'current_template_id' => $context['current_template_id'] ?? null,
+                    'available_templates' => $templateCatalog,
+                ]),
+            ],
+        ], 0.4);
+
+        if (! is_array($result)) {
+            return null;
+        }
+
+        $templateId = is_string($result['template_id'] ?? null) ? trim($result['template_id']) : '';
+        if ($templateId === '' || ! in_array($templateId, $availableTemplateIds, true)) {
+            return null;
+        }
+
+        $brandColor = is_string($result['brand_color'] ?? null) ? trim($result['brand_color']) : '';
+        if (preg_match('/^#[0-9A-Fa-f]{6}$/', $brandColor) !== 1) {
+            return null;
+        }
+
+        $palette = [];
+        if (is_array($result['palette'] ?? null)) {
+            foreach ($result['palette'] as $entry) {
+                if (! is_array($entry)) {
+                    continue;
+                }
+                $color = is_string($entry['color'] ?? null) ? trim($entry['color']) : '';
+                if (preg_match('/^#[0-9A-Fa-f]{6}$/', $color) !== 1) {
+                    continue;
+                }
+                $label = is_string($entry['label'] ?? null) && trim($entry['label']) !== ''
+                    ? trim($entry['label'])
+                    : strtoupper($color);
+                $palette[] = ['color' => strtoupper($color), 'label' => $label];
+            }
+        }
+
+        $colorLabel = is_string($result['color_label'] ?? null) && trim($result['color_label']) !== ''
+            ? trim($result['color_label'])
+            : ($palette[0]['label'] ?? 'Brand color');
+
+        if ($palette === []) {
+            $palette[] = ['color' => strtoupper($brandColor), 'label' => $colorLabel];
+        }
+
+        $industry = is_string($result['industry'] ?? null) ? trim($result['industry']) : null;
+        $validIndustries = [
+            'food_and_beverage',
+            'fashion_and_apparel',
+            'beauty_and_skincare',
+            'electronics',
+            'home_and_living',
+            'services',
+            'other',
+        ];
+        if (! in_array($industry, $validIndustries, true)) {
+            $industry = is_string($context['industry'] ?? null) ? $context['industry'] : null;
+            if (! in_array($industry, $validIndustries, true)) {
+                $industry = null;
+            }
+        }
+
+        $tone = [];
+        if (is_array($result['tone'] ?? null)) {
+            foreach ($result['tone'] as $entry) {
+                if (is_string($entry) && trim($entry) !== '') {
+                    $tone[] = trim($entry);
+                }
+            }
+        }
+
+        $merchantSummary = is_string($result['merchant_summary'] ?? null) && trim($result['merchant_summary']) !== ''
+            ? trim($result['merchant_summary'])
+            : 'a refreshed look with '.$colorLabel.' tones';
+
+        return [
+            'template_id' => $templateId,
+            'brand_color' => strtoupper($brandColor),
+            'color_label' => $colorLabel,
+            'palette' => array_slice($palette, 0, 4),
+            'industry' => $industry,
+            'tone' => $tone,
+            'merchant_summary' => $merchantSummary,
+        ];
+    }
+
+    /**
      * @param  array<string, mixed>  $sessionContext
      */
     public function respondToConversation(string $message, array $sessionContext): ?string

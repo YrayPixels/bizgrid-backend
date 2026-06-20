@@ -723,7 +723,10 @@ class StorefrontBuilderService
             || preg_match('/\bdesign\b.*\b(for|for a|for my|that fits)\b/', $trimmed) === 1
             || preg_match('/\b(redesign|re-design|new look|fresh look|different look|another look|new layout|different layout|switch layout|change layout)\b/', $trimmed) === 1
             || preg_match('/\b(pick|choose|try|switch to|use)\b.*\b(cosmetics|cosmetic|beauty|skincare|fashion|lookbook|minimalistic|minimal)\b.*\b(design|look|layout|style)\b/', $trimmed) === 1
-            || preg_match('/\b(cosmetics|cosmetic|beauty|skincare|fashion|lookbook|minimalistic|minimal)\b.*\b(design|look|layout|style)\b/', $trimmed) === 1;
+            || preg_match('/\b(cosmetics|cosmetic|beauty|skincare|fashion|lookbook|minimalistic|minimal)\b.*\b(design|look|layout|style)\b/', $trimmed) === 1
+            || preg_match('/\b(switch|change|try|use|pick|go with)\b.*\b(cosmetics|cosmetic|beauty|skincare|fashion|lookbook|minimalistic|minimal)\b/', $trimmed) === 1
+            || preg_match('/\b(something else|different vibe|different aesthetic|different feel|not this look|change it up)\b/', $trimmed) === 1
+            || preg_match('/\b(i need|i want|looking for|need)\b.*\b(something else|different|new look|new style|a change|fresh look)\b/', $trimmed) === 1;
     }
 
     public function isRebuildIntent(string $message): bool
@@ -1039,6 +1042,97 @@ class StorefrontBuilderService
         }
 
         return null;
+    }
+
+    /**
+     * @param  array<string, mixed>  $profile
+     * @return array{
+     *     template_id: string,
+     *     brand_color: string,
+     *     color_label: string,
+     *     palette: list<array{color: string, label: string}>,
+     *     industry: string|null,
+     *     tone: list<string>,
+     *     merchant_summary: string
+     * }|null
+     */
+    public function resolveDesignDirectionFromMessage(string $message, array $profile = [], ?Store $store = null): ?array
+    {
+        $availableTemplateIds = StorefrontTemplate::activeConcreteIds();
+        $context = [
+            'business_name' => $profile['business_name'] ?? $store?->name,
+            'industry' => $profile['industry'] ?? $store?->merchant?->industry,
+            'description' => $profile['description'] ?? $store?->description,
+            'brand_color' => $profile['brand_color'] ?? $store?->brand_color,
+            'current_template_id' => $store?->storefront_template_id,
+        ];
+
+        if ($this->aiAgent->available()) {
+            $resolved = $this->aiAgent->resolveDesignDirectionFromMessage(
+                $message,
+                $context,
+                $availableTemplateIds,
+                $this->templateCatalogForAi($availableTemplateIds),
+            );
+
+            if (is_array($resolved)) {
+                return $resolved;
+            }
+        }
+
+        $fallbackTemplateId = $this->resolveTemplateFromMessage($message);
+        if (! is_string($fallbackTemplateId) || $fallbackTemplateId === '') {
+            return null;
+        }
+
+        $fallbackColor = is_string($context['brand_color'] ?? null) && preg_match('/^#[0-9A-Fa-f]{6}$/', $context['brand_color']) === 1
+            ? strtoupper($context['brand_color'])
+            : '#0E7C66';
+
+        return [
+            'template_id' => $fallbackTemplateId,
+            'brand_color' => $fallbackColor,
+            'color_label' => 'Brand color',
+            'palette' => [['color' => $fallbackColor, 'label' => 'Brand color']],
+            'industry' => is_string($context['industry'] ?? null) ? $context['industry'] : null,
+            'tone' => [],
+            'merchant_summary' => 'a '.$fallbackTemplateId.' style',
+        ];
+    }
+
+    /**
+     * @param  list<string>  $availableTemplateIds
+     * @return list<array<string, mixed>>
+     */
+    private function templateCatalogForAi(array $availableTemplateIds): array
+    {
+        if (! \Illuminate\Support\Facades\Schema::hasTable('storefront_templates')) {
+            return array_map(fn (string $id): array => [
+                'id' => $id,
+                'label' => Str::headline(str_replace('_', ' ', $id)),
+                'description' => '',
+                'best_for' => [],
+                'industries' => [],
+                'tone_tags' => [],
+                'visual_tags' => [],
+            ], $availableTemplateIds);
+        }
+
+        return StorefrontTemplate::query()
+            ->whereIn('id', $availableTemplateIds)
+            ->orderBy('sort_order')
+            ->get()
+            ->map(fn (StorefrontTemplate $template): array => [
+                'id' => $template->id,
+                'label' => $template->label,
+                'description' => $template->description,
+                'best_for' => $template->best_for ? array_map('trim', explode(',', $template->best_for)) : [],
+                'industries' => $template->industries ?? [],
+                'tone_tags' => $template->tone_tags ?? [],
+                'visual_tags' => $template->visual_tags ?? [],
+            ])
+            ->values()
+            ->all();
     }
 
     /**

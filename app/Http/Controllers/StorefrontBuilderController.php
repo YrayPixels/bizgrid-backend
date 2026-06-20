@@ -121,13 +121,45 @@ class StorefrontBuilderController extends Controller
 
         $session = $this->findOwnedSession($request, $sessionId);
         $session->selected_template_id = $data['template_id'];
-        $session->status = 'template_recommendation';
         $session->save();
 
         if ($session->store) {
             $session->store->storefront_template_id = $data['template_id'];
             $session->store->save();
         }
+
+        $hasDraft = ! empty($session->storefront_snapshot) && $session->store;
+
+        if ($hasDraft) {
+            $recommendations = $this->recommendTemplatesForProfile($session->business_profile ?? []);
+            $result = $this->executeGenerateDraftTool($session, $recommendations);
+
+            if ($result['ok'] ?? false) {
+                $templateLabel = $this->templateLabel($data['template_id']);
+                $this->appendAssistantMessage(
+                    $session,
+                    "Done — I refreshed your website with a {$templateLabel} look. Check the preview on the right, then tell me what to refine.",
+                    [
+                        'type' => 'website_generated',
+                        'template_id' => $data['template_id'],
+                        'source' => $data['source'] ?? 'merchant_selected',
+                        'generation_id' => $result['generation_id'] ?? null,
+                    ],
+                );
+
+                $session = $session->fresh(['messages', 'store.merchant']);
+
+                return response()->json([
+                    ...$this->formatSessionPayload($session),
+                    'storefront' => $session->store
+                        ? $this->productService->mergeIntoStorefront($session->storefront_snapshot ?? [], $session->store)
+                        : $session->storefront_snapshot,
+                ]);
+            }
+        }
+
+        $session->status = 'template_recommendation';
+        $session->save();
 
         $this->appendAssistantMessage(
             $session,
@@ -462,29 +494,76 @@ class StorefrontBuilderController extends Controller
         }
 
         if ($hasDraft && $this->builderService->isBuildIntent($message)) {
-            $templateId = $this->builderService->resolveTemplateFromMessage($message);
-            if ($templateId) {
-                $session->selected_template_id = $templateId;
+            $designDirection = $this->builderService->resolveDesignDirectionFromMessage($message, $profile, $session->store);
+            $paletteOptions = [];
+
+            if (is_array($designDirection)) {
+                $session->selected_template_id = $designDirection['template_id'];
+                $profile['brand_color'] = $designDirection['brand_color'];
+
+                if (! empty($designDirection['industry'])) {
+                    $profile['industry'] = $designDirection['industry'];
+                }
+
+                if (! empty($designDirection['tone'])) {
+                    $profile['tone'] = array_values(array_unique(array_merge($profile['tone'] ?? [], $designDirection['tone'])));
+                }
+
+                $session->business_profile = $profile;
+
                 if ($session->store) {
-                    $session->store->storefront_template_id = $templateId;
+                    $session->store->storefront_template_id = $designDirection['template_id'];
+                    $session->store->brand_color = $designDirection['brand_color'];
                     $session->store->save();
+                    $session->store->merchant?->fill([
+                        'industry' => $profile['industry'] ?? $session->store->merchant?->industry,
+                    ])->save();
+                }
+
+                $paletteOptions = array_values(array_map(
+                    fn (array $entry): string => $entry['color'],
+                    $designDirection['palette'] ?? [],
+                ));
+            } else {
+                $templateId = $this->builderService->resolveTemplateFromMessage($message);
+                if ($templateId) {
+                    $session->selected_template_id = $templateId;
+                    if ($session->store) {
+                        $session->store->storefront_template_id = $templateId;
+                        $session->store->save();
+                    }
                 }
             }
 
             $result = $this->executeGenerateDraftTool($session, $recommendations);
             if ($result['ok'] ?? false) {
-                $templateLabel = $templateId ?? $session->selected_template_id ?? 'new';
-                $rebuildMessage = $this->builderService->isDesignChangeIntent($message) || $this->builderService->isRebuildIntent($message)
-                    ? "Done — I refreshed your website with a {$templateLabel} look. Check the preview on the right, then tell me what to refine."
-                    : 'Your website is ready. Preview it on the right, then tell me what to refine — headline, about section, CTA, or SEO.';
-                $this->appendAssistantMessage(
-                    $session,
-                    $rebuildMessage,
-                    [
+                if (is_array($designDirection)) {
+                    $rebuildMessage = sprintf(
+                        'Done — I refreshed your website with %s. Your primary color is %s. Check the preview on the right, then tell me what to refine.',
+                        rtrim($designDirection['merchant_summary'], '.'),
+                        strtolower($designDirection['color_label']),
+                    );
+                    $payload = [
                         'type' => 'website_generated',
                         'generation_id' => $result['generation_id'] ?? null,
-                    ],
-                );
+                        'design_direction' => $designDirection,
+                        'color_options' => $paletteOptions,
+                    ];
+                } else {
+                    $resolvedTemplateId = $session->selected_template_id ?? 'new';
+                    $templateLabel = is_string($resolvedTemplateId)
+                        ? $this->templateLabel($resolvedTemplateId)
+                        : 'new';
+                    $rebuildMessage = $this->builderService->isDesignChangeIntent($message) || $this->builderService->isRebuildIntent($message)
+                        ? "Done — I refreshed your website with a {$templateLabel} look. Check the preview on the right, then tell me what to refine."
+                        : 'Your website is ready. Preview it on the right, then tell me what to refine — headline, about section, CTA, or SEO.';
+                    $payload = [
+                        'type' => 'website_generated',
+                        'generation_id' => $result['generation_id'] ?? null,
+                    ];
+                }
+
+                $this->appendAssistantMessage($session, $rebuildMessage, $payload);
             }
 
             return;
@@ -1083,9 +1162,17 @@ class StorefrontBuilderController extends Controller
         return $session;
     }
 
-    /**
-     * @return array<string, mixed>
-     */
+    private function templateLabel(string $templateId): string
+    {
+        $template = StorefrontTemplate::query()->find($templateId);
+
+        if ($template?->label) {
+            return $template->label;
+        }
+
+        return str_replace('_', ' ', $templateId);
+    }
+
     private function formatSessionPayload(StorefrontBuilderSession $session): array
     {
         $profile = $session->business_profile ?? [];
