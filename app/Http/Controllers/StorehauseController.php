@@ -5,10 +5,12 @@ namespace App\Http\Controllers;
 use App\Models\Merchant;
 use App\Models\Store;
 use App\Models\StoreOrder;
+use App\Models\StoreProduct;
 use App\Models\StorefrontTemplate;
 use App\Models\StoreVisit;
 use App\Models\User;
 use App\Services\StorefrontBuilderService;
+use App\Services\StoreProductService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -22,6 +24,7 @@ class StorehauseController extends Controller
 {
     public function __construct(
         private readonly StorefrontBuilderService $builderService,
+        private readonly StoreProductService $productService,
     ) {}
 
     public function register(Request $request): JsonResponse
@@ -232,13 +235,13 @@ class StorehauseController extends Controller
 
         $generationId = (string) Str::uuid();
 
-        $store->storefront_content = $storefront;
+        $store->storefront_content = $this->productService->extractEmbeddedProducts($store, $storefront);
         $store->storefront_generation_id = $generationId;
         $store->save();
 
         return response()->json([
             'generation_id' => $generationId,
-            'storefront' => $storefront,
+            'storefront' => $this->productService->mergeIntoStorefront($store->storefront_content, $store),
         ]);
     }
 
@@ -247,7 +250,7 @@ class StorehauseController extends Controller
         $store = $this->findOwnedStore($request, $storeId);
 
         return response()->json([
-            'storefront' => $store->storefront_content,
+            'storefront' => $this->productService->mergeIntoStorefront($store->storefront_content, $store),
         ]);
     }
 
@@ -284,14 +287,6 @@ class StorehauseController extends Controller
             'storefront.value_props.*.title' => 'required|string|max:120',
             'storefront.value_props.*.body' => 'required|string|max:500',
             'storefront.pages' => 'nullable|array',
-            'storefront.products' => 'nullable|array',
-            'storefront.products.*.id' => 'nullable|string|max:120',
-            'storefront.products.*.slug' => 'nullable|string|max:180',
-            'storefront.products.*.name' => 'nullable|string|max:180',
-            'storefront.products.*.description' => 'nullable|string|max:1000',
-            'storefront.products.*.price' => 'nullable|numeric',
-            'storefront.products.*.currency' => 'nullable|string|max:10',
-            'storefront.products.*.image_url' => 'nullable|string|max:2000000',
             'storefront.seo' => 'required|array',
             'storefront.seo.title' => 'required|string|max:160',
             'storefront.seo.description' => 'required|string|max:300',
@@ -312,12 +307,13 @@ class StorehauseController extends Controller
             $store->storefront_generation_id = (string) Str::uuid();
         }
 
+        unset($data['storefront']['products']);
         $store->storefront_content = $data['storefront'];
         $store->save();
 
         return response()->json([
             'generation_id' => $store->storefront_generation_id,
-            'storefront' => $store->storefront_content,
+            'storefront' => $this->productService->mergeIntoStorefront($store->storefront_content, $store),
         ]);
     }
 
@@ -493,8 +489,11 @@ class StorehauseController extends Controller
             'items.*.quantity' => 'required|integer|min:1|max:999',
         ]);
 
-        $products = collect($store->storefront_content['products'] ?? [])
-            ->keyBy(fn (array $product) => (string) ($product['id'] ?? ''));
+        $products = StoreProduct::query()
+            ->where('store_id', $store->id)
+            ->where('status', 'active')
+            ->get()
+            ->keyBy(fn (StoreProduct $product) => $product->id);
         $currency = 'NGN';
         $items = [];
         $subtotal = 0;
@@ -508,13 +507,13 @@ class StorehauseController extends Controller
             }
 
             $quantity = (int) $line['quantity'];
-            $unitPrice = (float) ($product['price'] ?? 0);
+            $unitPrice = (float) $product->price;
             $lineTotal = $unitPrice * $quantity;
-            $currency = (string) ($product['currency'] ?? $currency);
+            $currency = (string) ($product->currency ?: $currency);
             $subtotal += $lineTotal;
             $items[] = [
-                'product_id' => (string) ($product['id'] ?? $line['product_id']),
-                'name' => (string) ($product['name'] ?? 'Product'),
+                'product_id' => $product->id,
+                'name' => $product->name,
                 'quantity' => $quantity,
                 'unit_price' => $unitPrice,
                 'total' => $lineTotal,
@@ -665,9 +664,7 @@ class StorehauseController extends Controller
 
     private function productCount(Store $store): int
     {
-        $products = $store->storefront_content['products'] ?? [];
-
-        return is_array($products) ? count($products) : 0;
+        return StoreProduct::where('store_id', $store->id)->count();
     }
 
     private function findStoreByHost(string $host): ?Store
@@ -721,9 +718,11 @@ class StorehauseController extends Controller
 
     private function formatPublicPayload(Store $store): array
     {
+        $storefront = $store->storefront_content ?? $this->builderService->synthesizeStorefront($store);
+
         return [
             'store' => $this->formatStore($store),
-            'storefront' => $store->storefront_content ?? $this->builderService->synthesizeStorefront($store),
+            'storefront' => $this->productService->mergeIntoStorefront($storefront, $store, activeOnly: true),
             'generation_id' => $store->storefront_generation_id,
         ];
     }

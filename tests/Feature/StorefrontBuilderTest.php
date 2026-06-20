@@ -9,19 +9,6 @@ use Illuminate\Foundation\Testing\RefreshDatabase;
 uses(RefreshDatabase::class);
 
 it('creates a builder session for an authenticated merchant', function () {
-    mockStorefrontAiAgent(function ($mock) {
-        $mock->shouldReceive('extractBusinessProfile')
-            ->once()
-            ->andReturn(glowRitualsProfile());
-        $mock->shouldReceive('planBuilderTurn')
-            ->once()
-            ->andReturn([
-                'assistant_message' => 'I can recommend templates for Glow Rituals.',
-                'plan' => [['step' => 1, 'description' => 'Recommend templates.']],
-                'tool_calls' => [['name' => 'recommend_templates', 'arguments' => []]],
-            ]);
-    });
-
     $user = User::factory()->create();
 
     $response = $this->actingAs($user, 'sanctum')
@@ -30,9 +17,9 @@ it('creates a builder session for an authenticated merchant', function () {
         ]);
 
     $response->assertOk()
-        ->assertJsonPath('session.status', 'template_recommendation')
+        ->assertJsonPath('session.status', 'collecting_requirements')
         ->assertJsonStructure([
-            'session' => ['id', 'messages', 'recommendations', 'business_profile'],
+            'session' => ['id', 'messages'],
         ]);
 
     expect(StorefrontBuilderSession::where('user_id', $user->id)->exists())->toBeTrue();
@@ -139,30 +126,9 @@ it('responds conversationally to greetings when the merchant already has a store
 });
 
 it('can generate a storefront draft from a structured chat tool turn', function () {
-    mockStorefrontAiAgent(function ($mock) {
-        $mock->shouldReceive('extractBusinessProfile')
-            ->once()
-            ->andReturn(glowRitualsProfile());
-        $mock->shouldReceive('planBuilderTurn')
-            ->once()
-            ->andReturn([
-                'assistant_message' => 'I will generate your storefront draft now.',
-                'plan' => [['step' => 1, 'description' => 'Generate the storefront draft.']],
-                'tool_calls' => [
-                    [
-                        'name' => 'select_template',
-                        'arguments' => [
-                            'template_id' => 'cosmetics',
-                            'source' => 'ai_selected',
-                        ],
-                    ],
-                    ['name' => 'generate_draft', 'arguments' => []],
-                ],
-            ]);
-        $mock->shouldReceive('synthesizeStorefront')
-            ->once()
-            ->andReturnUsing(fn ($store, array $baseStorefront) => $baseStorefront);
-    });
+    $mock = Mockery::mock(App\Services\StorefrontAiAgentService::class);
+    $mock->shouldReceive('available')->andReturn(false);
+    app()->instance(App\Services\StorefrontAiAgentService::class, $mock);
 
     $user = User::factory()->create();
     $merchant = Merchant::create([
@@ -201,13 +167,65 @@ it('can generate a storefront draft from a structured chat tool turn', function 
 
     $response->assertOk()
         ->assertJsonPath('session.status', 'content_generated')
-        ->assertJsonPath('session.messages.1.payload.type', 'agent_turn');
+        ->assertJsonPath('session.messages.1.payload.type', 'website_generated');
 
     $store->refresh();
     expect($store->storefront_content)->not->toBeNull();
 });
 
-it('returns a service unavailable response when OpenAI is not configured', function () {
+it('generates a storefront draft when OpenAI synthesis enhancement fails', function () {
+    $mock = Mockery::mock(App\Services\StorefrontAiAgentService::class);
+    $mock->shouldReceive('available')->andReturn(true);
+    $mock->shouldReceive('synthesizeStorefront')->once()->andReturn(null);
+    app()->instance(App\Services\StorefrontAiAgentService::class, $mock);
+
+    $user = User::factory()->create();
+    $merchant = Merchant::create([
+        'owner_user_id' => $user->id,
+        'business_name' => 'Warm Wick',
+        'slug' => 'warm-wick',
+        'contact_name' => $user->name,
+        'email' => $user->email,
+        'industry' => 'home_and_living',
+        'status' => 'active',
+        'subscription_plan' => 'starter',
+        'subscription_status' => 'trialing',
+    ]);
+    $store = Store::create([
+        'merchant_id' => $merchant->id,
+        'name' => 'Warm Wick',
+        'slug' => 'warm-wick',
+        'status' => 'draft',
+        'primary_domain' => 'warm-wick.example.test',
+        'description' => 'Handmade candles for cozy spaces.',
+        'brand_color' => '#C47A2C',
+        'storefront_template_id' => 'minimalistic',
+    ]);
+
+    $session = StorefrontBuilderSession::create([
+        'user_id' => $user->id,
+        'store_id' => $store->id,
+        'status' => 'template_recommendation',
+        'business_profile' => [
+            'business_name' => 'Warm Wick',
+            'description' => 'Handmade candles for cozy spaces.',
+            'industry' => 'home_and_living',
+        ],
+        'selected_template_id' => 'minimalistic',
+    ]);
+
+    $response = $this->actingAs($user, 'sanctum')
+        ->postJson("/api/storehause/storefront-builder/sessions/{$session->id}/generate");
+
+    $response->assertOk()
+        ->assertJsonPath('session.status', 'content_generated')
+        ->assertJsonStructure(['storefront' => ['hero', 'about', 'seo']]);
+
+    $store->refresh();
+    expect($store->storefront_content)->not->toBeNull();
+});
+
+it('starts a builder session without requiring OpenAI', function () {
     $mock = Mockery::mock(App\Services\StorefrontAiAgentService::class);
     $mock->shouldReceive('available')->andReturn(false);
     app()->instance(App\Services\StorefrontAiAgentService::class, $mock);
@@ -219,6 +237,8 @@ it('returns a service unavailable response when OpenAI is not configured', funct
             'prompt' => 'Glow Rituals is an organic skincare brand for busy professionals.',
         ]);
 
-    $response->assertStatus(503)
-        ->assertJsonPath('message', 'Storefront AI is unavailable. Configure OPENAI_API_KEY and try again.');
+    $response->assertOk()
+        ->assertJsonStructure([
+            'session' => ['id', 'messages', 'business_profile'],
+        ]);
 });

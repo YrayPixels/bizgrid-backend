@@ -2,6 +2,8 @@
 
 Laravel backend for **StoreHause** — AI-powered storefronts for small businesses.
 
+Product architecture and build backlog: see `../storehause/docs/arch.md`.
+
 ## Features
 
 - Merchant registration and authentication (Sanctum)
@@ -48,7 +50,7 @@ All routes are prefixed with `/api`.
 - `POST /storehause/auth/login` — Login
 - `GET /storehause/public/storefronts/{slug}` — Public storefront
 - `POST /storehause/public/storefronts/{slug}/orders` — Place order
-- Authenticated: dashboard, stores, AI builder, orders
+- Authenticated: dashboard, stores, products, AI builder, orders
 
 ### Platform admin
 

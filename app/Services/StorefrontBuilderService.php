@@ -34,6 +34,7 @@ class StorefrontBuilderService
         $templateId = $this->resolveStorefrontTemplate($store);
         $isBeauty = $templateId === 'beauty';
         $isCosmetics = $templateId === 'cosmetics';
+        $isHome = $industry === 'home_and_living';
         $hero = $isCosmetics
             ? [
                 'headline' => 'Discover the nature with cosmetics.',
@@ -46,11 +47,17 @@ class StorefrontBuilderService
                 'subheadline' => 'Premium virgin hair extensions created exclusively for natural textures.',
                 'cta_label' => 'Shop now',
             ]
+            : ($isHome
+            ? [
+                'headline' => "Light up your space with {$businessName}",
+                'subheadline' => $description,
+                'cta_label' => 'Shop candles',
+            ]
             : [
                 'headline' => "Shop {$businessName} online",
                 'subheadline' => $description,
                 'cta_label' => 'Shop now',
-            ]);
+            ]));
         $about = $isCosmetics
             ? [
                 'title' => 'Best skin cleanser',
@@ -177,12 +184,18 @@ class StorefrontBuilderService
             ],
         ];
 
-        $this->ensureAiAvailable();
+        if ($this->aiAgent->available()) {
+            try {
+                $enhanced = $this->aiAgent->synthesizeStorefront($store, $storefront);
+                if (is_array($enhanced)) {
+                    return $enhanced;
+                }
+            } catch (\Throwable) {
+                // Fall back to the locally generated storefront when AI enhancement fails.
+            }
+        }
 
-        return $this->requireAiResult(
-            $this->aiAgent->synthesizeStorefront($store, $storefront),
-            'storefront synthesis',
-        );
+        return $storefront;
     }
 
     public function resolveStorefrontTemplate(Store $store): string
@@ -219,12 +232,116 @@ class StorefrontBuilderService
      */
     public function applyChatEdit(array $storefront, string $instruction): array
     {
-        $this->ensureAiAvailable();
+        if ($this->aiAgent->available()) {
+            try {
+                $result = $this->aiAgent->applyChatEdit($storefront, $instruction);
+                if (is_array($result)) {
+                    return $result;
+                }
+            } catch (\Throwable) {
+                // Fall back to rule-based parsing when AI editing fails.
+            }
+        }
 
-        return $this->requireAiResult(
-            $this->aiAgent->applyChatEdit($storefront, $instruction),
-            'chat edit',
-        );
+        return $this->applyChatEditFallback($storefront, $instruction, $this->aiAgent->available());
+    }
+
+    /**
+     * @param  array<string, mixed>  $storefront
+     * @return array{storefront: array<string, mixed>, changed_paths: list<string>, assistant_message: string}
+     */
+    private function applyChatEditFallback(array $storefront, string $instruction, bool $aiWasExpected = false): array
+    {
+        $parsed = $this->parseSimpleEditInstruction($instruction);
+        if ($parsed !== null) {
+            $next = $storefront;
+            $changedPaths = [];
+
+            foreach ($parsed['updates'] as $path => $value) {
+                if (! in_array($path, self::EDITABLE_PATHS, true)) {
+                    continue;
+                }
+
+                $this->setEditablePath($next, $path, $value);
+                $changedPaths[] = $path;
+            }
+
+            if ($changedPaths !== []) {
+                $next['edit_metadata'] = array_merge($next['edit_metadata'] ?? [], [
+                    'user_edited_paths' => array_values(array_unique([
+                        ...($next['edit_metadata']['user_edited_paths'] ?? []),
+                        ...$changedPaths,
+                    ])),
+                    'last_generation_prompt' => $instruction,
+                    'last_generated_at' => now()->toIso8601String(),
+                ]);
+            }
+
+            return [
+                'storefront' => $next,
+                'changed_paths' => $changedPaths,
+                'assistant_message' => $changedPaths
+                    ? 'Updated: '.implode(', ', $changedPaths).'.'
+                    : 'I reviewed your request but did not change any protected fields.',
+            ];
+        }
+
+        return [
+            'storefront' => $storefront,
+            'changed_paths' => [],
+            'assistant_message' => $aiWasExpected
+                ? 'AI copy editing is temporarily unavailable. Try a specific edit like “Change the headline to Handmade candles for cozy homes”.'
+                : 'Tell me exactly what to change, for example “Change the headline to …” or “Make the about section warmer”.',
+        ];
+    }
+
+    /**
+     * @return array{updates: array<string, string>}|null
+     */
+    private function parseSimpleEditInstruction(string $instruction): ?array
+    {
+        $updates = [];
+        $patterns = [
+            '/\b(?:change|update|set|make)\s+(?:the\s+)?headline\s+(?:to\s+)?["\']?(.+?)["\']?\s*$/i' => 'hero.headline',
+            '/\b(?:change|update|set|make)\s+(?:the\s+)?subheadline\s+(?:to\s+)?["\']?(.+?)["\']?\s*$/i' => 'hero.subheadline',
+            '/\b(?:change|update|set|make)\s+(?:the\s+)?(?:cta|button)\s+(?:to\s+|label\s+to\s+)?["\']?(.+?)["\']?\s*$/i' => 'hero.cta_label',
+            '/\b(?:change|update|set|make)\s+(?:the\s+)?about(?:\s+(?:section|body|copy))?\s+(?:to\s+)?["\']?(.+?)["\']?\s*$/i' => 'about.body',
+            '/\b(?:change|update|set|make)\s+(?:the\s+)?seo\s+title\s+(?:to\s+)?["\']?(.+?)["\']?\s*$/i' => 'seo.title',
+            '/\b(?:change|update|set|make)\s+(?:the\s+)?seo\s+description\s+(?:to\s+)?["\']?(.+?)["\']?\s*$/i' => 'seo.description',
+        ];
+
+        foreach ($patterns as $pattern => $path) {
+            if (preg_match($pattern, trim($instruction), $matches)) {
+                $value = trim($matches[1], " \t\n\r\0\x0B\"'.");
+                if ($value !== '') {
+                    $updates[$path] = $value;
+                }
+            }
+        }
+
+        $lower = strtolower($instruction);
+        if ($updates === [] && (str_contains($lower, 'cta') || str_contains($lower, 'button'))) {
+            $updates['hero.cta_label'] = str_contains($lower, 'collection') ? 'Shop the collection' : 'Shop now';
+        }
+
+        return $updates === [] ? null : ['updates' => $updates];
+    }
+
+    /**
+     * @param  array<string, mixed>  $storefront
+     */
+    private function setEditablePath(array &$storefront, string $path, string $value): void
+    {
+        match ($path) {
+            'hero.headline' => $storefront['hero']['headline'] = $value,
+            'hero.subheadline' => $storefront['hero']['subheadline'] = $value,
+            'hero.cta_label' => $storefront['hero']['cta_label'] = $value,
+            'about.title' => $storefront['about']['title'] = $value,
+            'about.body' => $storefront['about']['body'] = $value,
+            'seo.title' => $storefront['seo']['title'] = Str::limit($value, 160, ''),
+            'seo.description' => $storefront['seo']['description'] = Str::limit($value, 300, ''),
+            default => null,
+        };
     }
 
     /**
@@ -233,8 +350,6 @@ class StorefrontBuilderService
      */
     public function extractBusinessProfileFromMessage(string $message, array $profile = []): array
     {
-        $this->ensureAiAvailable();
-
         $profile = array_merge([
             'business_name' => null,
             'description' => null,
@@ -243,10 +358,75 @@ class StorefrontBuilderService
             'tone' => [],
         ], $profile);
 
-        return $this->requireAiResult(
-            $this->aiAgent->extractBusinessProfile($message, $profile),
-            'business profile extraction',
-        );
+        if ($this->aiAgent->available()) {
+            try {
+                $extracted = $this->aiAgent->extractBusinessProfile($message, $profile);
+                if (is_array($extracted)) {
+                    return $extracted;
+                }
+            } catch (\Throwable) {
+                // Fall back to rule-based extraction when AI profile parsing fails.
+            }
+        }
+
+        return $this->extractBusinessProfileFallback($message, $profile);
+    }
+
+    /**
+     * @param  array<string, mixed>  $profile
+     * @return array<string, mixed>
+     */
+    private function extractBusinessProfileFallback(string $message, array $profile): array
+    {
+        $next = $profile;
+        $lower = strtolower($message);
+
+        if (preg_match('/(?:called|named|name is|business is)\s+["\']?([^"\'.!?\n]+)["\']?/i', $message, $matches)) {
+            $next['business_name'] = trim($matches[1]);
+        }
+
+        if (strlen(trim($message)) > 20 && ! $this->isBuildIntent($message)) {
+            $next['description'] = trim($message);
+        }
+
+        if (preg_match('/\b(?:i\s+)?sell\s+([^,.!?\n]+)/i', $message, $matches) && empty($next['business_name'])) {
+            $label = trim($matches[1]);
+            if ($label !== '') {
+                $next['business_name'] = Str::title($label);
+            }
+        }
+
+        $industryKeywords = [
+            'candle' => 'home_and_living',
+            'skincare' => 'beauty_and_skincare',
+            'beauty' => 'beauty_and_skincare',
+            'fashion' => 'fashion_and_apparel',
+            'clothing' => 'fashion_and_apparel',
+            'food' => 'food_and_beverage',
+            'coffee' => 'food_and_beverage',
+            'electronics' => 'electronics',
+            'furniture' => 'home_and_living',
+            'home' => 'home_and_living',
+        ];
+
+        foreach ($industryKeywords as $keyword => $industry) {
+            if (str_contains($lower, $keyword)) {
+                $next['industry'] = $industry;
+                break;
+            }
+        }
+
+        foreach (['premium', 'luxury', 'minimal', 'natural', 'clean', 'bold', 'editorial', 'warm'] as $tone) {
+            if (str_contains($lower, $tone)) {
+                $next['tone'] = array_values(array_unique([...(array) ($next['tone'] ?? []), $tone]));
+            }
+        }
+
+        if (preg_match('/#([0-9A-Fa-f]{6})/', $message, $matches)) {
+            $next['brand_color'] = '#'.$matches[1];
+        }
+
+        return $next;
     }
 
     public function inferIndustryFromProfile(array $profile): string
@@ -274,7 +454,27 @@ class StorefrontBuilderService
         }
 
         return strlen($trimmed) >= 12
-            || preg_match('/\b(sell|store|brand|business|template|skincare|fashion|product|shop|vibe|style)\b/i', $trimmed) === 1;
+            || preg_match('/\b(sell|store|brand|business|template|skincare|fashion|product|shop|vibe|style|candle|website|site|build)\b/i', $trimmed) === 1;
+    }
+
+    public function isBuildIntent(string $message): bool
+    {
+        $trimmed = strtolower(trim($message));
+
+        return preg_match('/\b(build|create|generate|make)\b.*\b(website|site|storefront|store|draft)\b/', $trimmed) === 1
+            || preg_match('/\b(build my website|generate my website|create my website|yes proceed|yes,? build|go ahead and build|go ahead)\b/', $trimmed) === 1;
+    }
+
+    public function isEditIntent(string $message): bool
+    {
+        $trimmed = strtolower(trim($message));
+        if ($trimmed === '' || $this->isBuildIntent($message)) {
+            return false;
+        }
+
+        return preg_match('/\b(change|update|edit|rewrite|revise|shorten|lengthen|improve|fix|replace|make (?:the|it)|set (?:the|my))\b/', $trimmed) === 1
+            || preg_match('/\b(headline|subheadline|tagline|cta|button|about(?:\s+section|\s+copy|\s+page)?|seo|title|description|copy|hero)\b/', $trimmed) === 1
+            || preg_match('/\b(more premium|more luxury|more minimal|warmer|friendlier|professional|playful|bold|shorter|longer)\b/', $trimmed) === 1;
     }
 
     /**
@@ -282,12 +482,34 @@ class StorefrontBuilderService
      */
     public function conversationalReply(array $sessionContext, string $message): string
     {
-        $this->ensureAiAvailable();
+        if ($this->aiAgent->available()) {
+            $reply = $this->aiAgent->respondToConversation($message, $sessionContext);
+            if (is_string($reply) && trim($reply) !== '') {
+                return trim($reply);
+            }
+        }
 
-        return $this->requireAiResult(
-            $this->aiAgent->respondToConversation($message, $sessionContext),
-            'conversation reply',
-        );
+        return $this->conversationalReplyFallback($sessionContext, $message);
+    }
+
+    /**
+     * @param  array<string, mixed>  $sessionContext
+     */
+    private function conversationalReplyFallback(array $sessionContext, string $message): string
+    {
+        if (trim($message) === '') {
+            return 'Hi! Tell me about your business, what you sell, who it is for, and the vibe you want. I will design and build your website.';
+        }
+
+        if (! empty($sessionContext['has_storefront_draft'])) {
+            return 'Tell me what to change — for example “Change the headline to …”, “Make the about section warmer”, or “Update the CTA to Shop now”.';
+        }
+
+        if (! empty($sessionContext['has_store'])) {
+            return 'Say “build my website” whenever you are ready and I will generate your first draft.';
+        }
+
+        return 'Tell me your business name and what you sell, then I will start designing your website.';
     }
 
     /**

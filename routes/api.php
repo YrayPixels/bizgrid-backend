@@ -3,6 +3,7 @@
 use App\Http\Controllers\AdminController;
 use App\Http\Controllers\AdminMerchantController;
 use App\Http\Controllers\AdminStorefrontTemplateController;
+use App\Http\Controllers\StoreProductController;
 use App\Http\Controllers\StorefrontBuilderController;
 use App\Http\Controllers\StorefrontTemplateController;
 use App\Http\Controllers\StorehauseController;
@@ -63,6 +64,12 @@ Route::prefix('storehause')->group(function () {
         Route::post('/ai/storefront/generate', [StorehauseController::class, 'generateStorefront']);
         Route::get('/ai/storefront/{storeId}', [StorehauseController::class, 'getStorefront']);
         Route::patch('/ai/storefront/{storeId}', [StorehauseController::class, 'updateStorefront']);
+
+        Route::get('/products', [StoreProductController::class, 'index']);
+        Route::post('/products', [StoreProductController::class, 'store']);
+        Route::post('/products/import', [StoreProductController::class, 'import']);
+        Route::patch('/products/{productId}', [StoreProductController::class, 'update']);
+        Route::delete('/products/{productId}', [StoreProductController::class, 'destroy']);
 
         Route::prefix('storefront-builder')->group(function () {
             Route::post('/sessions', [StorefrontBuilderController::class, 'startSession']);
