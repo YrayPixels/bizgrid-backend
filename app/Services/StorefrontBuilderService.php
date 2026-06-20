@@ -10,18 +10,11 @@ use Illuminate\Support\Str;
 class StorefrontBuilderService
 {
     /** @var list<string> */
-    public const EDITABLE_PATHS = [
-        'hero.headline',
-        'hero.subheadline',
-        'hero.cta_label',
-        'about.title',
-        'about.body',
-        'seo.title',
-        'seo.description',
-    ];
+    public const EDITABLE_PATHS = StorefrontPathEditor::BASE_PATHS;
 
     public function __construct(
         private readonly StorefrontAiAgentService $aiAgent,
+        private readonly StorefrontBlockService $blockService,
     ) {}
 
     public function synthesizeStorefront(Store $store): array
@@ -119,6 +112,14 @@ class StorefrontBuilderService
             'hero' => $hero,
             'about' => $about,
             'value_props' => $valueProps,
+            'navigation' => $this->defaultNavigation($templateId),
+            'home_stats' => $isCosmetics
+                ? [
+                    ['value' => 'Trusted by over 350,000+ Clients', 'label' => 'worldwide since 2008'],
+                    ['value' => '6M+', 'label' => 'Worldwide Product sale per year'],
+                    ['value' => '4.6', 'label' => '3,350 Rating Worldwide'],
+                ]
+                : [],
             'pages' => [
                 'about' => [
                     'title' => $about['title'],
@@ -188,14 +189,14 @@ class StorefrontBuilderService
             try {
                 $enhanced = $this->aiAgent->synthesizeStorefront($store, $storefront);
                 if (is_array($enhanced)) {
-                    return $enhanced;
+                    return $this->blockService->ensureAllPageBlocksOnStorefront($enhanced);
                 }
             } catch (\Throwable) {
                 // Fall back to the locally generated storefront when AI enhancement fails.
             }
         }
 
-        return $storefront;
+        return $this->blockService->ensureAllPageBlocksOnStorefront($storefront);
     }
 
     public function resolveStorefrontTemplate(Store $store): string
@@ -227,15 +228,113 @@ class StorefrontBuilderService
     }
 
     /**
+     * @param  list<string>  $changedPaths
+     */
+    public function describeStorefrontEdit(array $changedPaths): string
+    {
+        if ($changedPaths === []) {
+            return 'I reviewed your request but did not change any protected fields.';
+        }
+
+        $labels = array_map(
+            fn (string $path): string => StorefrontPathEditor::pathLabel($path),
+            $changedPaths,
+        );
+
+        if (count($labels) === 1) {
+            return "Done — I updated the {$labels[0]}. Check the preview on the right.";
+        }
+
+        if (count($labels) === 2) {
+            return "Done — I updated the {$labels[0]} and {$labels[1]}. Check the preview on the right.";
+        }
+
+        $last = array_pop($labels);
+
+        return 'Done — I updated the '.implode(', ', $labels).", and {$last}. Check the preview on the right.";
+    }
+
+    /**
      * @param  array<string, mixed>  $storefront
      * @return array{storefront: array<string, mixed>, changed_paths: list<string>}
      */
-    public function applyChatEdit(array $storefront, string $instruction): array
+    public function applyChatEdit(array $storefront, string $instruction, ?Store $store = null): array
     {
+        $regenerate = $this->tryRegenerateSingleSection($storefront, $instruction, $store);
+        if ($regenerate !== null) {
+            return $regenerate;
+        }
+
+        if (StorefrontPathEditor::isFaqItemAppendInstruction($instruction)) {
+            $faqResult = StorefrontPathEditor::tryAppendFaqItem($storefront, $instruction);
+            if ($faqResult !== null) {
+                $changedPaths = $faqResult['changed_paths'];
+                $next = $this->blockService->maybeSyncHomeBlocksFromLegacyPaths(
+                    $faqResult['storefront'],
+                    $changedPaths,
+                );
+                $next['edit_metadata'] = array_merge($next['edit_metadata'] ?? [], [
+                    'user_edited_paths' => array_values(array_unique([
+                        ...($next['edit_metadata']['user_edited_paths'] ?? []),
+                        ...$changedPaths,
+                    ])),
+                    'last_generation_prompt' => $instruction,
+                    'last_generated_at' => now()->toIso8601String(),
+                ]);
+
+                return [
+                    'storefront' => $next,
+                    'changed_paths' => $changedPaths,
+                    'assistant_message' => $this->describeStorefrontEdit($changedPaths),
+                ];
+            }
+        }
+
+        $blockEdit = $this->blockService->tryApplyHomeBlockInstructionFormatted($storefront, $instruction);
+        if (is_array($blockEdit)) {
+            return $blockEdit;
+        }
+
+        $contactFormEdit = $this->blockService->tryApplyContactFormInstructionFormatted($storefront, $instruction);
+        if (is_array($contactFormEdit)) {
+            return $contactFormEdit;
+        }
+
+        $faqRefresh = StorefrontPathEditor::tryRefreshFaqItems(
+            $storefront,
+            $instruction,
+            $store?->name,
+            $store?->merchant?->industry,
+        );
+        if ($faqRefresh !== null) {
+            $changedPaths = $faqRefresh['changed_paths'];
+            $next = $this->blockService->maybeSyncHomeBlocksFromLegacyPaths($faqRefresh['storefront'], $changedPaths);
+            $next['edit_metadata'] = array_merge($next['edit_metadata'] ?? [], [
+                'user_edited_paths' => array_values(array_unique([
+                    ...($next['edit_metadata']['user_edited_paths'] ?? []),
+                    ...$changedPaths,
+                ])),
+                'last_generation_prompt' => $instruction,
+                'last_generated_at' => now()->toIso8601String(),
+            ]);
+
+            return [
+                'storefront' => $next,
+                'changed_paths' => $changedPaths,
+                'assistant_message' => 'Done — I refreshed your FAQ with answers tailored to your business. Check the preview on the right.',
+            ];
+        }
+
         if ($this->aiAgent->available()) {
             try {
                 $result = $this->aiAgent->applyChatEdit($storefront, $instruction);
-                if (is_array($result)) {
+                if (is_array($result) && ($result['changed_paths'] ?? []) !== []) {
+                    $result['storefront'] = $this->blockService->maybeSyncHomeBlocksFromLegacyPaths(
+                        $result['storefront'],
+                        $result['changed_paths'],
+                    );
+                    $result['assistant_message'] = $this->describeStorefrontEdit($result['changed_paths']);
+
                     return $result;
                 }
             } catch (\Throwable) {
@@ -243,30 +342,139 @@ class StorefrontBuilderService
             }
         }
 
-        return $this->applyChatEditFallback($storefront, $instruction, $this->aiAgent->available());
+        return $this->applyChatEditFallback($storefront, $instruction, $this->aiAgent->available(), $store);
+    }
+
+    /**
+     * Phase 4: regenerate a single section/block without touching the rest.
+     *
+     * @param  array<string, mixed>  $storefront
+     * @return array{storefront: array<string, mixed>, changed_paths: list<string>, assistant_message: string}|null
+     */
+    private function tryRegenerateSingleSection(array $storefront, string $instruction, ?Store $store = null): ?array
+    {
+        $lower = strtolower($instruction);
+        $wantsRegenerate = preg_match('/\b(redesign|regenerate|refresh)\b/u', $lower) === 1
+            && preg_match('/\b(just|only)\b/u', $lower) === 1;
+
+        if (! $wantsRegenerate) {
+            return null;
+        }
+
+        // MVP: hero only. (We can expand to arbitrary blocks once registry-based validation is in place.)
+        if (preg_match('/\bhero\b/u', $lower) !== 1) {
+            return null;
+        }
+
+        $next = json_decode(json_encode($storefront), true);
+        if (! is_array($next)) {
+            return null;
+        }
+
+        $blocks = is_array(data_get($next, 'pages.home.blocks')) ? data_get($next, 'pages.home.blocks') : [];
+        $index = collect($blocks)->search(fn ($block): bool => is_array($block) && ($block['id'] ?? null) === 'hero-main');
+        if (! is_int($index) || $index < 0) {
+            return null;
+        }
+
+        $existingProps = is_array($blocks[$index]['props'] ?? null) ? $blocks[$index]['props'] : [];
+        $layouts = ['split', 'centered', 'image_right'];
+        $layout = $layouts[array_rand($layouts)];
+
+        $businessName = $store?->name ?: (string) data_get($next, 'hero.headline', 'Our store');
+        $blocks[$index]['props'] = array_merge($existingProps, [
+            'eyebrow' => 'New season, new ritual',
+            'headline' => $existingProps['headline'] ?? $businessName,
+            'subheadline' => 'A cleaner, calmer hero layout — designed to feel premium without overpromising.',
+            'layout' => $layout,
+        ]);
+
+        $pages = is_array($next['pages'] ?? null) ? $next['pages'] : [];
+        $pages['home'] = ['blocks' => $blocks];
+        $next['pages'] = $pages;
+
+        // Keep legacy fields aligned + protect other page blocks.
+        $next = $this->blockService->ensureAllPageBlocksOnStorefront($next);
+        $next = $this->blockService->maybeSyncHomeBlocksFromLegacyPaths($next, ['hero.headline']);
+
+        return [
+            'storefront' => $next,
+            'changed_paths' => ['pages.home.blocks.hero-main'],
+            'assistant_message' => 'Done — I redesigned just your homepage hero section. Check the preview on the right.',
+        ];
     }
 
     /**
      * @param  array<string, mixed>  $storefront
      * @return array{storefront: array<string, mixed>, changed_paths: list<string>, assistant_message: string}
      */
-    private function applyChatEditFallback(array $storefront, string $instruction, bool $aiWasExpected = false): array
+    private function applyChatEditFallback(array $storefront, string $instruction, bool $aiWasExpected = false, ?Store $store = null): array
     {
+        $faqResult = StorefrontPathEditor::tryAppendFaqItem($storefront, $instruction);
+        if ($faqResult !== null) {
+            $changedPaths = $faqResult['changed_paths'];
+            $next = $this->blockService->maybeSyncHomeBlocksFromLegacyPaths($faqResult['storefront'], $changedPaths);
+            $next['edit_metadata'] = array_merge($next['edit_metadata'] ?? [], [
+                'user_edited_paths' => array_values(array_unique([
+                    ...($next['edit_metadata']['user_edited_paths'] ?? []),
+                    ...$changedPaths,
+                ])),
+                'last_generation_prompt' => $instruction,
+                'last_generated_at' => now()->toIso8601String(),
+            ]);
+
+            return [
+                'storefront' => $next,
+                'changed_paths' => $changedPaths,
+                'assistant_message' => $this->describeStorefrontEdit($changedPaths),
+            ];
+        }
+
+        $faqRefresh = StorefrontPathEditor::tryRefreshFaqItems(
+            $storefront,
+            $instruction,
+            $store?->name,
+            $store?->merchant?->industry,
+        );
+        if ($faqRefresh !== null) {
+            $changedPaths = $faqRefresh['changed_paths'];
+            $next = $this->blockService->maybeSyncHomeBlocksFromLegacyPaths($faqRefresh['storefront'], $changedPaths);
+            $next['edit_metadata'] = array_merge($next['edit_metadata'] ?? [], [
+                'user_edited_paths' => array_values(array_unique([
+                    ...($next['edit_metadata']['user_edited_paths'] ?? []),
+                    ...$changedPaths,
+                ])),
+                'last_generation_prompt' => $instruction,
+                'last_generated_at' => now()->toIso8601String(),
+            ]);
+
+            return [
+                'storefront' => $next,
+                'changed_paths' => $changedPaths,
+                'assistant_message' => 'Done — I refreshed your FAQ with answers tailored to your business. Check the preview on the right.',
+            ];
+        }
+
         $parsed = $this->parseSimpleEditInstruction($instruction);
         if ($parsed !== null) {
-            $next = $storefront;
+            $next = json_decode(json_encode($storefront), true);
+            if (! is_array($next)) {
+                $next = $storefront;
+            }
             $changedPaths = [];
 
             foreach ($parsed['updates'] as $path => $value) {
-                if (! in_array($path, self::EDITABLE_PATHS, true)) {
+                if (! StorefrontPathEditor::isEditablePath($path)) {
                     continue;
                 }
 
-                $this->setEditablePath($next, $path, $value);
-                $changedPaths[] = $path;
+                if (StorefrontPathEditor::apply($next, $path, $value)) {
+                    $changedPaths[] = $path;
+                }
             }
 
             if ($changedPaths !== []) {
+                $next = $this->blockService->maybeSyncHomeBlocksFromLegacyPaths($next, $changedPaths);
                 $next['edit_metadata'] = array_merge($next['edit_metadata'] ?? [], [
                     'user_edited_paths' => array_values(array_unique([
                         ...($next['edit_metadata']['user_edited_paths'] ?? []),
@@ -280,9 +488,96 @@ class StorefrontBuilderService
             return [
                 'storefront' => $next,
                 'changed_paths' => $changedPaths,
-                'assistant_message' => $changedPaths
-                    ? 'Updated: '.implode(', ', $changedPaths).'.'
-                    : 'I reviewed your request but did not change any protected fields.',
+                'assistant_message' => $this->describeStorefrontEdit($changedPaths),
+            ];
+        }
+
+        $lower = strtolower($instruction);
+        if (str_contains($lower, 'contact')) {
+            $next = json_decode(json_encode($storefront), true);
+            if (! is_array($next)) {
+                $next = $storefront;
+            }
+
+            $changedPaths = [];
+            $body = (string) data_get($next, 'pages.contact.body', '');
+
+            if (preg_match('/["“](.+?)["”]/s', $instruction, $matches)) {
+                $body = trim($matches[1]);
+            } elseif (str_contains($lower, 'premium') || str_contains($lower, 'friendly')) {
+                $body = trim($body.' We reply quickly and treat every message with care.');
+            } else {
+                $body = trim($body !== '' ? $body : 'Have a question about an order or product? Reach out and our team will get back to you shortly.');
+            }
+
+            if (StorefrontPathEditor::apply($next, 'pages.contact.body', $body)) {
+                $changedPaths[] = 'pages.contact.body';
+            }
+
+            if ($changedPaths !== []) {
+                $next['edit_metadata'] = array_merge($next['edit_metadata'] ?? [], [
+                    'user_edited_paths' => array_values(array_unique([
+                        ...($next['edit_metadata']['user_edited_paths'] ?? []),
+                        ...$changedPaths,
+                    ])),
+                    'last_generation_prompt' => $instruction,
+                    'last_generated_at' => now()->toIso8601String(),
+                ]);
+
+                return [
+                    'storefront' => $next,
+                    'changed_paths' => $changedPaths,
+                    'assistant_message' => $this->describeStorefrontEdit($changedPaths),
+                ];
+            }
+        }
+
+        if (str_contains($lower, 'about') && ! str_contains($lower, 'faq')) {
+            $next = json_decode(json_encode($storefront), true);
+            if (! is_array($next)) {
+                $next = $storefront;
+            }
+            $changedPaths = [];
+            $body = (string) ($next['about']['body'] ?? '');
+
+            if (preg_match('/["“](.+?)["”]/s', $instruction, $matches)) {
+                $body = trim($matches[1]);
+            } elseif (str_contains($lower, 'family')) {
+                $body = trim($body.' We are a family-run business built on care, trust, and personal service.');
+                if (StorefrontPathEditor::apply(
+                    $next,
+                    'about.title',
+                    str_contains((string) ($next['about']['title'] ?? ''), 'Our story')
+                        ? (string) $next['about']['title']
+                        : 'Our family story',
+                )) {
+                    $changedPaths[] = 'about.title';
+                }
+            } elseif (str_contains($lower, 'warm')) {
+                $body = trim($body.' We keep every order personal, thoughtful, and made with care.');
+            } elseif (str_contains($lower, 'premium') || str_contains($lower, 'luxury')) {
+                $body = trim($body.' Every detail is chosen for quality, comfort, and a premium customer experience.');
+            } else {
+                $body = trim($body.' Updated to match your request.');
+            }
+
+            StorefrontPathEditor::apply($next, 'about.body', $body);
+            $changedPaths[] = 'about.body';
+            $changedPaths = array_values(array_unique($changedPaths));
+
+            $next['edit_metadata'] = array_merge($next['edit_metadata'] ?? [], [
+                'user_edited_paths' => array_values(array_unique([
+                    ...($next['edit_metadata']['user_edited_paths'] ?? []),
+                    ...$changedPaths,
+                ])),
+                'last_generation_prompt' => $instruction,
+                'last_generated_at' => now()->toIso8601String(),
+            ]);
+
+            return [
+                'storefront' => $next,
+                'changed_paths' => $changedPaths,
+                'assistant_message' => $this->describeStorefrontEdit($changedPaths),
             ];
         }
 
@@ -306,6 +601,9 @@ class StorefrontBuilderService
             '/\b(?:change|update|set|make)\s+(?:the\s+)?subheadline\s+(?:to\s+)?["\']?(.+?)["\']?\s*$/i' => 'hero.subheadline',
             '/\b(?:change|update|set|make)\s+(?:the\s+)?(?:cta|button)\s+(?:to\s+|label\s+to\s+)?["\']?(.+?)["\']?\s*$/i' => 'hero.cta_label',
             '/\b(?:change|update|set|make)\s+(?:the\s+)?about(?:\s+(?:section|body|copy))?\s+(?:to\s+)?["\']?(.+?)["\']?\s*$/i' => 'about.body',
+            '/\b(?:change|update|set|make)\s+(?:the\s+)?contact(?:\s+(?:page|intro|body|copy))?\s+(?:to\s+)?["\']?(.+?)["\']?\s*$/i' => 'pages.contact.body',
+            '/\b(?:change|update|set|make)\s+(?:the\s+)?contact(?:\s+page)?\s+title\s+(?:to\s+)?["\']?(.+?)["\']?\s*$/i' => 'pages.contact.title',
+            '/\b(?:change|update|set|make)\s+(?:the\s+)?faq(?:\s+page)?\s+title\s+(?:to\s+)?["\']?(.+?)["\']?\s*$/i' => 'pages.faq.title',
             '/\b(?:change|update|set|make)\s+(?:the\s+)?seo\s+title\s+(?:to\s+)?["\']?(.+?)["\']?\s*$/i' => 'seo.title',
             '/\b(?:change|update|set|make)\s+(?:the\s+)?seo\s+description\s+(?:to\s+)?["\']?(.+?)["\']?\s*$/i' => 'seo.description',
         ];
@@ -328,20 +626,34 @@ class StorefrontBuilderService
     }
 
     /**
+     * @return list<array{label: string, href: string}>
+     */
+    private function defaultNavigation(string $templateId): array
+    {
+        if ($templateId === 'cosmetics') {
+            return [
+                ['label' => 'Product', 'href' => '/products'],
+                ['label' => 'Features', 'href' => '/'],
+                ['label' => 'Reviews', 'href' => '/faq'],
+                ['label' => 'About us', 'href' => '/about'],
+            ];
+        }
+
+        return [
+            ['label' => 'Home', 'href' => '/'],
+            ['label' => 'Products', 'href' => '/products'],
+            ['label' => 'About', 'href' => '/about'],
+            ['label' => 'Contact', 'href' => '/contact'],
+            ['label' => 'FAQ', 'href' => '/faq'],
+        ];
+    }
+
+    /**
      * @param  array<string, mixed>  $storefront
      */
     private function setEditablePath(array &$storefront, string $path, string $value): void
     {
-        match ($path) {
-            'hero.headline' => $storefront['hero']['headline'] = $value,
-            'hero.subheadline' => $storefront['hero']['subheadline'] = $value,
-            'hero.cta_label' => $storefront['hero']['cta_label'] = $value,
-            'about.title' => $storefront['about']['title'] = $value,
-            'about.body' => $storefront['about']['body'] = $value,
-            'seo.title' => $storefront['seo']['title'] = Str::limit($value, 160, ''),
-            'seo.description' => $storefront['seo']['description'] = Str::limit($value, 300, ''),
-            default => null,
-        };
+        StorefrontPathEditor::apply($storefront, $path, $value);
     }
 
     /**
@@ -399,6 +711,8 @@ class StorefrontBuilderService
         $industryKeywords = [
             'candle' => 'home_and_living',
             'skincare' => 'beauty_and_skincare',
+            'cosmetic' => 'beauty_and_skincare',
+            'cosmetics' => 'beauty_and_skincare',
             'beauty' => 'beauty_and_skincare',
             'fashion' => 'fashion_and_apparel',
             'clothing' => 'fashion_and_apparel',
@@ -457,12 +771,56 @@ class StorefrontBuilderService
             || preg_match('/\b(sell|store|brand|business|template|skincare|fashion|product|shop|vibe|style|candle|website|site|build)\b/i', $trimmed) === 1;
     }
 
+    public function isRebuildIntent(string $message): bool
+    {
+        $trimmed = strtolower(trim($message));
+
+        return (preg_match('/\b(build|create|generate|make|switch|rebuild|redo)\b.*\bfor\b/', $trimmed) === 1
+            && preg_match('/\b(cosmetics|beauty|skincare|fashion|lookbook|minimalistic|minimal|candle|food|electronics)\b/', $trimmed) === 1)
+            || preg_match('/\blets?\s+build\s+for\b/', $trimmed) === 1;
+    }
+
     public function isBuildIntent(string $message): bool
     {
         $trimmed = strtolower(trim($message));
 
         return preg_match('/\b(build|create|generate|make)\b.*\b(website|site|storefront|store|draft)\b/', $trimmed) === 1
-            || preg_match('/\b(build my website|generate my website|create my website|yes proceed|yes,? build|go ahead and build|go ahead)\b/', $trimmed) === 1;
+            || preg_match('/\b(build my website|generate my website|create my website|yes proceed|yes,? build|go ahead and build|go ahead)\b/', $trimmed) === 1
+            || $this->isRebuildIntent($message);
+    }
+
+    public function isStockImageIntent(string $message): bool
+    {
+        $trimmed = strtolower(trim($message));
+
+        return preg_match('/\bstock\s+(?:photo|photos|image|images)\b/', $trimmed) === 1
+            || preg_match('/\b(add|suggest|provide|use)\s+(?:suitable\s+)?stock\b/', $trimmed) === 1
+            || preg_match('/\bsuitable\s+stock\s+(?:photo|photos|image|images)\b/', $trimmed) === 1;
+    }
+
+    public function isProductIntent(string $message): bool
+    {
+        $trimmed = strtolower(trim($message));
+
+        return preg_match('/\b(add|create|new|upload|list)\b.*\b(product|products|item|items|sku)\b/', $trimmed) === 1
+            || preg_match('/\bi want to add a product\b/', $trimmed) === 1;
+    }
+
+    public function isColorIntent(string $message): bool
+    {
+        $trimmed = strtolower(trim($message));
+
+        return preg_match('/\b(brand color|colour|color palette|use .+#([0-9a-f]{3}|[0-9a-f]{6}))\b/i', $message) === 1
+            || preg_match('/\b(make it|try|use|switch to|go with)\b.*\b(green|teal|terracotta|navy|blush|black|burgundy|sage|amber|coral|cream)\b/', $trimmed) === 1
+            || preg_match('/^#[0-9a-f]{6}$/i', $trimmed) === 1;
+    }
+
+    public function isImageIntent(string $message): bool
+    {
+        $trimmed = strtolower(trim($message));
+
+        return preg_match('/\b(upload|add|use|set|change|replace)\b.*\b(photo|image|picture|header|background|banner)\b/i', $trimmed) === 1
+            || $this->isStockImageIntent($message);
     }
 
     public function isEditIntent(string $message): bool
@@ -472,9 +830,66 @@ class StorefrontBuilderService
             return false;
         }
 
+        if ($this->isColorIntent($message) || $this->isImageIntent($message) || $this->isProductIntent($message)) {
+            return false;
+        }
+
         return preg_match('/\b(change|update|edit|rewrite|revise|shorten|lengthen|improve|fix|replace|make (?:the|it)|set (?:the|my))\b/', $trimmed) === 1
-            || preg_match('/\b(headline|subheadline|tagline|cta|button|about(?:\s+section|\s+copy|\s+page)?|seo|title|description|copy|hero)\b/', $trimmed) === 1
+            || preg_match('/\b(headline|subheadline|tagline|cta|button|about(?:\s+section|\s+copy|\s+page)?|contact(?:\s+page|\s+intro|\s+copy)?|faq|seo|title|description|copy|hero|value prop|trust)\b/', $trimmed) === 1
             || preg_match('/\b(more premium|more luxury|more minimal|warmer|friendlier|professional|playful|bold|shorter|longer)\b/', $trimmed) === 1;
+    }
+
+    public function extractColorFromMessage(string $message): ?string
+    {
+        if (preg_match('/#([0-9A-Fa-f]{6})\b/', $message, $matches)) {
+            return '#'.$matches[1];
+        }
+
+        $lower = strtolower($message);
+        $named = [
+            'terracotta' => '#C47A2C',
+            'teal' => '#0E7C66',
+            'navy' => '#1E3A5F',
+            'blush' => '#E6A79F',
+            'burgundy' => '#80131B',
+            'sage' => '#6B7F5E',
+            'amber' => '#D99359',
+            'coral' => '#E07A5F',
+            'cream' => '#F5E6D3',
+            'black' => '#111111',
+            'green' => '#2D6A4F',
+        ];
+
+        foreach ($named as $name => $color) {
+            if (str_contains($lower, $name)) {
+                return $color;
+            }
+        }
+
+        return null;
+    }
+
+    public function resolveTemplateFromMessage(string $message): ?string
+    {
+        $lower = strtolower($message);
+        $active = StorefrontTemplate::activeConcreteIds();
+        $map = [
+            'cosmetics' => 'cosmetics',
+            'skincare' => 'cosmetics',
+            'beauty' => 'beauty',
+            'fashion' => 'fashion_lookbook',
+            'lookbook' => 'fashion_lookbook',
+            'minimalistic' => 'minimalistic',
+            'minimal' => 'minimalistic',
+        ];
+
+        foreach ($map as $keyword => $templateId) {
+            if (str_contains($lower, $keyword) && in_array($templateId, $active, true)) {
+                return $templateId;
+            }
+        }
+
+        return null;
     }
 
     /**
@@ -498,18 +913,18 @@ class StorefrontBuilderService
     private function conversationalReplyFallback(array $sessionContext, string $message): string
     {
         if (trim($message) === '') {
-            return 'Hi! Tell me about your business, what you sell, who it is for, and the vibe you want. I will design and build your website.';
+            return 'Hi! Tell me about your business — what you sell, who it\'s for, and the vibe you want. I\'ll design and build your website.';
         }
 
         if (! empty($sessionContext['has_storefront_draft'])) {
-            return 'Tell me what to change — for example “Change the headline to …”, “Make the about section warmer”, or “Update the CTA to Shop now”.';
+            return 'Tell me what you\'d like to change — for example "Change the button to Shop Gifts" or "Make the homepage more premium". I\'ll update the preview on the right.';
         }
 
         if (! empty($sessionContext['has_store'])) {
-            return 'Say “build my website” whenever you are ready and I will generate your first draft.';
+            return 'Say "build my website" whenever you\'re ready and I\'ll create your first draft.';
         }
 
-        return 'Tell me your business name and what you sell, then I will start designing your website.';
+        return 'Tell me your business name and what you sell — for example "Glow & Wick sells handmade candles for cozy gifts."';
     }
 
     /**
@@ -611,8 +1026,169 @@ class StorefrontBuilderService
     private function ensureAiAvailable(): void
     {
         if (! $this->aiAgent->available()) {
-            throw new StorefrontAiUnavailableException();
+            throw new StorefrontAiUnavailableException('OpenAI is not configured.');
         }
+    }
+
+    /**
+     * @return list<string>
+     */
+    public function colorPresetHexValues(?string $industry = null): array
+    {
+        $presets = match ($industry) {
+            'food_and_beverage', 'home_and_living' => ['#C47A2C', '#2D6A4F', '#5C4033'],
+            'fashion_and_apparel' => ['#111111', '#80131B', '#C4A77D'],
+            'beauty_and_skincare' => ['#82934C', '#B56B62', '#E6A79F'],
+            default => ['#0E7C66', '#C47A2C', '#1E3A5F'],
+        };
+
+        return $presets;
+    }
+
+    /**
+     * @return list<array{type: string, label: string, color: string}>
+     */
+    public function colorPresetActions(?string $industry = null, int $limit = 3): array
+    {
+        $presets = match ($industry) {
+            'food_and_beverage', 'home_and_living' => [
+                ['label' => 'Warm terracotta', 'color' => '#C47A2C'],
+                ['label' => 'Forest green', 'color' => '#2D6A4F'],
+                ['label' => 'Deep cocoa', 'color' => '#5C4033'],
+            ],
+            'fashion_and_apparel' => [
+                ['label' => 'Classic black', 'color' => '#111111'],
+                ['label' => 'Burgundy', 'color' => '#80131B'],
+                ['label' => 'Sand neutral', 'color' => '#C4A77D'],
+            ],
+            'beauty_and_skincare' => [
+                ['label' => 'Botanical green', 'color' => '#82934C'],
+                ['label' => 'Rose clay', 'color' => '#B56B62'],
+                ['label' => 'Soft blush', 'color' => '#E6A79F'],
+            ],
+            default => [
+                ['label' => 'StoreHause teal', 'color' => '#0E7C66'],
+                ['label' => 'Warm terracotta', 'color' => '#C47A2C'],
+                ['label' => 'Deep navy', 'color' => '#1E3A5F'],
+            ],
+        };
+
+        return array_map(
+            fn (array $preset): array => ['type' => 'color', 'label' => $preset['label'], 'color' => $preset['color']],
+            array_slice($presets, 0, $limit),
+        );
+    }
+
+    /**
+     * @return list<array<string, mixed>>
+     */
+    public function suggestedActionsFor(array $sessionContext): array
+    {
+        $industry = $sessionContext['industry'] ?? null;
+        $colorActions = $this->colorPresetActions($industry, 2);
+
+        if (! empty($sessionContext['has_storefront_draft'])) {
+            return [
+                ['type' => 'prompt', 'label' => 'Make it more premium', 'message' => 'Make the homepage more premium'],
+                ['type' => 'prompt', 'label' => 'Update shop button', 'message' => 'Change the button to Shop now'],
+                ['type' => 'upload', 'label' => 'Upload header photo', 'target' => 'media.hero_image_url'],
+                ['type' => 'upload', 'label' => 'Upload about photo', 'target' => 'media.about_image_url'],
+                ['type' => 'prompt', 'label' => 'Suggest stock photos', 'message' => 'Add suitable stock photos to my website'],
+                ...$colorActions,
+            ];
+        }
+
+        if (! empty($sessionContext['has_store'])) {
+            return [
+                ['type' => 'prompt', 'label' => 'Build my website', 'message' => 'build my website'],
+                ['type' => 'prompt', 'label' => 'Go ahead', 'message' => 'Go ahead and create my site'],
+                ...$this->colorPresetActions($industry, 3),
+            ];
+        }
+
+        return [
+            ['type' => 'prompt', 'label' => 'Handmade candles', 'message' => 'I sell handmade soy candles. Warm, cozy, gift-friendly.'],
+            ['type' => 'prompt', 'label' => 'Skincare brand', 'message' => 'Skincare for busy professionals — clean, premium, not flashy.'],
+            ...$this->colorPresetActions($industry, 2),
+        ];
+    }
+
+    /**
+     * @param  array<string, mixed>  $storefront
+     * @return array{storefront: array<string, mixed>, changed_paths: list<string>}
+     */
+    public function applyBrandColor(array $storefront, Store $store, string $brandColor): array
+    {
+        $templateId = $store->storefront_template_id && $store->storefront_template_id !== 'ai_pick'
+            ? $store->storefront_template_id
+            : ($storefront['template']['id'] ?? 'minimalistic');
+        $storefront['palette'] = $this->defaultStorefrontPalette((string) $templateId, $brandColor);
+        $store->brand_color = $brandColor;
+        $store->save();
+
+        return [
+            'storefront' => $storefront,
+            'changed_paths' => ['palette.primary'],
+        ];
+    }
+
+    /**
+     * @param  array<string, mixed>  $storefront
+     * @param  array<string, string>  $mediaUpdates
+     * @return array{storefront: array<string, mixed>, changed_paths: list<string>}
+     */
+    public function applyMediaUpdates(array $storefront, array $mediaUpdates): array
+    {
+        $changedPaths = [];
+
+        foreach ($mediaUpdates as $path => $url) {
+            if (! in_array($path, ['media.hero_image_url', 'media.about_image_url'], true) || ! is_string($url) || trim($url) === '') {
+                continue;
+            }
+
+            $this->setEditablePath($storefront, $path, trim($url));
+            $changedPaths[] = $path;
+        }
+
+        return [
+            'storefront' => $storefront,
+            'changed_paths' => $changedPaths,
+        ];
+    }
+
+    /**
+     * @param  array<string, mixed>  $storefront
+     * @return array{storefront: array<string, mixed>, changed_paths: list<string>}
+     */
+    public function applyStockImages(array $storefront, Store $store): array
+    {
+        $templateId = $store->storefront_template_id && $store->storefront_template_id !== 'ai_pick'
+            ? $store->storefront_template_id
+            : ($storefront['template']['id'] ?? 'cosmetics');
+
+        $images = match ($templateId) {
+            'beauty' => [
+                'hero' => 'https://images.unsplash.com/photo-1612817288484-6f916006741a?auto=format&fit=crop&w=1400&q=90',
+                'about' => 'https://images.unsplash.com/photo-1612817288484-6f916006741a?auto=format&fit=crop&w=1400&q=90',
+            ],
+            'fashion_lookbook' => [
+                'hero' => 'https://images.unsplash.com/photo-1529139574466-a303027c1d8b?auto=format&fit=crop&w=1800&q=90',
+                'about' => 'https://images.unsplash.com/photo-1529139574466-a303027c1d8b?auto=format&fit=crop&w=1400&q=90',
+            ],
+            'minimalistic' => [
+                'hero' => 'https://images.unsplash.com/photo-1556228578-8c89e6adf883?auto=format&fit=crop&w=1800&q=90',
+                'about' => 'https://images.unsplash.com/photo-1556228578-8c89e6adf883?auto=format&fit=crop&w=1400&q=90',
+            ],
+            default => [
+                'hero' => 'https://images.unsplash.com/photo-1749599018738-b8fb6c4a83e0?auto=format&fit=crop&w=1400&q=90',
+                'about' => 'https://images.unsplash.com/photo-1612817288484-6f916006741a?auto=format&fit=crop&w=1400&q=90',
+            ],
+        };
+
+        return $this->applyMediaUpdates($storefront, [
+            'media.hero_image_url' => $images['hero'],
+            'media.about_image_url' => $images['about'],
+        ]);
     }
 
     /**

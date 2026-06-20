@@ -31,7 +31,7 @@ class StorefrontBuilderController extends Controller
         if ($session->messages()->count() === 0) {
             $this->appendAssistantMessage(
                 $session,
-                'Hi! Tell me about your business, what you sell, who it is for, and the vibe you want. I will design and build your website.',
+                'Hi! Tell me about your business — what you sell, who it\'s for, and the vibe you want. I\'ll design and build your website.',
                 ['type' => 'welcome'],
             );
         }
@@ -67,10 +67,22 @@ class StorefrontBuilderController extends Controller
             'assistant_payload' => 'nullable|array',
             'selected_template_id' => ['nullable', 'string', Rule::in(StorefrontTemplate::activeConcreteIds())],
             'storefront_snapshot' => 'nullable|array',
+            'brand_color' => 'nullable|string|regex:/^#[0-9A-Fa-f]{6}$/',
+            'media_updates' => 'nullable|array',
+            'apply_stock_images' => 'nullable|boolean',
         ]);
 
         $session = $this->findOwnedSession($request, $sessionId);
         $this->appendUserMessage($session, $data['message']);
+
+        if ($this->applyVisualBuilderUpdates($session, $data)) {
+            return response()->json([
+                ...$this->formatSessionPayload($session->fresh(['messages', 'store.merchant'])),
+                'storefront' => $session->store
+                    ? $this->productService->mergeIntoStorefront($session->storefront_snapshot ?? [], $session->store)
+                    : $session->storefront_snapshot,
+            ]);
+        }
 
         if (! empty($data['assistant_message'])) {
             $this->persistClientTurn($session, $request->user(), $data);
@@ -81,6 +93,20 @@ class StorefrontBuilderController extends Controller
                 return $this->aiUnavailableResponse($exception);
             }
         }
+
+        return response()->json($this->formatSessionPayload($session->fresh(['messages', 'store.merchant'])));
+    }
+
+    public function clearMessages(Request $request, int $sessionId): JsonResponse
+    {
+        $session = $this->findOwnedSession($request, $sessionId);
+        $session->messages()->delete();
+
+        $this->appendAssistantMessage(
+            $session,
+            'Hi! Tell me about your business — what you sell, who it\'s for, and the vibe you want. I\'ll design and build your website.',
+            ['type' => 'welcome'],
+        );
 
         return response()->json($this->formatSessionPayload($session->fresh(['messages', 'store.merchant'])));
     }
@@ -195,22 +221,16 @@ class StorefrontBuilderController extends Controller
             $storefront = $data['storefront'];
             $changedPaths = $data['changed_paths'] ?? [];
             $summary = $data['assistant_message']
-                ?? ($changedPaths
-                    ? 'Updated: '.implode(', ', $changedPaths).'.'
-                    : 'I reviewed your request but did not change any protected fields.');
+                ?? $this->builderService->describeStorefrontEdit($changedPaths);
         } else {
             try {
                 $baseStorefront = $session->storefront_snapshot
                     ?? $store->storefront_content
                     ?? $this->builderService->synthesizeStorefront($store->load('merchant'));
-                $result = $this->builderService->applyChatEdit($baseStorefront, $data['instruction']);
+                $result = $this->builderService->applyChatEdit($baseStorefront, $data['instruction'], $store);
                 $storefront = $result['storefront'];
                 $changedPaths = $result['changed_paths'];
-                $summary = ! empty($result['assistant_message'])
-                    ? $result['assistant_message']
-                    : ($changedPaths
-                        ? 'Updated: '.implode(', ', $changedPaths).'.'
-                        : 'I reviewed your request but did not change any protected fields.');
+                $summary = $result['assistant_message'] ?? $this->builderService->describeStorefrontEdit($changedPaths);
             } catch (StorefrontAiUnavailableException $exception) {
                 return $this->aiUnavailableResponse($exception);
             }
@@ -393,12 +413,55 @@ class StorefrontBuilderController extends Controller
             ? $this->recommendTemplatesForProfile($profile)
             : [];
 
+        if ($hasDraft && $this->builderService->isStockImageIntent($message)) {
+            $this->applyVisualBuilderUpdates($session, ['apply_stock_images' => true]);
+
+            return;
+        }
+
+        if ($hasDraft && $this->builderService->isProductIntent($message)) {
+            $this->appendAssistantMessage(
+                $session,
+                'Products live on your Products page — add names, prices, photos, and inventory there. They appear on your storefront automatically.',
+                [
+                    'type' => 'product_guidance',
+                    'suggested_actions' => [
+                        ['type' => 'link', 'label' => 'Go to Products', 'href' => '/admin/products'],
+                        ['type' => 'prompt', 'label' => 'Suggest stock photos', 'message' => 'Add suitable stock photos to my website'],
+                        ...$this->builderService->colorPresetActions($profile['industry'] ?? null, 2),
+                    ],
+                ],
+            );
+
+            return;
+        }
+
+        if ($hasDraft && $this->builderService->isColorIntent($message)) {
+            $color = $this->builderService->extractColorFromMessage($message);
+            if ($color && $this->applyVisualBuilderUpdates($session, ['brand_color' => $color])) {
+                return;
+            }
+        }
+
         if ($hasDraft && $this->builderService->isBuildIntent($message)) {
+            $templateId = $this->builderService->resolveTemplateFromMessage($message);
+            if ($templateId) {
+                $session->selected_template_id = $templateId;
+                if ($session->store) {
+                    $session->store->storefront_template_id = $templateId;
+                    $session->store->save();
+                }
+            }
+
             $result = $this->executeGenerateDraftTool($session, $recommendations);
             if ($result['ok'] ?? false) {
+                $templateLabel = $templateId ?? $session->selected_template_id ?? 'new';
+                $rebuildMessage = $this->builderService->isRebuildIntent($message)
+                    ? "Great — I rebuilt your site with the {$templateLabel} layout. Check the preview on the right, then tell me what to refine."
+                    : 'Your website is ready. Preview it on the right, then tell me what to refine — headline, about section, CTA, or SEO.';
                 $this->appendAssistantMessage(
                     $session,
-                    'Your website is ready. Preview it on the right, then tell me what to refine — headline, about section, CTA, or SEO.',
+                    $rebuildMessage,
                     [
                         'type' => 'website_generated',
                         'generation_id' => $result['generation_id'] ?? null,
@@ -794,14 +857,10 @@ class StorefrontBuilderController extends Controller
         $baseStorefront = $session->storefront_snapshot
             ?? $store->storefront_content
             ?? $this->builderService->synthesizeStorefront($store->load('merchant'));
-        $result = $this->builderService->applyChatEdit($baseStorefront, $instruction);
+        $result = $this->builderService->applyChatEdit($baseStorefront, $instruction, $session->store);
         $storefront = $result['storefront'];
         $changedPaths = $result['changed_paths'];
-        $summary = ! empty($result['assistant_message'])
-            ? $result['assistant_message']
-            : ($changedPaths
-                ? 'Updated: '.implode(', ', $changedPaths).'.'
-                : 'I reviewed your request but did not change any protected fields.');
+        $summary = $result['assistant_message'] ?? $this->builderService->describeStorefrontEdit($changedPaths);
 
         unset($storefront['products']);
         $store->storefront_content = $storefront;
@@ -836,12 +895,137 @@ class StorefrontBuilderController extends Controller
      */
     private function appendAssistantMessage(StorefrontBuilderSession $session, string $content, ?array $payload = null): void
     {
+        $context = $this->sessionContext($session);
+        $mergedPayload = array_merge([
+            'suggested_actions' => $this->builderService->suggestedActionsFor($context),
+            'color_options' => $this->buildColorOptions($context, $payload),
+        ], $payload ?? []);
+
         StorefrontBuilderMessage::create([
             'session_id' => $session->id,
             'role' => 'assistant',
             'content' => $content,
-            'payload' => $payload,
+            'payload' => $mergedPayload,
         ]);
+    }
+
+    /**
+     * @param  array<string, mixed>  $context
+     * @param  array<string, mixed>|null  $payload
+     * @return list<string>
+     */
+    private function buildColorOptions(array $context, ?array $payload = null): array
+    {
+        $options = $this->builderService->colorPresetHexValues($context['industry'] ?? null);
+        $applied = $payload['brand_color'] ?? $context['brand_color'] ?? null;
+
+        if (is_string($applied) && preg_match('/^#[0-9A-Fa-f]{6}$/', $applied)) {
+            $normalized = strtoupper($applied);
+            $existing = array_map('strtoupper', $options);
+            if (! in_array($normalized, $existing, true)) {
+                array_unshift($options, $applied);
+            }
+        }
+
+        return $options;
+    }
+
+    /**
+     * @param  array<string, mixed>  $data
+     */
+    private function applyVisualBuilderUpdates(StorefrontBuilderSession $session, array $data): bool
+    {
+        $store = $session->store;
+        if (! $store) {
+            return false;
+        }
+
+        $baseStorefront = $session->storefront_snapshot
+            ?? $store->storefront_content
+            ?? null;
+
+        if (! is_array($baseStorefront)) {
+            if (! empty($data['brand_color'])) {
+                $store->brand_color = $data['brand_color'];
+                $store->save();
+                $profile = $session->business_profile ?? [];
+                $profile['brand_color'] = $data['brand_color'];
+                $session->business_profile = $profile;
+                $session->save();
+
+                $this->appendAssistantMessage(
+                    $session,
+                    'Got it — I saved '.$data['brand_color'].' as your brand color. Say “build my website” when you are ready.',
+                    [
+                        'type' => 'brand_color_applied',
+                        'brand_color' => $data['brand_color'],
+                    ],
+                );
+
+                return true;
+            }
+
+            return false;
+        }
+
+        $storefront = json_decode(json_encode($baseStorefront), true);
+        if (! is_array($storefront)) {
+            return false;
+        }
+
+        $changedPaths = [];
+        $summary = null;
+        $payloadType = 'website_refined';
+
+        if (! empty($data['brand_color'])) {
+            $result = $this->builderService->applyBrandColor($storefront, $store, $data['brand_color']);
+            $storefront = $result['storefront'];
+            $changedPaths = array_merge($changedPaths, $result['changed_paths']);
+            $profile = $session->business_profile ?? [];
+            $profile['brand_color'] = $data['brand_color'];
+            $session->business_profile = $profile;
+            $summary = 'Done — I updated your brand color. Check the preview on the right.';
+            $payloadType = 'brand_color_applied';
+        }
+
+        if (! empty($data['media_updates']) && is_array($data['media_updates'])) {
+            $result = $this->builderService->applyMediaUpdates($storefront, $data['media_updates']);
+            $storefront = $result['storefront'];
+            $changedPaths = array_merge($changedPaths, $result['changed_paths']);
+            $summary = $summary ?? $this->builderService->describeStorefrontEdit($result['changed_paths']);
+        }
+
+        if (! empty($data['apply_stock_images'])) {
+            $result = $this->builderService->applyStockImages($storefront, $store);
+            $storefront = $result['storefront'];
+            $changedPaths = array_merge($changedPaths, $result['changed_paths']);
+            $summary = 'Done — I added suitable photos to your website. Check the preview on the right.';
+        }
+
+        $changedPaths = array_values(array_unique($changedPaths));
+        if ($changedPaths === [] && empty($data['brand_color'])) {
+            return false;
+        }
+
+        unset($storefront['products']);
+        $store->storefront_content = $storefront;
+        $store->save();
+
+        $session->storefront_snapshot = $storefront;
+        $session->status = 'review_ready';
+        $session->save();
+
+        $this->appendAssistantMessage(
+            $session,
+            $summary ?? $this->builderService->describeStorefrontEdit($changedPaths),
+            [
+                'type' => $payloadType,
+                'changed_paths' => $changedPaths,
+                'brand_color' => $data['brand_color'] ?? $store->brand_color,
+            ],
+        );
+
+        return true;
     }
 
     /**
@@ -855,6 +1039,7 @@ class StorefrontBuilderController extends Controller
             'status' => $session->status,
             'business_name' => $profile['business_name'] ?? $session->store?->name,
             'industry' => $profile['industry'] ?? $session->store?->merchant?->industry,
+            'brand_color' => $profile['brand_color'] ?? $session->store?->brand_color,
             'has_store' => (bool) $session->store_id,
             'selected_template_id' => $session->selected_template_id,
             'has_storefront_draft' => ! empty($session->storefront_snapshot),

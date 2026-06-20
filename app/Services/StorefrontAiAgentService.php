@@ -68,14 +68,16 @@ class StorefrontAiAgentService
             [
                 'role' => 'system',
                 'content' => implode("\n", [
-                    'You are the Storehaus storefront builder assistant.',
+                    'You are the StoreHause storefront builder assistant talking to a small business owner.',
                     'Return ONLY valid JSON with key: assistant_message.',
-                    'assistant_message should be 1-3 short sentences. Be warm and practical.',
+                    'assistant_message should be 1-3 short sentences. Be warm, confident, and practical.',
+                    'Speak like a helpful shop consultant — never mention templates, themes, tools, agents, JSON, hero, or CTA.',
+                    'Use the merchant\'s own words when reflecting their business back to them.',
+                    'Ask at most one clarifying question at a time.',
                     'If the merchant only greeted you, greet them back and explain the next step for their current session state.',
-                    'Do not repeat template recommendation boilerplate unless they asked about templates.',
-                    'If a draft exists, invite them to request copy changes.',
-                    'If they have a store but no draft, mention they can pick a template and generate a draft.',
-                    'If setup is incomplete, ask for business name and what they sell.',
+                    'If a draft exists, invite them to request copy changes and check the preview on the right.',
+                    'If they have a store but no draft, tell them to say "build my website" when ready.',
+                    'If setup is incomplete, ask for business name and what they sell with a short example.',
                 ]),
             ],
             [
@@ -110,16 +112,17 @@ class StorefrontAiAgentService
             [
                 'role' => 'system',
                 'content' => implode("\n", [
-                    'You are the Storehaus Builder Orchestrator agent.',
-                    'Use the provided tools to advance the merchant through storefront setup.',
+                    'You are the StoreHause Builder Orchestrator agent.',
+                    'Use the provided tools to advance the merchant through website setup.',
+                    'Merchant-facing replies must be warm, short, and free of jargon — never mention templates, themes, tools, or agents.',
                     'Call one or more tools when they help move the session forward.',
-                    'Use recommend_templates when the merchant asks for options or has enough profile but no selected template.',
-                    'Use select_template only with available template IDs. Never invent template IDs.',
+                    'Use recommend_templates only when the merchant asks for options — otherwise pick the best fit silently.',
+                    'Use select_template only with available template IDs. Never invent template IDs. Do not expose template names to the merchant.',
                     'Use generate_draft only when a template is selected, or call select_template first.',
-                    'Use ask_clarifying_question when required profile or intent is still missing.',
+                    'Use ask_clarifying_question when required profile or intent is still missing — one question only.',
                     'If the merchant asks you to build, create, draft, generate, or "go ahead", prefer selecting the top recommendation if no template is selected, then generate_draft.',
                     'If a storefront draft already exists and the user asks for copy changes, do not use these tools; the edit endpoint handles that separately.',
-                    'Briefly explain what you are doing in your assistant message when you call tools.',
+                    'Briefly explain what you are doing in plain language when you call tools.',
                     'Available template IDs: '.implode(', ', $availableTemplateIds).'.',
                 ]),
             ],
@@ -224,17 +227,31 @@ class StorefrontAiAgentService
                     'You are the Storehaus Storefront Editor agent.',
                     'Apply the merchant instruction as a small structured patch.',
                     'Return ONLY valid JSON: {"updates": object, "changed_paths": string[], "assistant_message": string}.',
-                    'Allowed update paths: '.implode(', ', StorefrontBuilderService::EDITABLE_PATHS).'.',
-                    'Use dot-path keys inside updates, for example {"hero.headline": "New headline"}.',
+                    'Allowed update paths: '.implode(', ', StorefrontPathEditor::promptAllowedPaths()).'.',
+                    'Use dot-path keys inside updates, for example {"hero.headline": "New headline"} or {"pages.contact.body": "Reach us anytime."}.',
+                    'For homepage section order or trust-section tone, prefer returning empty updates so the platform block editor can handle reorder/update_block operations.',
+                    'For FAQ entries use pages.faq.items[N].question and pages.faq.items[N].answer where N is the zero-based index.',
+                    'If the merchant asks to update, refresh, or improve FAQ questions or answers without specifics, rewrite all FAQ items tailored to their business.',
+                    'Keep about.title/body and pages.about.title/body aligned when editing about copy.',
                     'Do not change locked fields, products, template, palette, or unrelated copy.',
-                    'If the instruction is unclear or outside allowed paths, return an empty updates object and ask a short clarifying question in assistant_message.',
+                    'Prefer applying sensible inferred updates over asking clarifying questions. Only ask when a required detail is impossible to infer.',
                 ]),
             ],
             [
                 'role' => 'user',
                 'content' => json_encode([
                     'instruction' => $instruction,
-                    'current_storefront' => Arr::only($storefront, ['hero', 'about', 'seo', 'edit_metadata']),
+                    'current_storefront' => Arr::only($storefront, [
+                        'hero',
+                        'about',
+                        'seo',
+                        'media',
+                        'value_props',
+                        'navigation',
+                        'home_stats',
+                        'pages',
+                        'edit_metadata',
+                    ]),
                 ]),
             ],
         ], 0.35);
@@ -243,8 +260,13 @@ class StorefrontAiAgentService
             return null;
         }
 
-        $updates = is_array($result['updates'] ?? null) ? $result['updates'] : [];
-        $changedPaths = [];
+        $storefront = json_decode(json_encode($storefront), true);
+        if (! is_array($storefront)) {
+            return null;
+        }
+
+        $updates = StorefrontPathEditor::flattenUpdates(is_array($result['updates'] ?? null) ? $result['updates'] : []);
+        $changedPaths = StorefrontPathEditor::applyMany($storefront, $updates);
         $metadata = $storefront['edit_metadata'] ?? [
             'ai_generated_paths' => [],
             'user_edited_paths' => [],
@@ -253,21 +275,22 @@ class StorefrontAiAgentService
         $userEditedPaths = is_array($metadata['user_edited_paths'] ?? null) ? $metadata['user_edited_paths'] : [];
         $aiGeneratedPaths = is_array($metadata['ai_generated_paths'] ?? null) ? $metadata['ai_generated_paths'] : [];
 
-        foreach ($updates as $path => $value) {
-            if (! is_string($path) || ! in_array($path, StorefrontBuilderService::EDITABLE_PATHS, true)) {
-                continue;
-            }
-            if (in_array($path, $lockedPaths, true) || ! is_string($value) || trim($value) === '') {
-                continue;
-            }
+        $changedPaths = array_values(array_filter(
+            $changedPaths,
+            fn (string $path): bool => ! in_array($path, $lockedPaths, true),
+        ));
 
-            data_set($storefront, $path, trim($value));
-            $changedPaths[] = $path;
+        foreach ($changedPaths as $path) {
             $userEditedPaths[] = $path;
             $aiGeneratedPaths = array_values(array_diff($aiGeneratedPaths, [$path]));
         }
 
         $changedPaths = array_values(array_unique($changedPaths));
+
+        if ($changedPaths === []) {
+            return null;
+        }
+
         $storefront['edit_metadata'] = array_merge($metadata, [
             'user_edited_paths' => array_values(array_unique($userEditedPaths)),
             'ai_generated_paths' => $aiGeneratedPaths,
@@ -278,10 +301,40 @@ class StorefrontAiAgentService
         return [
             'storefront' => $storefront,
             'changed_paths' => $changedPaths,
-            'assistant_message' => is_string($result['assistant_message'] ?? null)
-                ? trim($result['assistant_message'])
-                : null,
         ];
+    }
+
+    /**
+     * @param  array<string, mixed>  $updates
+     * @return array<string, string>
+     */
+    private function flattenStorefrontUpdates(array $updates): array
+    {
+        $flat = [];
+
+        foreach ($updates as $path => $value) {
+            if (is_string($path) && is_string($value) && trim($value) !== '') {
+                $flat[$path] = trim($value);
+
+                continue;
+            }
+
+            if (! is_string($path) || ! is_array($value)) {
+                continue;
+            }
+
+            if ($path === 'hero' || $path === 'about' || $path === 'seo') {
+                foreach ($value as $field => $fieldValue) {
+                    if (! is_string($field) || ! is_string($fieldValue) || trim($fieldValue) === '') {
+                        continue;
+                    }
+
+                    $flat["{$path}.{$field}"] = trim($fieldValue);
+                }
+            }
+        }
+
+        return $flat;
     }
 
     /**

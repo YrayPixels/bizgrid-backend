@@ -48,6 +48,7 @@ Route::prefix('storehause')->group(function () {
     Route::get('/public/storefronts/by-host', [StorehauseController::class, 'publicStorefrontByHost']);
     Route::get('/public/storefronts/{slug}', [StorehauseController::class, 'publicStorefront']);
     Route::post('/public/storefronts/{slug}/orders', [StorehauseController::class, 'placeOrder']);
+    Route::post('/public/storefronts/{slug}/contact', [StorehauseController::class, 'submitContact']);
     Route::post('/public/storefronts/{slug}/visits', [StorehauseController::class, 'recordVisit']);
     Route::get('/public/generations/{generationId}', [StorehauseController::class, 'publicGeneration']);
 
@@ -75,6 +76,7 @@ Route::prefix('storehause')->group(function () {
             Route::post('/sessions', [StorefrontBuilderController::class, 'startSession']);
             Route::get('/sessions/current', [StorefrontBuilderController::class, 'currentSession']);
             Route::post('/sessions/{sessionId}/messages', [StorefrontBuilderController::class, 'sendMessage']);
+            Route::post('/sessions/{sessionId}/clear', [StorefrontBuilderController::class, 'clearMessages']);
             Route::post('/sessions/{sessionId}/select-template', [StorefrontBuilderController::class, 'selectTemplate']);
             Route::post('/sessions/{sessionId}/generate', [StorefrontBuilderController::class, 'generateDraft']);
             Route::post('/sessions/{sessionId}/edit', [StorefrontBuilderController::class, 'applyEdit']);

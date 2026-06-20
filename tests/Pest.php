@@ -66,3 +66,20 @@ function glowRitualsProfile(): array
         'tone' => ['premium', 'natural'],
     ];
 }
+
+function builderSessionWithDraft(App\Models\User $user, App\Models\Store $store, array $overrides = []): App\Models\StorefrontBuilderSession
+{
+    $builderService = app(App\Services\StorefrontBuilderService::class);
+    $storefront = $builderService->synthesizeStorefront($store->fresh('merchant'));
+    $store->storefront_content = $storefront;
+    $store->save();
+
+    return App\Models\StorefrontBuilderSession::create(array_merge([
+        'user_id' => $user->id,
+        'store_id' => $store->id,
+        'status' => 'review_ready',
+        'business_profile' => glowRitualsProfile(),
+        'selected_template_id' => $store->storefront_template_id,
+        'storefront_snapshot' => $storefront,
+    ], $overrides));
+}

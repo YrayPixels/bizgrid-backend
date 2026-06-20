@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Models\Merchant;
 use App\Models\Store;
+use App\Models\StoreContactInquiry;
 use App\Models\StoreOrder;
 use App\Models\StoreProduct;
 use App\Models\StorefrontTemplate;
@@ -578,6 +579,61 @@ class StorehauseController extends Controller
 
         return response()->json([
             'message' => 'Visit recorded.',
+        ], 201);
+    }
+
+    public function submitContact(Request $request, string $slug): JsonResponse
+    {
+        $store = Store::where('slug', Str::slug($slug))->first();
+
+        if (! $store) {
+            return response()->json([
+                'message' => 'Storefront not found.',
+            ], 404);
+        }
+
+        $data = $request->validate([
+            'block_id' => 'nullable|string|max:80',
+            'fields' => 'required|array|min:1|max:12',
+            'fields.*' => 'nullable|string|max:5000',
+        ]);
+
+        $fields = collect($data['fields'])
+            ->map(fn ($value) => is_string($value) ? trim($value) : '')
+            ->filter(fn (string $value) => $value !== '')
+            ->all();
+
+        if ($fields === []) {
+            throw ValidationException::withMessages([
+                'fields' => ['Please fill in at least one field.'],
+            ]);
+        }
+
+        $name = (string) ($fields['name'] ?? $fields['full_name'] ?? $fields['customer_name'] ?? '');
+        $email = (string) ($fields['email'] ?? $fields['customer_email'] ?? '');
+        $phone = (string) ($fields['phone'] ?? $fields['customer_phone'] ?? '');
+        $message = (string) ($fields['message'] ?? $fields['order_number'] ?? $fields['notes'] ?? '');
+
+        if ($message === '' && count($fields) > 0) {
+            $message = collect($fields)
+                ->except(['name', 'full_name', 'customer_name', 'email', 'customer_email', 'phone', 'customer_phone'])
+                ->map(fn (string $value, string $key): string => ucfirst(str_replace('_', ' ', $key)).': '.$value)
+                ->implode("\n");
+        }
+
+        StoreContactInquiry::create([
+            'store_id' => $store->id,
+            'block_id' => $data['block_id'] ?? null,
+            'customer_name' => $name !== '' ? $name : null,
+            'customer_email' => $email !== '' ? $email : null,
+            'customer_phone' => $phone !== '' ? $phone : null,
+            'message' => $message !== '' ? $message : null,
+            'fields' => $fields,
+            'status' => 'new',
+        ]);
+
+        return response()->json([
+            'message' => 'Message sent.',
         ], 201);
     }
 

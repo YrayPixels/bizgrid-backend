@@ -242,3 +242,680 @@ it('starts a builder session without requiring OpenAI', function () {
             'session' => ['id', 'messages', 'business_profile'],
         ]);
 });
+
+it('applies stock photos when the merchant asks for suitable stock images', function () {
+    $mock = Mockery::mock(App\Services\StorefrontAiAgentService::class);
+    $mock->shouldReceive('available')->andReturn(false);
+    app()->instance(App\Services\StorefrontAiAgentService::class, $mock);
+
+    $user = User::factory()->create();
+    $merchant = Merchant::create([
+        'owner_user_id' => $user->id,
+        'business_name' => 'Glow Rituals',
+        'slug' => 'glow-rituals',
+        'contact_name' => $user->name,
+        'email' => $user->email,
+        'industry' => 'beauty_and_skincare',
+        'status' => 'pending',
+        'subscription_plan' => 'starter',
+        'subscription_status' => 'trialing',
+    ]);
+    $store = Store::create([
+        'merchant_id' => $merchant->id,
+        'name' => 'Glow Rituals',
+        'slug' => 'glow-rituals',
+        'status' => 'draft',
+        'primary_domain' => 'glow-rituals.example.test',
+        'description' => 'Organic skincare for busy professionals.',
+        'brand_color' => '#0E7C66',
+        'storefront_template_id' => 'cosmetics',
+    ]);
+
+    $session = builderSessionWithDraft($user, $store);
+
+    $response = $this->actingAs($user, 'sanctum')
+        ->postJson("/api/storehause/storefront-builder/sessions/{$session->id}/messages", [
+            'message' => 'Add suitable stock photos to my website',
+        ]);
+
+    $response->assertOk();
+
+    $lastAssistant = collect($response->json('session.messages'))
+        ->where('role', 'assistant')
+        ->last();
+
+    expect($lastAssistant['content'])->toContain('suitable photos');
+    expect($response->json('session.storefront_snapshot.media.hero_image_url'))->not->toBeNull();
+});
+
+it('rebuilds the draft when the merchant asks to build for cosmetics', function () {
+    $mock = Mockery::mock(App\Services\StorefrontAiAgentService::class);
+    $mock->shouldReceive('available')->andReturn(false);
+    app()->instance(App\Services\StorefrontAiAgentService::class, $mock);
+
+    $user = User::factory()->create();
+    $merchant = Merchant::create([
+        'owner_user_id' => $user->id,
+        'business_name' => 'Glow Rituals',
+        'slug' => 'glow-rituals',
+        'contact_name' => $user->name,
+        'email' => $user->email,
+        'industry' => 'beauty_and_skincare',
+        'status' => 'pending',
+        'subscription_plan' => 'starter',
+        'subscription_status' => 'trialing',
+    ]);
+    $store = Store::create([
+        'merchant_id' => $merchant->id,
+        'name' => 'Glow Rituals',
+        'slug' => 'glow-rituals',
+        'status' => 'draft',
+        'primary_domain' => 'glow-rituals.example.test',
+        'description' => 'Organic skincare for busy professionals.',
+        'brand_color' => '#0E7C66',
+        'storefront_template_id' => 'minimalistic',
+    ]);
+
+    $session = builderSessionWithDraft($user, $store, [
+        'selected_template_id' => 'minimalistic',
+    ]);
+
+    $response = $this->actingAs($user, 'sanctum')
+        ->postJson("/api/storehause/storefront-builder/sessions/{$session->id}/messages", [
+            'message' => 'Lets build for cosmetics this time',
+        ]);
+
+    $response->assertOk()
+        ->assertJsonPath('session.selected_template_id', 'cosmetics');
+
+    $lastAssistant = collect($response->json('session.messages'))
+        ->where('role', 'assistant')
+        ->last();
+
+    expect($lastAssistant['content'])->toContain('rebuilt');
+});
+
+it('guides merchants to the products page when they want to add a product', function () {
+    $mock = Mockery::mock(App\Services\StorefrontAiAgentService::class);
+    $mock->shouldReceive('available')->andReturn(false);
+    app()->instance(App\Services\StorefrontAiAgentService::class, $mock);
+
+    $user = User::factory()->create();
+    $merchant = Merchant::create([
+        'owner_user_id' => $user->id,
+        'business_name' => 'Glow Rituals',
+        'slug' => 'glow-rituals',
+        'contact_name' => $user->name,
+        'email' => $user->email,
+        'industry' => 'beauty_and_skincare',
+        'status' => 'pending',
+        'subscription_plan' => 'starter',
+        'subscription_status' => 'trialing',
+    ]);
+    $store = Store::create([
+        'merchant_id' => $merchant->id,
+        'name' => 'Glow Rituals',
+        'slug' => 'glow-rituals',
+        'status' => 'draft',
+        'primary_domain' => 'glow-rituals.example.test',
+        'description' => 'Organic skincare for busy professionals.',
+        'brand_color' => '#0E7C66',
+        'storefront_template_id' => 'cosmetics',
+    ]);
+
+    $session = builderSessionWithDraft($user, $store);
+
+    $response = $this->actingAs($user, 'sanctum')
+        ->postJson("/api/storehause/storefront-builder/sessions/{$session->id}/messages", [
+            'message' => 'I want to add a product',
+        ]);
+
+    $response->assertOk();
+
+    $lastAssistant = collect($response->json('session.messages'))
+        ->where('role', 'assistant')
+        ->last();
+
+    expect($lastAssistant['content'])->toContain('Products page');
+    expect($lastAssistant['payload']['type'])->toBe('product_guidance');
+    expect($lastAssistant['payload']['suggested_actions'][0]['href'])->toBe('/admin/products');
+});
+
+it('updates the contact page intro from builder chat', function () {
+    $mock = Mockery::mock(App\Services\StorefrontAiAgentService::class);
+    $mock->shouldReceive('available')->andReturn(false);
+    app()->instance(App\Services\StorefrontAiAgentService::class, $mock);
+
+    $user = User::factory()->create();
+    $merchant = Merchant::create([
+        'owner_user_id' => $user->id,
+        'business_name' => 'Glow Rituals',
+        'slug' => 'glow-rituals',
+        'contact_name' => $user->name,
+        'email' => $user->email,
+        'industry' => 'beauty_and_skincare',
+        'status' => 'pending',
+        'subscription_plan' => 'starter',
+        'subscription_status' => 'trialing',
+    ]);
+    $store = Store::create([
+        'merchant_id' => $merchant->id,
+        'name' => 'Glow Rituals',
+        'slug' => 'glow-rituals',
+        'status' => 'draft',
+        'primary_domain' => 'glow-rituals.example.test',
+        'description' => 'Organic skincare for busy professionals.',
+        'brand_color' => '#0E7C66',
+        'storefront_template_id' => 'cosmetics',
+    ]);
+
+    $session = builderSessionWithDraft($user, $store);
+
+    $response = $this->actingAs($user, 'sanctum')
+        ->postJson("/api/storehause/storefront-builder/sessions/{$session->id}/edit", [
+            'instruction' => 'Update the contact page intro to "We reply within 24 hours on weekdays."',
+        ]);
+
+    $response->assertOk();
+
+    expect($response->json('session.storefront_snapshot.pages.contact.body'))
+        ->toContain('We reply within 24 hours on weekdays');
+});
+
+it('adds a new faq item from builder chat', function () {
+    $mock = Mockery::mock(App\Services\StorefrontAiAgentService::class);
+    $mock->shouldReceive('available')->andReturn(false);
+    app()->instance(App\Services\StorefrontAiAgentService::class, $mock);
+
+    $user = User::factory()->create();
+    $merchant = Merchant::create([
+        'owner_user_id' => $user->id,
+        'business_name' => 'Glow Rituals',
+        'slug' => 'glow-rituals',
+        'contact_name' => $user->name,
+        'email' => $user->email,
+        'industry' => 'beauty_and_skincare',
+        'status' => 'pending',
+        'subscription_plan' => 'starter',
+        'subscription_status' => 'trialing',
+    ]);
+    $store = Store::create([
+        'merchant_id' => $merchant->id,
+        'name' => 'Glow Rituals',
+        'slug' => 'glow-rituals',
+        'status' => 'draft',
+        'primary_domain' => 'glow-rituals.example.test',
+        'description' => 'Organic skincare for busy professionals.',
+        'brand_color' => '#0E7C66',
+        'storefront_template_id' => 'cosmetics',
+    ]);
+
+    $session = builderSessionWithDraft($user, $store);
+    $initialCount = count($session->storefront_snapshot['pages']['faq']['items'] ?? []);
+
+    $response = $this->actingAs($user, 'sanctum')
+        ->postJson("/api/storehause/storefront-builder/sessions/{$session->id}/edit", [
+            'instruction' => 'Add a fourth FAQ about returns',
+        ]);
+
+    $response->assertOk();
+
+    $items = $response->json('session.storefront_snapshot.pages.faq.items');
+    expect(count($items))->toBe($initialCount + 1);
+    expect(collect($items)->last()['question'])->toContain('return');
+});
+
+it('refreshes faq items from builder chat without asking for specifics', function () {
+    $mock = Mockery::mock(App\Services\StorefrontAiAgentService::class);
+    $mock->shouldReceive('available')->andReturn(false);
+    app()->instance(App\Services\StorefrontAiAgentService::class, $mock);
+
+    $user = User::factory()->create();
+    $merchant = Merchant::create([
+        'owner_user_id' => $user->id,
+        'business_name' => 'ABI HOUSES',
+        'slug' => 'abi-houses',
+        'contact_name' => $user->name,
+        'email' => $user->email,
+        'industry' => 'fashion_and_apparel',
+        'status' => 'pending',
+        'subscription_plan' => 'starter',
+        'subscription_status' => 'trialing',
+    ]);
+    $store = Store::create([
+        'merchant_id' => $merchant->id,
+        'name' => 'ABI HOUSES',
+        'slug' => 'abi-houses',
+        'status' => 'draft',
+        'primary_domain' => 'abi-houses.example.test',
+        'description' => 'Premium fashion for modern wardrobes.',
+        'brand_color' => '#80131B',
+        'storefront_template_id' => 'cosmetics',
+    ]);
+
+    $session = builderSessionWithDraft($user, $store, [
+        'business_profile' => [
+            'business_name' => 'ABI HOUSES',
+            'description' => 'Premium fashion for modern wardrobes.',
+            'industry' => 'fashion_and_apparel',
+            'brand_color' => '#80131B',
+        ],
+    ]);
+
+    $response = $this->actingAs($user, 'sanctum')
+        ->postJson("/api/storehause/storefront-builder/sessions/{$session->id}/messages", [
+            'message' => 'Update the faq and the answers',
+        ]);
+
+    $response->assertOk();
+
+    $items = $response->json('session.storefront_snapshot.pages.faq.items');
+    expect($items)->toBeArray()->not->toBeEmpty();
+    expect(collect($items)->first()['question'])->toContain('ABI HOUSES');
+
+    $lastAssistant = collect($response->json('session.messages'))
+        ->where('role', 'assistant')
+        ->last();
+
+    expect($lastAssistant['content'])->toContain('FAQ');
+    expect($lastAssistant['content'])->not->toContain('What specific');
+});
+
+it('emits home page blocks when synthesizing a cosmetics storefront', function () {
+    mockStorefrontAiAgent(function ($mock) {
+        $mock->shouldReceive('synthesizeStorefront')
+            ->once()
+            ->andReturnUsing(fn ($store, array $baseStorefront) => $baseStorefront);
+    });
+
+    $user = User::factory()->create();
+    $merchant = Merchant::create([
+        'owner_user_id' => $user->id,
+        'business_name' => 'Glow Rituals',
+        'slug' => 'glow-rituals',
+        'contact_name' => $user->name,
+        'email' => $user->email,
+        'industry' => 'beauty_and_skincare',
+        'status' => 'pending',
+        'subscription_plan' => 'starter',
+        'subscription_status' => 'trialing',
+    ]);
+    $store = Store::create([
+        'merchant_id' => $merchant->id,
+        'name' => 'Glow Rituals',
+        'slug' => 'glow-rituals',
+        'status' => 'draft',
+        'primary_domain' => 'glow-rituals.example.test',
+        'description' => 'Organic skincare for busy professionals.',
+        'brand_color' => '#0E7C66',
+        'storefront_template_id' => 'cosmetics',
+    ]);
+
+    $builderService = app(App\Services\StorefrontBuilderService::class);
+    $storefront = $builderService->synthesizeStorefront($store->fresh('merchant'));
+
+    expect($storefront['pages']['home']['blocks'] ?? null)->toBeArray()->not->toBeEmpty();
+    expect(collect($storefront['pages']['home']['blocks'])->pluck('id')->all())
+        ->toContain('hero-main', 'featured-products', 'home-faq');
+});
+
+it('reorders homepage faq above products from builder chat', function () {
+    $mock = Mockery::mock(App\Services\StorefrontAiAgentService::class);
+    $mock->shouldReceive('available')->andReturn(false);
+    app()->instance(App\Services\StorefrontAiAgentService::class, $mock);
+
+    $user = User::factory()->create();
+    $merchant = Merchant::create([
+        'owner_user_id' => $user->id,
+        'business_name' => 'Glow Rituals',
+        'slug' => 'glow-rituals',
+        'contact_name' => $user->name,
+        'email' => $user->email,
+        'industry' => 'beauty_and_skincare',
+        'status' => 'pending',
+        'subscription_plan' => 'starter',
+        'subscription_status' => 'trialing',
+    ]);
+    $store = Store::create([
+        'merchant_id' => $merchant->id,
+        'name' => 'Glow Rituals',
+        'slug' => 'glow-rituals',
+        'status' => 'draft',
+        'primary_domain' => 'glow-rituals.example.test',
+        'description' => 'Organic skincare for busy professionals.',
+        'brand_color' => '#0E7C66',
+        'storefront_template_id' => 'cosmetics',
+    ]);
+
+    $session = builderSessionWithDraft($user, $store);
+
+    $response = $this->actingAs($user, 'sanctum')
+        ->postJson("/api/storehause/storefront-builder/sessions/{$session->id}/edit", [
+            'instruction' => 'Move FAQ above products on the homepage',
+        ]);
+
+    $response->assertOk();
+
+    $blockIds = collect($response->json('session.storefront_snapshot.pages.home.blocks'))
+        ->pluck('id')
+        ->values()
+        ->all();
+
+    $faqIndex = array_search('home-faq', $blockIds, true);
+    $productsIndex = array_search('featured-products', $blockIds, true);
+
+    expect($faqIndex)->not->toBeFalse();
+    expect($productsIndex)->not->toBeFalse();
+    expect($faqIndex)->toBeLessThan($productsIndex);
+});
+
+it('updates the trust section copy from builder chat', function () {
+    $mock = Mockery::mock(App\Services\StorefrontAiAgentService::class);
+    $mock->shouldReceive('available')->andReturn(false);
+    app()->instance(App\Services\StorefrontAiAgentService::class, $mock);
+
+    $user = User::factory()->create();
+    $merchant = Merchant::create([
+        'owner_user_id' => $user->id,
+        'business_name' => 'Glow Rituals',
+        'slug' => 'glow-rituals',
+        'contact_name' => $user->name,
+        'email' => $user->email,
+        'industry' => 'beauty_and_skincare',
+        'status' => 'pending',
+        'subscription_plan' => 'starter',
+        'subscription_status' => 'trialing',
+    ]);
+    $store = Store::create([
+        'merchant_id' => $merchant->id,
+        'name' => 'Glow Rituals',
+        'slug' => 'glow-rituals',
+        'status' => 'draft',
+        'primary_domain' => 'glow-rituals.example.test',
+        'description' => 'Organic skincare for busy professionals.',
+        'brand_color' => '#0E7C66',
+        'storefront_template_id' => 'cosmetics',
+    ]);
+
+    $session = builderSessionWithDraft($user, $store);
+
+    $response = $this->actingAs($user, 'sanctum')
+        ->postJson("/api/storehause/storefront-builder/sessions/{$session->id}/edit", [
+            'instruction' => 'Make the trust section more premium',
+        ]);
+
+    $response->assertOk();
+
+    $trustBlock = collect($response->json('session.storefront_snapshot.pages.home.blocks'))
+        ->firstWhere('id', 'trust-features');
+
+    expect($trustBlock['props']['body'] ?? '')->toContain('Premium formulas');
+});
+
+it('syncs legacy hero edits into homepage blocks', function () {
+    $mock = Mockery::mock(App\Services\StorefrontAiAgentService::class);
+    $mock->shouldReceive('available')->andReturn(false);
+    app()->instance(App\Services\StorefrontAiAgentService::class, $mock);
+
+    $user = User::factory()->create();
+    $merchant = Merchant::create([
+        'owner_user_id' => $user->id,
+        'business_name' => 'Glow Rituals',
+        'slug' => 'glow-rituals',
+        'contact_name' => $user->name,
+        'email' => $user->email,
+        'industry' => 'beauty_and_skincare',
+        'status' => 'pending',
+        'subscription_plan' => 'starter',
+        'subscription_status' => 'trialing',
+    ]);
+    $store = Store::create([
+        'merchant_id' => $merchant->id,
+        'name' => 'Glow Rituals',
+        'slug' => 'glow-rituals',
+        'status' => 'draft',
+        'primary_domain' => 'glow-rituals.example.test',
+        'description' => 'Organic skincare for busy professionals.',
+        'brand_color' => '#0E7C66',
+        'storefront_template_id' => 'cosmetics',
+    ]);
+
+    $session = builderSessionWithDraft($user, $store);
+
+    $response = $this->actingAs($user, 'sanctum')
+        ->postJson("/api/storehause/storefront-builder/sessions/{$session->id}/edit", [
+            'instruction' => 'Change the headline to Glow Rituals Daily Ritual',
+        ]);
+
+    $response->assertOk();
+
+    $heroBlock = collect($response->json('session.storefront_snapshot.pages.home.blocks'))
+        ->firstWhere('id', 'hero-main');
+
+    expect($response->json('session.storefront_snapshot.hero.headline'))
+        ->toBe('Glow Rituals Daily Ritual');
+    expect($heroBlock['props']['headline'] ?? null)->toBe('Glow Rituals Daily Ritual');
+});
+
+it('adds a promo banner above the faq from builder chat', function () {
+    $mock = Mockery::mock(App\Services\StorefrontAiAgentService::class);
+    $mock->shouldReceive('available')->andReturn(false);
+    app()->instance(App\Services\StorefrontAiAgentService::class, $mock);
+
+    $user = User::factory()->create();
+    $merchant = Merchant::create([
+        'owner_user_id' => $user->id,
+        'business_name' => 'Glow Rituals',
+        'slug' => 'glow-rituals',
+        'contact_name' => $user->name,
+        'email' => $user->email,
+        'industry' => 'beauty_and_skincare',
+        'status' => 'pending',
+        'subscription_plan' => 'starter',
+        'subscription_status' => 'trialing',
+    ]);
+    $store = Store::create([
+        'merchant_id' => $merchant->id,
+        'name' => 'Glow Rituals',
+        'slug' => 'glow-rituals',
+        'status' => 'draft',
+        'primary_domain' => 'glow-rituals.example.test',
+        'description' => 'Organic skincare for busy professionals.',
+        'brand_color' => '#0E7C66',
+        'storefront_template_id' => 'cosmetics',
+    ]);
+
+    $session = builderSessionWithDraft($user, $store);
+    $initialCount = count($session->storefront_snapshot['pages']['home']['blocks'] ?? []);
+
+    $response = $this->actingAs($user, 'sanctum')
+        ->postJson("/api/storehause/storefront-builder/sessions/{$session->id}/edit", [
+            'instruction' => 'Add a promo banner above the FAQ',
+        ]);
+
+    $response->assertOk();
+
+    $blocks = $response->json('session.storefront_snapshot.pages.home.blocks');
+    expect(count($blocks))->toBe($initialCount + 1);
+
+    $faqIndex = collect($blocks)->search(fn (array $block) => ($block['id'] ?? null) === 'home-faq');
+    $promoIndex = collect($blocks)->search(fn (array $block) => ($block['type'] ?? null) === 'cta_banner' && $block['id'] !== 'serum-promo');
+
+    expect($promoIndex)->not->toBeFalse();
+    expect($faqIndex)->not->toBeFalse();
+    expect($promoIndex)->toBeLessThan($faqIndex);
+});
+
+it('removes the stats section from builder chat', function () {
+    $mock = Mockery::mock(App\Services\StorefrontAiAgentService::class);
+    $mock->shouldReceive('available')->andReturn(false);
+    app()->instance(App\Services\StorefrontAiAgentService::class, $mock);
+
+    $user = User::factory()->create();
+    $merchant = Merchant::create([
+        'owner_user_id' => $user->id,
+        'business_name' => 'Glow Rituals',
+        'slug' => 'glow-rituals',
+        'contact_name' => $user->name,
+        'email' => $user->email,
+        'industry' => 'beauty_and_skincare',
+        'status' => 'pending',
+        'subscription_plan' => 'starter',
+        'subscription_status' => 'trialing',
+    ]);
+    $store = Store::create([
+        'merchant_id' => $merchant->id,
+        'name' => 'Glow Rituals',
+        'slug' => 'glow-rituals',
+        'status' => 'draft',
+        'primary_domain' => 'glow-rituals.example.test',
+        'description' => 'Organic skincare for busy professionals.',
+        'brand_color' => '#0E7C66',
+        'storefront_template_id' => 'cosmetics',
+    ]);
+
+    $session = builderSessionWithDraft($user, $store);
+
+    $response = $this->actingAs($user, 'sanctum')
+        ->postJson("/api/storehause/storefront-builder/sessions/{$session->id}/edit", [
+            'instruction' => 'Remove the stats section',
+        ]);
+
+    $response->assertOk();
+
+    $blockIds = collect($response->json('session.storefront_snapshot.pages.home.blocks'))
+        ->pluck('id')
+        ->all();
+
+    expect($blockIds)->not->toContain('home-stats');
+});
+
+it('generates block trees for about contact and faq pages on draft generation', function () {
+    $mock = Mockery::mock(App\Services\StorefrontAiAgentService::class);
+    $mock->shouldReceive('available')->andReturn(false);
+    app()->instance(App\Services\StorefrontAiAgentService::class, $mock);
+
+    $user = User::factory()->create();
+    $merchant = Merchant::create([
+        'owner_user_id' => $user->id,
+        'business_name' => 'Glow Rituals',
+        'slug' => 'glow-rituals',
+        'contact_name' => $user->name,
+        'email' => $user->email,
+        'industry' => 'beauty_and_skincare',
+        'status' => 'pending',
+        'subscription_plan' => 'starter',
+        'subscription_status' => 'trialing',
+    ]);
+    $store = Store::create([
+        'merchant_id' => $merchant->id,
+        'name' => 'Glow Rituals',
+        'slug' => 'glow-rituals',
+        'status' => 'draft',
+        'primary_domain' => 'glow-rituals.example.test',
+        'description' => 'Organic skincare for busy professionals.',
+        'brand_color' => '#0E7C66',
+        'storefront_template_id' => 'cosmetics',
+    ]);
+
+    $session = builderSessionWithDraft($user, $store);
+
+    $response = $this->actingAs($user, 'sanctum')
+        ->postJson("/api/storehause/storefront-builder/sessions/{$session->id}/generate");
+
+    $response->assertOk();
+
+    $snapshot = $response->json('session.storefront_snapshot');
+
+    expect($snapshot['pages']['about']['blocks'])->toBeArray()->not->toBeEmpty();
+    expect($snapshot['pages']['contact']['blocks'])->toBeArray()->not->toBeEmpty();
+    expect($snapshot['pages']['faq']['blocks'])->toBeArray()->not->toBeEmpty();
+    expect(collect($snapshot['pages']['contact']['blocks'])->pluck('type')->all())->toContain('contact_form');
+});
+
+it('updates the contact form fields from builder chat', function () {
+    $mock = Mockery::mock(App\Services\StorefrontAiAgentService::class);
+    $mock->shouldReceive('available')->andReturn(false);
+    app()->instance(App\Services\StorefrontAiAgentService::class, $mock);
+
+    $user = User::factory()->create();
+    $merchant = Merchant::create([
+        'owner_user_id' => $user->id,
+        'business_name' => 'Glow Rituals',
+        'slug' => 'glow-rituals',
+        'contact_name' => $user->name,
+        'email' => $user->email,
+        'industry' => 'beauty_and_skincare',
+        'status' => 'pending',
+        'subscription_plan' => 'starter',
+        'subscription_status' => 'trialing',
+    ]);
+    $store = Store::create([
+        'merchant_id' => $merchant->id,
+        'name' => 'Glow Rituals',
+        'slug' => 'glow-rituals',
+        'status' => 'draft',
+        'primary_domain' => 'glow-rituals.example.test',
+        'description' => 'Organic skincare for busy professionals.',
+        'brand_color' => '#0E7C66',
+        'storefront_template_id' => 'cosmetics',
+    ]);
+
+    $session = builderSessionWithDraft($user, $store);
+
+    $response = $this->actingAs($user, 'sanctum')
+        ->postJson("/api/storehause/storefront-builder/sessions/{$session->id}/edit", [
+            'instruction' => 'Add a contact form with name, email, and order number',
+        ]);
+
+    $response->assertOk();
+
+    $formBlock = collect($response->json('session.storefront_snapshot.pages.contact.blocks'))
+        ->firstWhere('type', 'contact_form');
+
+    expect($formBlock)->not->toBeNull();
+    expect(collect($formBlock['props']['fields'])->pluck('name')->all())
+        ->toContain('name', 'email', 'order_number');
+});
+
+it('accepts public contact form submissions', function () {
+    $user = User::factory()->create();
+    $merchant = Merchant::create([
+        'owner_user_id' => $user->id,
+        'business_name' => 'Glow Rituals',
+        'slug' => 'glow-rituals',
+        'contact_name' => $user->name,
+        'email' => $user->email,
+        'industry' => 'beauty_and_skincare',
+        'status' => 'pending',
+        'subscription_plan' => 'starter',
+        'subscription_status' => 'trialing',
+    ]);
+    Store::create([
+        'merchant_id' => $merchant->id,
+        'name' => 'Glow Rituals',
+        'slug' => 'glow-rituals',
+        'status' => 'published',
+        'primary_domain' => 'glow-rituals.example.test',
+        'description' => 'Organic skincare for busy professionals.',
+        'brand_color' => '#0E7C66',
+        'storefront_template_id' => 'cosmetics',
+    ]);
+
+    $response = $this->postJson('/api/storehause/public/storefronts/glow-rituals/contact', [
+        'block_id' => 'contact-form',
+        'fields' => [
+            'name' => 'Ada Lovelace',
+            'email' => 'ada@example.com',
+            'message' => 'Question about my order.',
+        ],
+    ]);
+
+    $response->assertCreated()
+        ->assertJsonPath('message', 'Message sent.');
+
+    $this->assertDatabaseHas('store_contact_inquiries', [
+        'customer_name' => 'Ada Lovelace',
+        'customer_email' => 'ada@example.com',
+    ]);
+});
