@@ -20,6 +20,10 @@ class StorefrontAiAgentService
         'other',
     ];
 
+    public function __construct(
+        private readonly StorefrontPageBlockService $pageBlockService,
+    ) {}
+
     public function available(): bool
     {
         return filled(config('openai.api_key'));
@@ -218,20 +222,27 @@ class StorefrontAiAgentService
      * @param  array<string, mixed>  $storefront
      * @return array{storefront: array<string, mixed>, changed_paths: list<string>, assistant_message?: string}|null
      */
-    public function applyChatEdit(array $storefront, string $instruction): ?array
+    public function applyChatEdit(array $storefront, string $instruction, ?Store $store = null): ?array
     {
         $result = $this->chatJson([
             [
                 'role' => 'system',
                 'content' => implode("\n", [
                     'You are the Storehaus Storefront Editor agent.',
-                    'Apply the merchant instruction as a small structured patch.',
-                    'Return ONLY valid JSON: {"updates": object, "changed_paths": string[], "assistant_message": string}.',
-                    'Allowed update paths: '.implode(', ', StorefrontPathEditor::promptAllowedPaths()).'.',
+                    'Apply the merchant instruction as a small structured patch across any page (home, about, contact, faq).',
+                    'Return ONLY valid JSON: {"updates": object, "operations": array, "changed_paths": string[], "assistant_message": string}.',
+                    'Flat copy paths (updates): '.implode(', ', StorefrontPathEditor::promptAllowedPaths()).'.',
                     'Use dot-path keys inside updates, for example {"hero.headline": "New headline"} or {"pages.contact.body": "Reach us anytime."}.',
-                    'For homepage section order or trust-section tone, prefer returning empty updates so the platform block editor can handle reorder/update_block operations.',
-                    'For FAQ entries use pages.faq.items[N].question and pages.faq.items[N].answer where N is the zero-based index.',
-                    'If the merchant asks to update, refresh, or improve FAQ questions or answers without specifics, rewrite all FAQ items tailored to their business.',
+                    'Block operations (operations) — prefer these for section-level layout/copy on any page:',
+                    '- update_block: {"op":"update_block","page":"about|contact|faq|home","block_id":"...","props":{...}}',
+                    '- regenerate_section: {"op":"regenerate_section","page":"...","block_id":"..."} when the merchant asks to redesign/refresh/fix a whole section',
+                    '- reorder_blocks: {"op":"reorder_blocks","page":"home","order":["hero-main", "..."]}',
+                    '- remove_block: {"op":"remove_block","page":"...","block_id":"..."} — never remove hero-main, about-main, contact-form, or faq-main',
+                    'Registered block types: hero, stats_row, rich_text, feature_grid, cta_banner, product_grid, faq, contact_form.',
+                    'Common block ids: hero-main, home-stats, trust-features, featured-products, home-faq, about-main, about-features, contact-intro, contact-form, faq-main.',
+                    'Respect edit_metadata.locked on blocks — skip locked blocks.',
+                    'For FAQ entries you may use pages.faq.items[N].question and pages.faq.items[N].answer, or update_block on faq-main with props.items.',
+                    'If the merchant asks to update, refresh, or improve FAQ without specifics, rewrite all FAQ items tailored to their business.',
                     'Keep about.title/body and pages.about.title/body aligned when editing about copy.',
                     'Do not change locked fields, products, template, palette, or unrelated copy.',
                     'Prefer applying sensible inferred updates over asking clarifying questions. Only ask when a required detail is impossible to infer.',
@@ -241,17 +252,7 @@ class StorefrontAiAgentService
                 'role' => 'user',
                 'content' => json_encode([
                     'instruction' => $instruction,
-                    'current_storefront' => Arr::only($storefront, [
-                        'hero',
-                        'about',
-                        'seo',
-                        'media',
-                        'value_props',
-                        'navigation',
-                        'home_stats',
-                        'pages',
-                        'edit_metadata',
-                    ]),
+                    'current_storefront' => $this->storefrontEditorContext($storefront),
                 ]),
             ],
         ], 0.35);
@@ -265,8 +266,17 @@ class StorefrontAiAgentService
             return null;
         }
 
+        $changedPaths = [];
+
+        $operations = is_array($result['operations'] ?? null) ? $result['operations'] : [];
+        if ($operations !== []) {
+            $operationResult = $this->pageBlockService->applyAiBlockOperations($storefront, $operations, $store);
+            $storefront = $operationResult['storefront'];
+            $changedPaths = array_merge($changedPaths, $operationResult['changed_paths']);
+        }
+
         $updates = StorefrontPathEditor::flattenUpdates(is_array($result['updates'] ?? null) ? $result['updates'] : []);
-        $changedPaths = StorefrontPathEditor::applyMany($storefront, $updates);
+        $changedPaths = array_merge($changedPaths, StorefrontPathEditor::applyMany($storefront, $updates));
         $metadata = $storefront['edit_metadata'] ?? [
             'ai_generated_paths' => [],
             'user_edited_paths' => [],
@@ -301,7 +311,37 @@ class StorefrontAiAgentService
         return [
             'storefront' => $storefront,
             'changed_paths' => $changedPaths,
+            'assistant_message' => is_string($result['assistant_message'] ?? null) && trim($result['assistant_message']) !== ''
+                ? trim($result['assistant_message'])
+                : null,
         ];
+    }
+
+    /**
+     * @param  array<string, mixed>  $storefront
+     * @return array<string, mixed>
+     */
+    private function storefrontEditorContext(array $storefront): array
+    {
+        $pages = is_array($storefront['pages'] ?? null) ? $storefront['pages'] : [];
+
+        foreach (['home', 'about', 'contact', 'faq'] as $page) {
+            $pages[$page] = array_merge(is_array($pages[$page] ?? null) ? $pages[$page] : [], [
+                'blocks' => $this->pageBlockService->resolvePageBlocks($storefront, $page),
+            ]);
+        }
+
+        return Arr::only(array_merge($storefront, ['pages' => $pages]), [
+            'hero',
+            'about',
+            'seo',
+            'media',
+            'value_props',
+            'navigation',
+            'home_stats',
+            'pages',
+            'edit_metadata',
+        ]);
     }
 
     /**

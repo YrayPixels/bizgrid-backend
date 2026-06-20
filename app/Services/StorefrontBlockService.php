@@ -1158,6 +1158,77 @@ class StorefrontBlockService
      * @param  array<string, mixed>  $storefront
      * @return list<array<string, mixed>>
      */
+    public function resolvePageBlocks(array $storefront, string $page): array
+    {
+        return match ($page) {
+            'about' => $this->migrateAboutBlocks($storefront),
+            'contact' => $this->migrateContactBlocks($storefront),
+            'faq' => $this->migrateFaqBlocks($storefront),
+            default => $this->resolveHomeBlocks($storefront),
+        };
+    }
+
+    /**
+     * @param  array<string, mixed>  $storefront
+     * @param  list<array<string, mixed>>  $blocks
+     */
+    public function persistPageBlocks(array &$storefront, string $page, array $blocks): void
+    {
+        $pages = is_array($storefront['pages'] ?? null) ? $storefront['pages'] : [];
+
+        if ($page === 'home') {
+            $pages['home'] = ['blocks' => $blocks];
+            $storefront['pages'] = $this->ensureDefaultPages($storefront, $pages);
+            $this->syncLegacyFieldsFromHomeBlocks($storefront, $blocks);
+
+            return;
+        }
+
+        $pages[$page] = array_merge(is_array($pages[$page] ?? null) ? $pages[$page] : [], ['blocks' => $blocks]);
+        $storefront['pages'] = $this->ensureDefaultPages($storefront, $pages);
+
+        if ($page === 'about') {
+            $richText = collect($blocks)->firstWhere('type', 'rich_text');
+            if (is_array($richText)) {
+                $props = is_array($richText['props'] ?? null) ? $richText['props'] : [];
+                if (! empty($props['title'])) {
+                    $storefront['about']['title'] = (string) $props['title'];
+                    $storefront['pages']['about']['title'] = (string) $props['title'];
+                }
+                if (! empty($props['body'])) {
+                    $storefront['about']['body'] = (string) $props['body'];
+                    $storefront['pages']['about']['body'] = (string) $props['body'];
+                }
+            }
+        }
+
+        if ($page === 'contact') {
+            $intro = collect($blocks)->firstWhere('type', 'rich_text');
+            if (is_array($intro)) {
+                $props = is_array($intro['props'] ?? null) ? $intro['props'] : [];
+                if (! empty($props['title'])) {
+                    $storefront['pages']['contact']['title'] = (string) $props['title'];
+                }
+                if (! empty($props['body'])) {
+                    $storefront['pages']['contact']['body'] = (string) $props['body'];
+                }
+            }
+        }
+
+        if ($page === 'faq') {
+            $faq = collect($blocks)->firstWhere('type', 'faq');
+            if (is_array($faq)) {
+                $props = is_array($faq['props'] ?? null) ? $faq['props'] : [];
+                $storefront['pages']['faq']['title'] = (string) ($props['title'] ?? data_get($storefront, 'pages.faq.title', 'Frequently asked questions'));
+                $storefront['pages']['faq']['items'] = is_array($props['items'] ?? null) ? $props['items'] : [];
+            }
+        }
+    }
+
+    /**
+     * @param  array<string, mixed>  $storefront
+     * @return list<array<string, mixed>>
+     */
     private function migrateAboutBlocks(array $storefront): array
     {
         $existing = data_get($storefront, 'pages.about.blocks');

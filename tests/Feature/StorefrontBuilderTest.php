@@ -878,6 +878,92 @@ it('updates the contact form fields from builder chat', function () {
         ->toContain('name', 'email', 'order_number');
 });
 
+it('regenerates the about page section from builder chat', function () {
+    $mock = Mockery::mock(App\Services\StorefrontAiAgentService::class);
+    $mock->shouldReceive('available')->andReturn(false);
+    app()->instance(App\Services\StorefrontAiAgentService::class, $mock);
+
+    $user = User::factory()->create();
+    $merchant = Merchant::create([
+        'owner_user_id' => $user->id,
+        'business_name' => 'Glow Rituals',
+        'slug' => 'glow-rituals',
+        'contact_name' => $user->name,
+        'email' => $user->email,
+        'industry' => 'beauty_and_skincare',
+        'status' => 'pending',
+        'subscription_plan' => 'starter',
+        'subscription_status' => 'trialing',
+    ]);
+    $store = Store::create([
+        'merchant_id' => $merchant->id,
+        'name' => 'Glow Rituals',
+        'slug' => 'glow-rituals',
+        'status' => 'draft',
+        'primary_domain' => 'glow-rituals.example.test',
+        'description' => 'Organic skincare for busy professionals.',
+        'brand_color' => '#0E7C66',
+        'storefront_template_id' => 'cosmetics',
+    ]);
+
+    $session = builderSessionWithDraft($user, $store);
+    $beforeBody = data_get($session->storefront_snapshot, 'pages.about.blocks.0.props.body');
+
+    $response = $this->actingAs($user, 'sanctum')
+        ->postJson("/api/storehause/storefront-builder/sessions/{$session->id}/edit", [
+            'instruction' => 'Fix the about page',
+        ]);
+
+    $response->assertOk();
+
+    $afterBody = data_get($response->json('session.storefront_snapshot'), 'pages.about.blocks.0.props.body');
+    expect($response->json('session.storefront_snapshot.pages.about.blocks'))->toBeArray()->not->toBeEmpty();
+    expect($afterBody)->not->toBe($beforeBody);
+});
+
+it('regenerates the FAQ section from builder chat', function () {
+    $mock = Mockery::mock(App\Services\StorefrontAiAgentService::class);
+    $mock->shouldReceive('available')->andReturn(false);
+    app()->instance(App\Services\StorefrontAiAgentService::class, $mock);
+
+    $user = User::factory()->create();
+    $merchant = Merchant::create([
+        'owner_user_id' => $user->id,
+        'business_name' => 'Glow Rituals',
+        'slug' => 'glow-rituals',
+        'contact_name' => $user->name,
+        'email' => $user->email,
+        'industry' => 'beauty_and_skincare',
+        'status' => 'pending',
+        'subscription_plan' => 'starter',
+        'subscription_status' => 'trialing',
+    ]);
+    $store = Store::create([
+        'merchant_id' => $merchant->id,
+        'name' => 'Glow Rituals',
+        'slug' => 'glow-rituals',
+        'status' => 'draft',
+        'primary_domain' => 'glow-rituals.example.test',
+        'description' => 'Organic skincare for busy professionals.',
+        'brand_color' => '#0E7C66',
+        'storefront_template_id' => 'cosmetics',
+    ]);
+
+    $session = builderSessionWithDraft($user, $store);
+    $beforeItems = data_get($session->storefront_snapshot, 'pages.faq.blocks.0.props.items');
+
+    $response = $this->actingAs($user, 'sanctum')
+        ->postJson("/api/storehause/storefront-builder/sessions/{$session->id}/edit", [
+            'instruction' => 'Regenerate the FAQ section',
+        ]);
+
+    $response->assertOk();
+
+    $afterItems = data_get($response->json('session.storefront_snapshot'), 'pages.faq.blocks.0.props.items');
+    expect($response->json('session.storefront_snapshot.pages.faq.blocks'))->toBeArray()->not->toBeEmpty();
+    expect($afterItems)->not->toBe($beforeItems);
+});
+
 it('accepts public contact form submissions', function () {
     $user = User::factory()->create();
     $merchant = Merchant::create([

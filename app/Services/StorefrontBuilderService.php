@@ -15,6 +15,7 @@ class StorefrontBuilderService
     public function __construct(
         private readonly StorefrontAiAgentService $aiAgent,
         private readonly StorefrontBlockService $blockService,
+        private readonly StorefrontPageBlockService $pageBlockService,
     ) {}
 
     public function synthesizeStorefront(Store $store): array
@@ -260,9 +261,9 @@ class StorefrontBuilderService
      */
     public function applyChatEdit(array $storefront, string $instruction, ?Store $store = null): array
     {
-        $regenerate = $this->tryRegenerateSingleSection($storefront, $instruction, $store);
-        if ($regenerate !== null) {
-            return $regenerate;
+        $pageBlockEdit = $this->pageBlockService->tryApplyPageBlockInstructionFormatted($storefront, $instruction, $store);
+        if (is_array($pageBlockEdit)) {
+            return $pageBlockEdit;
         }
 
         if (StorefrontPathEditor::isFaqItemAppendInstruction($instruction)) {
@@ -327,13 +328,15 @@ class StorefrontBuilderService
 
         if ($this->aiAgent->available()) {
             try {
-                $result = $this->aiAgent->applyChatEdit($storefront, $instruction);
+                $result = $this->aiAgent->applyChatEdit($storefront, $instruction, $store);
                 if (is_array($result) && ($result['changed_paths'] ?? []) !== []) {
                     $result['storefront'] = $this->blockService->maybeSyncHomeBlocksFromLegacyPaths(
                         $result['storefront'],
                         $result['changed_paths'],
                     );
-                    $result['assistant_message'] = $this->describeStorefrontEdit($result['changed_paths']);
+                    $result['assistant_message'] = is_string($result['assistant_message'] ?? null) && trim($result['assistant_message']) !== ''
+                        ? trim($result['assistant_message'])
+                        : $this->describeStorefrontEdit($result['changed_paths']);
 
                     return $result;
                 }
@@ -343,65 +346,6 @@ class StorefrontBuilderService
         }
 
         return $this->applyChatEditFallback($storefront, $instruction, $this->aiAgent->available(), $store);
-    }
-
-    /**
-     * Phase 4: regenerate a single section/block without touching the rest.
-     *
-     * @param  array<string, mixed>  $storefront
-     * @return array{storefront: array<string, mixed>, changed_paths: list<string>, assistant_message: string}|null
-     */
-    private function tryRegenerateSingleSection(array $storefront, string $instruction, ?Store $store = null): ?array
-    {
-        $lower = strtolower($instruction);
-        $wantsRegenerate = preg_match('/\b(redesign|regenerate|refresh)\b/u', $lower) === 1
-            && preg_match('/\b(just|only)\b/u', $lower) === 1;
-
-        if (! $wantsRegenerate) {
-            return null;
-        }
-
-        // MVP: hero only. (We can expand to arbitrary blocks once registry-based validation is in place.)
-        if (preg_match('/\bhero\b/u', $lower) !== 1) {
-            return null;
-        }
-
-        $next = json_decode(json_encode($storefront), true);
-        if (! is_array($next)) {
-            return null;
-        }
-
-        $blocks = is_array(data_get($next, 'pages.home.blocks')) ? data_get($next, 'pages.home.blocks') : [];
-        $index = collect($blocks)->search(fn ($block): bool => is_array($block) && ($block['id'] ?? null) === 'hero-main');
-        if (! is_int($index) || $index < 0) {
-            return null;
-        }
-
-        $existingProps = is_array($blocks[$index]['props'] ?? null) ? $blocks[$index]['props'] : [];
-        $layouts = ['split', 'centered', 'image_right'];
-        $layout = $layouts[array_rand($layouts)];
-
-        $businessName = $store?->name ?: (string) data_get($next, 'hero.headline', 'Our store');
-        $blocks[$index]['props'] = array_merge($existingProps, [
-            'eyebrow' => 'New season, new ritual',
-            'headline' => $existingProps['headline'] ?? $businessName,
-            'subheadline' => 'A cleaner, calmer hero layout — designed to feel premium without overpromising.',
-            'layout' => $layout,
-        ]);
-
-        $pages = is_array($next['pages'] ?? null) ? $next['pages'] : [];
-        $pages['home'] = ['blocks' => $blocks];
-        $next['pages'] = $pages;
-
-        // Keep legacy fields aligned + protect other page blocks.
-        $next = $this->blockService->ensureAllPageBlocksOnStorefront($next);
-        $next = $this->blockService->maybeSyncHomeBlocksFromLegacyPaths($next, ['hero.headline']);
-
-        return [
-            'storefront' => $next,
-            'changed_paths' => ['pages.home.blocks.hero-main'],
-            'assistant_message' => 'Done — I redesigned just your homepage hero section. Check the preview on the right.',
-        ];
     }
 
     /**
