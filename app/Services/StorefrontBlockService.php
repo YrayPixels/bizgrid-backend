@@ -566,6 +566,20 @@ class StorefrontBlockService
             return $this->buildCosmeticsHomeBlocks($storefront);
         }
 
+        $layout = match ($templateId) {
+            'editorial', 'minimalistic' => 'centered',
+            'bold_grid' => 'image_right',
+            default => 'split',
+        };
+
+        $productLimit = match ($templateId) {
+            'bold_grid' => 6,
+            'classic' => 3,
+            default => 4,
+        };
+
+        $productTitle = $templateId === 'beauty' ? 'Shop the collection' : 'Featured products';
+
         return [
             [
                 'id' => 'hero-main',
@@ -576,6 +590,7 @@ class StorefrontBlockService
                     'cta_label' => (string) data_get($storefront, 'hero.cta_label', 'Shop now'),
                     'cta_href' => '/products',
                     'image_url' => data_get($storefront, 'media.hero_image_url'),
+                    'layout' => $layout,
                 ],
             ],
             [
@@ -590,7 +605,7 @@ class StorefrontBlockService
             [
                 'id' => 'featured-products',
                 'type' => 'product_grid',
-                'props' => ['title' => 'Featured products', 'limit' => 3],
+                'props' => ['title' => $productTitle, 'limit' => $productLimit],
             ],
             [
                 'id' => 'home-faq',

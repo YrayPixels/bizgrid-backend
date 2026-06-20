@@ -24,6 +24,8 @@ class StorefrontPathEditor
         'pages.about.title',
         'pages.about.body',
         'pages.faq.title',
+        'home_testimonials_title',
+        'home_testimonials_intro',
     ];
 
     /** @var list<string> */
@@ -31,7 +33,9 @@ class StorefrontPathEditor
         '/^pages\.faq\.items\.\d+\.(question|answer)$/',
         '/^value_props\.\d+\.(title|body)$/',
         '/^home_stats\.\d+\.(value|label)$/',
+        '/^home_testimonials\.\d+\.(quote|author)$/',
         '/^navigation\.\d+\.label$/',
+        '/^pages\.home\.blocks\.[\w-]+\.props\.[\w.]+$/',
     ];
 
     public static function isEditablePath(string $path): bool
@@ -62,7 +66,20 @@ class StorefrontPathEditor
             'value_props[N].body',
             'home_stats[N].value',
             'home_stats[N].label',
+            'home_testimonials_title',
+            'home_testimonials_intro',
+            'home_testimonials[N].quote',
+            'home_testimonials[N].author',
             'navigation[N].label',
+            'pages.home.blocks.hero-main.props.eyebrow',
+            'pages.home.blocks.serum-promo.props.title',
+            'pages.home.blocks.serum-promo.props.body',
+            'pages.home.blocks.serum-promo.props.bullets[N]',
+            'pages.home.blocks.serum-promo.props.cta_label',
+            'pages.home.blocks.trust-features.props.title',
+            'pages.home.blocks.trust-features.props.body',
+            'pages.home.blocks.trust-features.props.items[N].title',
+            'pages.home.blocks.trust-features.props.items[N].body',
         ];
     }
 
@@ -83,6 +100,8 @@ class StorefrontPathEditor
             'pages.contact.email' => 'contact email',
             'pages.contact.phone' => 'contact phone',
             'pages.faq.title' => 'FAQ page title',
+            'home_testimonials_title' => 'testimonials heading',
+            'home_testimonials_intro' => 'testimonials intro',
             default => self::dynamicPathLabel($path),
         };
     }
@@ -117,6 +136,10 @@ class StorefrontPathEditor
             self::setAboutField($storefront, $field, $value);
 
             return true;
+        }
+
+        if (str_starts_with($path, 'pages.home.blocks.')) {
+            return self::applyHomeBlockPropField($storefront, $path, $value);
         }
 
         data_set($storefront, $path, $value);
@@ -413,6 +436,20 @@ class StorefrontPathEditor
                     }
                 }
             }
+
+            if ($path === 'home_testimonials' && array_is_list($value)) {
+                foreach ($value as $index => $item) {
+                    if (! is_array($item)) {
+                        continue;
+                    }
+
+                    foreach (['quote', 'author'] as $field) {
+                        if (isset($item[$field]) && is_string($item[$field]) && trim($item[$field]) !== '') {
+                            $flat["home_testimonials.{$index}.{$field}"] = trim($item[$field]);
+                        }
+                    }
+                }
+            }
         }
 
         return $flat;
@@ -532,6 +569,18 @@ class StorefrontPathEditor
             return "navigation link {$number}";
         }
 
+        if (preg_match('/^home_testimonials\.(\d+)\.quote$/', $path, $matches)) {
+            $number = ((int) $matches[1]) + 1;
+
+            return "testimonial {$number} quote";
+        }
+
+        if (preg_match('/^home_testimonials\.(\d+)\.author$/', $path, $matches)) {
+            $number = ((int) $matches[1]) + 1;
+
+            return "testimonial {$number} author";
+        }
+
         if (preg_match('/^pages\.home\.blocks\.([\w-]+)$/', $path, $matches)) {
             $labels = [
                 'hero-main' => 'homepage hero',
@@ -546,12 +595,89 @@ class StorefrontPathEditor
             return $labels[$matches[1]] ?? 'homepage section';
         }
 
-        if (preg_match('/^pages\.home\.blocks\.([\w-]+)\.props\.(title|body)$/', $path, $matches)) {
-            $field = $matches[2] === 'title' ? 'title' : 'copy';
+        if (preg_match('/^pages\.home\.blocks\.([\w-]+)\.props\.(.+)$/', $path, $matches)) {
+            $labels = [
+                'hero-main' => 'homepage hero',
+                'serum-promo' => 'serum promo',
+                'trust-features' => 'why choose us',
+            ];
+            $section = $labels[$matches[1]] ?? 'homepage section';
+            $prop = preg_replace('/\.\d+/', '', $matches[2]) ?? $matches[2];
 
-            return 'homepage section '.$field;
+            return match ($prop) {
+                'eyebrow' => "{$section} eyebrow",
+                'title' => "{$section} title",
+                'body' => "{$section} copy",
+                'cta_label' => "{$section} button",
+                'bullets' => "{$section} bullet",
+                'items.title', 'items.body' => "{$section} feature",
+                default => $section,
+            };
         }
 
         return str_replace('.', ' ', $path);
+    }
+
+    /**
+     * @param  array<string, mixed>  $storefront
+     */
+    private static function applyHomeBlockPropField(array &$storefront, string $path, string $value): bool
+    {
+        if (! preg_match('/^pages\.home\.blocks\.([\w-]+)\.props\.(.+)$/', $path, $matches)) {
+            return false;
+        }
+
+        [, $blockId, $propPath] = $matches;
+        $blockService = app(StorefrontBlockService::class);
+        $blocks = $blockService->resolvePageBlocks($storefront, 'home');
+        $index = collect($blocks)->search(fn (array $block): bool => ($block['id'] ?? '') === $blockId);
+
+        if ($index === false) {
+            return false;
+        }
+
+        $props = is_array($blocks[$index]['props'] ?? null) ? $blocks[$index]['props'] : [];
+        $blocks[$index]['props'] = self::setNestedBlockProp($props, $propPath, $value);
+        $blockService->persistPageBlocks($storefront, 'home', $blocks);
+
+        return true;
+    }
+
+    /**
+     * @param  array<string, mixed>  $props
+     * @return array<string, mixed>
+     */
+    private static function setNestedBlockProp(array $props, string $propPath, string $value): array
+    {
+        $parts = explode('.', $propPath);
+
+        if (count($parts) === 1) {
+            $props[$parts[0]] = $value;
+
+            return $props;
+        }
+
+        if ($parts[0] === 'items' && count($parts) === 3) {
+            $index = (int) $parts[1];
+            $field = $parts[2];
+            $items = is_array($props['items'] ?? null) ? $props['items'] : [];
+            $current = is_array($items[$index] ?? null) ? $items[$index] : [];
+            $current[$field] = $value;
+            $items[$index] = $current;
+            $props['items'] = $items;
+
+            return $props;
+        }
+
+        if ($parts[0] === 'bullets' && count($parts) === 2) {
+            $index = (int) $parts[1];
+            $bullets = is_array($props['bullets'] ?? null) ? $props['bullets'] : [];
+            $bullets[$index] = $value;
+            $props['bullets'] = $bullets;
+
+            return $props;
+        }
+
+        return $props;
     }
 }

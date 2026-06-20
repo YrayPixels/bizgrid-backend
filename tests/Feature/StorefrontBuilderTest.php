@@ -4,6 +4,8 @@ use App\Models\Merchant;
 use App\Models\Store;
 use App\Models\StorefrontBuilderSession;
 use App\Models\User;
+use App\Services\StorefrontBlockService;
+use App\Services\StorefrontPathEditor;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 
 uses(RefreshDatabase::class);
@@ -964,6 +966,57 @@ it('regenerates the FAQ section from builder chat', function () {
     expect($afterItems)->not->toBe($beforeItems);
 });
 
+it('serves catalog products in builder preview without persisting them in storefront json', function () {
+    mockStorefrontAiAgent(function ($mock) {
+        $mock->shouldReceive('synthesizeStorefront')
+            ->once()
+            ->andReturnUsing(fn ($store, array $baseStorefront) => $baseStorefront);
+    });
+
+    $user = User::factory()->create();
+    $merchant = Merchant::create([
+        'owner_user_id' => $user->id,
+        'business_name' => 'Glow Rituals',
+        'slug' => 'glow-rituals',
+        'contact_name' => $user->name,
+        'email' => $user->email,
+        'industry' => 'beauty_and_skincare',
+        'status' => 'pending',
+        'subscription_plan' => 'starter',
+        'subscription_status' => 'trialing',
+    ]);
+    $store = Store::create([
+        'merchant_id' => $merchant->id,
+        'name' => 'Glow Rituals',
+        'slug' => 'glow-rituals',
+        'status' => 'draft',
+        'primary_domain' => 'glow-rituals.example.test',
+        'description' => 'Organic skincare for busy professionals.',
+        'brand_color' => '#0E7C66',
+        'storefront_template_id' => 'cosmetics',
+    ]);
+
+    $session = StorefrontBuilderSession::create([
+        'user_id' => $user->id,
+        'store_id' => $store->id,
+        'status' => 'template_recommendation',
+        'business_profile' => glowRitualsProfile(),
+        'selected_template_id' => 'cosmetics',
+    ]);
+
+    $response = $this->actingAs($user, 'sanctum')
+        ->postJson("/api/storehause/storefront-builder/sessions/{$session->id}/generate");
+
+    $response->assertOk();
+
+    $store->refresh();
+    expect($store->storefront_content)->not->toHaveKey('products');
+
+    $previewProducts = $response->json('storefront.products');
+    expect($previewProducts)->toBeArray()->not->toBeEmpty();
+    expect($previewProducts[0])->toHaveKeys(['id', 'slug', 'name', 'price']);
+});
+
 it('accepts public contact form submissions', function () {
     $user = User::factory()->create();
     $merchant = Merchant::create([
@@ -1004,4 +1057,55 @@ it('accepts public contact form submissions', function () {
         'customer_name' => 'Ada Lovelace',
         'customer_email' => 'ada@example.com',
     ]);
+});
+
+test('path editor applies cosmetics homepage testimonials and block props', function () {
+    $blockService = app(StorefrontBlockService::class);
+    $storefront = [
+        'template' => ['id' => 'cosmetics'],
+        'hero' => ['headline' => 'Glow Rituals', 'subheadline' => 'Organic skincare', 'cta_label' => 'Shop'],
+        'about' => ['title' => 'Best Skin Cleanser', 'body' => 'Gentle daily care.'],
+        'seo' => ['title' => 'Glow Rituals', 'description' => 'Skincare'],
+        'value_props' => [
+            ['title' => '100%', 'body' => 'Organic'],
+            ['title' => 'Clinical', 'body' => 'Approved'],
+            ['title' => 'Herbal', 'body' => 'Products'],
+        ],
+        'pages' => [
+            'faq' => ['title' => 'FAQ', 'source' => 'ai_generated', 'items' => []],
+            'home' => ['blocks' => $blockService->resolvePageBlocks([
+                'template' => ['id' => 'cosmetics'],
+                'hero' => ['headline' => 'Glow Rituals', 'subheadline' => 'Organic skincare', 'cta_label' => 'Shop'],
+                'about' => ['title' => 'Best Skin Cleanser', 'body' => 'Gentle daily care.'],
+                'value_props' => [
+                    ['title' => '100%', 'body' => 'Organic'],
+                    ['title' => 'Clinical', 'body' => 'Approved'],
+                    ['title' => 'Herbal', 'body' => 'Products'],
+                ],
+                'pages' => ['faq' => ['title' => 'FAQ', 'source' => 'ai_generated', 'items' => []]],
+            ], 'home')],
+        ],
+    ];
+
+    $changed = StorefrontPathEditor::applyMany($storefront, [
+        'home_testimonials_title' => 'What customers say',
+        'home_testimonials.0.quote' => 'My skin feels softer every day.',
+        'pages.home.blocks.serum-promo.props.title' => 'Radiance Serums',
+        'pages.home.blocks.hero-main.props.eyebrow' => 'Nature-led skincare',
+    ]);
+
+    expect($changed)->toContain('home_testimonials_title')
+        ->and($changed)->toContain('home_testimonials.0.quote')
+        ->and($changed)->toContain('pages.home.blocks.serum-promo.props.title')
+        ->and($changed)->toContain('pages.home.blocks.hero-main.props.eyebrow')
+        ->and($storefront['home_testimonials_title'])->toBe('What customers say')
+        ->and($storefront['home_testimonials'][0]['quote'])->toBe('My skin feels softer every day.');
+
+    $serumBlock = collect($storefront['pages']['home']['blocks'] ?? [])
+        ->firstWhere('id', 'serum-promo');
+    expect($serumBlock['props']['title'] ?? null)->toBe('Radiance Serums');
+
+    $heroBlock = collect($storefront['pages']['home']['blocks'] ?? [])
+        ->firstWhere('id', 'hero-main');
+    expect($heroBlock['props']['eyebrow'] ?? null)->toBe('Nature-led skincare');
 });
