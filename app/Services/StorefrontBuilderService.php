@@ -870,7 +870,7 @@ class StorefrontBuilderService
 
     /**
      * @param  array<string, mixed>  $profile
-     * @return array{brand_color: string, label: string}|null
+     * @return array{brand_color: string, label: string, palette: array<string, string>}|null
      */
     public function resolveBrandColorFromMessage(string $message, array $profile = [], ?Store $store = null): ?array
     {
@@ -879,6 +879,9 @@ class StorefrontBuilderService
             'industry' => $profile['industry'] ?? $store?->merchant?->industry,
             'description' => $profile['description'] ?? $store?->description,
             'brand_color' => $profile['brand_color'] ?? $store?->brand_color,
+            'current_palette' => is_array($store?->storefront_content['palette'] ?? null)
+                ? $store->storefront_content['palette']
+                : null,
         ];
 
         if ($this->shouldResolveColorWithAi($message)) {
@@ -894,7 +897,8 @@ class StorefrontBuilderService
 
             return [
                 'brand_color' => $hardcoded,
-                'label' => $hint ? ucwords($hint) : 'Brand color',
+                'label' => $hint ? ucwords($hint) : 'Custom palette',
+                'palette' => $this->derivePaletteFromPrimary($hardcoded),
             ];
         }
 
@@ -1360,7 +1364,7 @@ class StorefrontBuilderService
      * @param  array<string, mixed>  $storefront
      * @return array{storefront: array<string, mixed>, changed_paths: list<string>}
      */
-    public function applyBrandColor(array $storefront, Store $store, string $brandColor): array
+    public function applyBrandColor(array $storefront, Store $store, string $brandColor, ?array $palette = null): array
     {
         $templateId = $storefront['template']['id'] ?? null;
         if (! is_string($templateId) || $templateId === '' || $templateId === 'ai_pick') {
@@ -1373,14 +1377,274 @@ class StorefrontBuilderService
             'id' => $templateId,
             'source' => $storefront['template']['source'] ?? 'merchant_selected',
         ];
-        $storefront['palette'] = $this->defaultStorefrontPalette((string) $templateId, $brandColor);
-        $store->brand_color = $brandColor;
+        $storefront['palette'] = $palette
+            ? $this->sanitizeThemePalette($palette, $brandColor)
+            : $this->derivePaletteFromPrimary($brandColor);
+        $store->brand_color = strtoupper($brandColor);
         $store->save();
 
         return [
             'storefront' => $storefront,
-            'changed_paths' => ['palette.primary'],
+            'changed_paths' => [
+                'palette.primary',
+                'palette.accent',
+                'palette.background',
+                'palette.surface',
+                'palette.text',
+                'palette.muted',
+                'palette.border',
+            ],
         ];
+    }
+
+    /**
+     * @param  array<string, mixed>|null  $partial
+     * @return array{primary: string, accent: string, background: string, surface: string, text: string, muted: string, border: string}
+     */
+    public function sanitizeThemePalette(?array $partial, string $fallbackPrimary): array
+    {
+        $derived = $this->derivePaletteFromPrimary($fallbackPrimary);
+        if (! is_array($partial)) {
+            return $derived;
+        }
+
+        $keys = ['primary', 'accent', 'background', 'surface', 'text', 'muted', 'border'];
+        foreach ($keys as $key) {
+            $value = $partial[$key] ?? null;
+            if (is_string($value) && preg_match('/^#[0-9A-Fa-f]{6}$/', trim($value)) === 1) {
+                $derived[$key] = strtoupper(trim($value));
+            }
+        }
+
+        if (isset($partial['primary']) && is_string($partial['primary']) && preg_match('/^#[0-9A-Fa-f]{6}$/', trim($partial['primary'])) === 1) {
+            $derived['primary'] = strtoupper(trim($partial['primary']));
+        } else {
+            $derived['primary'] = strtoupper($fallbackPrimary);
+        }
+
+        return $this->ensureReadablePalette($derived);
+    }
+
+    /**
+     * @param  array{primary: string, accent: string, background: string, surface: string, text: string, muted: string, border: string}  $palette
+     * @return array{primary: string, accent: string, background: string, surface: string, text: string, muted: string, border: string}
+     */
+    public function ensureReadablePalette(array $palette): array
+    {
+        $minBodyContrast = 4.5;
+        $minMutedContrast = 3.0;
+        $minButtonContrast = 4.5;
+        $white = '#FFFFFF';
+
+        [$bgH, $bgS, $bgL] = $this->hexToHsl($palette['background']);
+        if ($bgL < 85) {
+            $palette['background'] = $this->hslToHex($bgH, max(0, min(22, $bgS)), max(94, min(98, $bgL + 30)));
+        }
+
+        [$surfaceH, $surfaceS, $surfaceL] = $this->hexToHsl($palette['surface']);
+        if ($surfaceL < 85) {
+            $palette['surface'] = $this->hslToHex($surfaceH, max(0, min(12, $surfaceS)), max(96, min(99, $surfaceL + 30)));
+        }
+
+        $palette['text'] = $this->ensureForegroundContrast($palette['text'], $palette['background'], $minBodyContrast);
+        if ($this->contrastRatio($palette['text'], $palette['surface']) < $minBodyContrast) {
+            $palette['text'] = $this->ensureForegroundContrast($palette['text'], $palette['surface'], $minBodyContrast);
+        }
+
+        $palette['muted'] = $this->ensureForegroundContrast($palette['muted'], $palette['background'], $minMutedContrast);
+
+        if ($this->contrastRatio($white, $palette['primary']) < $minButtonContrast) {
+            $palette['primary'] = $this->adjustHslForContrast($palette['primary'], $white, $minButtonContrast, 'darker');
+        }
+
+        if ($this->contrastRatio($palette['border'], $palette['background']) < 1.15) {
+            [$h, $s, $l] = $this->hexToHsl($palette['border']);
+            $palette['border'] = $this->hslToHex($h, $s, max(72, min(88, $l - 10)));
+        }
+
+        return $palette;
+    }
+
+    private function channelLuminance(float $channel): float
+    {
+        $c = $channel / 255;
+        if ($c <= 0.03928) {
+            return $c / 12.92;
+        }
+
+        return (($c + 0.055) / 1.055) ** 2.4;
+    }
+
+    private function relativeLuminance(string $hex): float
+    {
+        $hex = ltrim($hex, '#');
+        $r = hexdec(substr($hex, 0, 2));
+        $g = hexdec(substr($hex, 2, 2));
+        $b = hexdec(substr($hex, 4, 2));
+
+        return 0.2126 * $this->channelLuminance((float) $r)
+            + 0.7152 * $this->channelLuminance((float) $g)
+            + 0.0722 * $this->channelLuminance((float) $b);
+    }
+
+    private function contrastRatio(string $foreground, string $background): float
+    {
+        $fg = $this->relativeLuminance($foreground);
+        $bg = $this->relativeLuminance($background);
+        $lighter = max($fg, $bg);
+        $darker = min($fg, $bg);
+
+        return ($lighter + 0.05) / ($darker + 0.05);
+    }
+
+    private function bestReadableFallback(string $against, float $minRatio): string
+    {
+        $dark = '#1A1A1A';
+        $light = '#FFFFFF';
+        $darkRatio = $this->contrastRatio($dark, $against);
+        $lightRatio = $this->contrastRatio($light, $against);
+
+        if ($darkRatio >= $minRatio) {
+            return $dark;
+        }
+        if ($lightRatio >= $minRatio) {
+            return $light;
+        }
+
+        return $darkRatio >= $lightRatio ? $dark : $light;
+    }
+
+    private function adjustHslForContrast(string $color, string $against, float $minRatio, string $direction): string
+    {
+        if ($this->contrastRatio($color, $against) >= $minRatio) {
+            return $color;
+        }
+
+        [$h, $s, $l] = $this->hexToHsl($color);
+        $step = $direction === 'darker' ? -1.0 : 1.0;
+
+        for ($lightness = $l; $lightness >= 0 && $lightness <= 100; $lightness += $step) {
+            $candidate = $this->hslToHex($h, $s, $lightness);
+            if ($this->contrastRatio($candidate, $against) >= $minRatio) {
+                return $candidate;
+            }
+            if ($lightness === 0.0 || $lightness === 100.0) {
+                break;
+            }
+        }
+
+        return $this->bestReadableFallback($against, $minRatio);
+    }
+
+    private function ensureForegroundContrast(string $foreground, string $background, float $minRatio): string
+    {
+        if ($this->contrastRatio($foreground, $background) >= $minRatio) {
+            return $foreground;
+        }
+
+        [, , $fgL] = $this->hexToHsl($foreground);
+        [, , $bgL] = $this->hexToHsl($background);
+        $direction = $bgL >= $fgL ? 'darker' : 'lighter';
+
+        return $this->adjustHslForContrast($foreground, $background, $minRatio, $direction);
+    }
+
+    /**
+     * @return array{primary: string, accent: string, background: string, surface: string, text: string, muted: string, border: string}
+     */
+    public function derivePaletteFromPrimary(string $primary): array
+    {
+        $normalized = strtoupper($primary);
+        if (preg_match('/^#[0-9A-Fa-f]{6}$/', $normalized) !== 1) {
+            $normalized = '#0E7C66';
+        }
+
+        [$h, $s, $l] = $this->hexToHsl($normalized);
+        $sat = max(18, min(72, $s));
+
+        return $this->ensureReadablePalette([
+            'primary' => $normalized,
+            'accent' => $this->hslToHex(fmod($h + 28, 360), max(20, min(55, $sat * 0.75)), max(52, min(78, $l + 18))),
+            'background' => $this->hslToHex($h, max(6, min(22, $sat * 0.18)), max(96, min(98, 96 + ($l < 40 ? 2 : 0)))),
+            'surface' => $this->hslToHex($h, max(2, min(12, $sat * 0.06)), 99),
+            'text' => $this->hslToHex($h, max(10, min(30, $sat * 0.35)), max(10, min(16, 12))),
+            'muted' => $this->hslToHex($h, max(12, min(35, $sat * 0.28)), max(38, min(54, 46))),
+            'border' => $this->hslToHex($h, max(8, min(28, $sat * 0.22)), max(82, min(90, 86))),
+        ]);
+    }
+
+    /**
+     * @return array{0: float, 1: float, 2: float}
+     */
+    private function hexToHsl(string $hex): array
+    {
+        $hex = ltrim($hex, '#');
+        $r = hexdec(substr($hex, 0, 2)) / 255;
+        $g = hexdec(substr($hex, 2, 2)) / 255;
+        $b = hexdec(substr($hex, 4, 2)) / 255;
+
+        $max = max($r, $g, $b);
+        $min = min($r, $g, $b);
+        $h = 0.0;
+        $s = 0.0;
+        $l = ($max + $min) / 2;
+
+        if ($max !== $min) {
+            $d = $max - $min;
+            $s = $l > 0.5 ? $d / (2 - $max - $min) : $d / ($max + $min);
+            if ($max === $r) {
+                $h = (($g - $b) / $d + ($g < $b ? 6 : 0)) / 6;
+            } elseif ($max === $g) {
+                $h = (($b - $r) / $d + 2) / 6;
+            } else {
+                $h = (($r - $g) / $d + 4) / 6;
+            }
+        }
+
+        return [$h * 360, $s * 100, $l * 100];
+    }
+
+    private function hslToHex(float $h, float $s, float $l): string
+    {
+        $h = fmod($h + 360, 360);
+        $s = max(0, min(100, $s)) / 100;
+        $l = max(0, min(100, $l)) / 100;
+
+        if ($s === 0.0) {
+            $gray = (int) round($l * 255);
+
+            return sprintf('#%02X%02X%02X', $gray, $gray, $gray);
+        }
+
+        $hue2rgb = static function (float $p, float $q, float $t): float {
+            if ($t < 0) {
+                $t += 1;
+            }
+            if ($t > 1) {
+                $t -= 1;
+            }
+            if ($t < 1 / 6) {
+                return $p + ($q - $p) * 6 * $t;
+            }
+            if ($t < 1 / 2) {
+                return $q;
+            }
+            if ($t < 2 / 3) {
+                return $p + ($q - $p) * (2 / 3 - $t) * 6;
+            }
+
+            return $p;
+        };
+
+        $q = $l < 0.5 ? $l * (1 + $s) : $l + $s - $l * $s;
+        $p = 2 * $l - $q;
+        $hk = $h / 360;
+
+        $r = (int) round($hue2rgb($p, $q, $hk + 1 / 3) * 255);
+        $g = (int) round($hue2rgb($p, $q, $hk) * 255);
+        $b = (int) round($hue2rgb($p, $q, $hk - 1 / 3) * 255);
+
+        return sprintf('#%02X%02X%02X', $r, $g, $b);
     }
 
     /**

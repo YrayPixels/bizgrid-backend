@@ -488,6 +488,7 @@ class StorefrontBuilderController extends Controller
             if ($resolved && $this->applyVisualBuilderUpdates($session, [
                 'brand_color' => $resolved['brand_color'],
                 'color_label' => $resolved['label'],
+                'palette' => $resolved['palette'] ?? null,
             ])) {
                 return;
             }
@@ -1075,7 +1076,12 @@ class StorefrontBuilderController extends Controller
         $payloadType = 'website_refined';
 
         if (! empty($data['brand_color'])) {
-            $result = $this->builderService->applyBrandColor($storefront, $store, $data['brand_color']);
+            $result = $this->builderService->applyBrandColor(
+                $storefront,
+                $store,
+                $data['brand_color'],
+                is_array($data['palette'] ?? null) ? $data['palette'] : null,
+            );
             $storefront = $result['storefront'];
             $changedPaths = array_merge($changedPaths, $result['changed_paths']);
             $profile = $session->business_profile ?? [];
@@ -1085,8 +1091,8 @@ class StorefrontBuilderController extends Controller
                 ? trim($data['color_label'])
                 : null;
             $summary = $label
-                ? "Done — I updated your brand color to {$label}. Check the preview on the right."
-                : 'Done — I updated your brand color. Check the preview on the right.';
+                ? "Done — I updated your color palette ({$label}). Check the preview on the right."
+                : 'Done — I updated your color palette. Check the preview on the right.';
             $payloadType = 'brand_color_applied';
         }
 

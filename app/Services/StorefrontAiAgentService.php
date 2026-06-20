@@ -65,23 +65,26 @@ class StorefrontAiAgentService
 
     /**
      * @param  array<string, mixed>  $context
-     * @return array{brand_color: string, label: string}|null
+     * @return array{brand_color: string, label: string, palette: array<string, string>}|null
      */
     public function resolveBrandColorFromMessage(string $message, array $context = [], bool $randomPick = false): ?array
     {
         $systemLines = [
-            'You choose website brand colors for small business storefronts.',
-            'Return ONLY valid JSON: {"brand_color": "#RRGGBB", "label": "short color name"}.',
-            'brand_color must be a six-digit hex code suitable as the primary brand/button color.',
-            'Pick a refined, on-brand shade — not neon unless the merchant asked for neon.',
-            'Interpret ANY color name or description the merchant gives: pink, chartreuse, salmon, midnight blue, etc.',
-            'You are not limited to a preset list — if they name a color, pick an appropriate hex for it.',
-            'Interpret descriptive requests naturally: soft lavender, earthy brown, metallic silver, warm sunset, muted sage.',
-            'Ensure enough contrast for white button text.',
+            'You choose cohesive website color palettes for small business storefronts.',
+            'Return ONLY valid JSON with keys:',
+            '- "label": short palette name',
+            '- "brand_color": "#RRGGBB" — same as palette.primary',
+            '- "palette": object with ALL keys primary, accent, background, surface, text, muted, border — each a six-digit hex',
+            'primary must reach at least 4.5:1 contrast against white (#FFFFFF) for button labels — avoid pale pastels unless darkened enough.',
+            'text must be dark (#111–#333) with at least 4.5:1 contrast on both background and surface.',
+            'background and surface must stay very light (#F5–#FFF); muted must be at least 3:1 on background — never light gray on off-white.',
+            'CRITICAL: Never pair similar-lightness text and backgrounds. Verify readability before returning.',
+            'The full palette must work together across a storefront page — not primary alone.',
+            'Interpret ANY color name or mood: pink, soft lavender, earthy brown, warm sunset, ocean blue, etc.',
         ];
 
         if ($randomPick) {
-            $systemLines[] = 'The merchant asked for a random or surprise color — pick a distinctive, attractive brand color that fits their industry and is DIFFERENT from current_brand_color if provided. Be creative.';
+            $systemLines[] = 'The merchant asked for a random or surprise palette — pick a distinctive scheme that fits their industry and differs from current_palette if provided.';
         }
 
         $result = $this->chatJson([
@@ -97,6 +100,7 @@ class StorefrontAiAgentService
                     'industry' => $context['industry'] ?? null,
                     'description' => $context['description'] ?? null,
                     'current_brand_color' => $context['brand_color'] ?? null,
+                    'current_palette' => $context['current_palette'] ?? null,
                     'wants_random_color' => $randomPick,
                 ]),
             ],
@@ -108,16 +112,31 @@ class StorefrontAiAgentService
 
         $brandColor = is_string($result['brand_color'] ?? null) ? trim($result['brand_color']) : '';
         if (preg_match('/^#[0-9A-Fa-f]{6}$/', $brandColor) !== 1) {
+            $palettePrimary = is_array($result['palette'] ?? null)
+                ? ($result['palette']['primary'] ?? null)
+                : null;
+            $brandColor = is_string($palettePrimary) ? trim($palettePrimary) : '';
+        }
+
+        if (preg_match('/^#[0-9A-Fa-f]{6}$/', $brandColor) !== 1) {
             return null;
         }
 
         $label = is_string($result['label'] ?? null) && trim($result['label']) !== ''
             ? trim($result['label'])
-            : ($randomPick ? 'Surprise color' : 'Custom color');
+            : ($randomPick ? 'Surprise palette' : 'Custom palette');
+
+        /** @var StorefrontBuilderService $builder */
+        $builder = app(StorefrontBuilderService::class);
+        $palette = $builder->sanitizeThemePalette(
+            is_array($result['palette'] ?? null) ? $result['palette'] : null,
+            strtoupper($brandColor),
+        );
 
         return [
             'brand_color' => strtoupper($brandColor),
             'label' => $label,
+            'palette' => $palette,
         ];
     }
 
@@ -156,6 +175,7 @@ class StorefrontAiAgentService
                     '- "brand_color": "#RRGGBB" — primary button/brand color with enough contrast for white text',
                     '- "color_label": string — short name for the primary color',
                     '- "palette": array of 3-4 objects {"color": "#RRGGBB", "label": "short name"} — harmonious palette including brand_color first',
+                    'Contrast rules (WCAG AA): text on background/surface at least 4.5:1; muted on background at least 3:1; primary vs white at least 4.5:1 for button labels.',
                     '- "industry": optional string — one of food_and_beverage, fashion_and_apparel, beauty_and_skincare, electronics, home_and_living, services, other',
                     '- "tone": optional array of tone words',
                     '- "merchant_summary": string — one short phrase describing the look in plain language WITHOUT the words template, theme, or layout',
