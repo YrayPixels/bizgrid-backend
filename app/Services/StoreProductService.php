@@ -10,6 +10,10 @@ class StoreProductService
 {
     public const LOW_STOCK_THRESHOLD = 10;
 
+    public function __construct(
+        private readonly StoreCategoryService $categoryService,
+    ) {}
+
     public function isInStock(StoreProduct $product): bool
     {
         return $product->stock_quantity === null || $product->stock_quantity > 0;
@@ -26,6 +30,7 @@ class StoreProductService
     {
         $query = StoreProduct::query()
             ->where('store_id', $store->id)
+            ->with('categoryRelation:id,name,slug')
             ->orderBy('sort_order')
             ->orderByDesc('created_at');
 
@@ -94,7 +99,7 @@ class StoreProductService
     public function createForStore(Store $store, array $data): StoreProduct
     {
         $product = StoreProduct::create([
-            ...$this->normalizedAttributes($data),
+            ...$this->normalizedAttributes($store, $data),
             'store_id' => $store->id,
             'id' => $this->resolveProductId($data['id'] ?? null),
         ]);
@@ -107,11 +112,11 @@ class StoreProductService
     /** @param array<string, mixed> $data */
     public function updateProduct(StoreProduct $product, array $data): StoreProduct
     {
-        $product->fill($this->normalizedAttributes($data));
+        $product->fill($this->normalizedAttributes($product->store, $data));
         $product->save();
         $this->syncCount($product->store);
 
-        return $product->fresh();
+        return $product->fresh(['categoryRelation']);
     }
 
     public function duplicateProduct(StoreProduct $product): StoreProduct
@@ -128,7 +133,7 @@ class StoreProductService
             'currency' => $product->currency,
             'image_url' => $product->image_url,
             'sku' => $product->sku,
-            'category' => $product->category,
+            'category_id' => $product->category_id,
             'stock_quantity' => $product->stock_quantity,
             'status' => 'draft',
             'variants' => $product->variants,
@@ -263,7 +268,8 @@ class StoreProductService
             'currency' => $product->currency,
             'image_url' => $product->image_url,
             'sku' => $product->sku,
-            'category' => $product->category,
+            'category' => $product->categoryRelation?->name ?? $product->category,
+            'category_id' => $product->category_id,
             'stock_quantity' => $product->stock_quantity,
             'status' => $product->status,
             'in_stock' => $this->isInStock($product),
@@ -287,7 +293,7 @@ class StoreProductService
         return StoreProduct::updateOrCreate(
             ['id' => $id],
             [
-                ...$this->normalizedAttributes($payload),
+                ...$this->normalizedAttributes($store, $payload),
                 'store_id' => $store->id,
                 'slug' => $slug,
                 'sort_order' => $sortOrder,
@@ -296,10 +302,13 @@ class StoreProductService
     }
 
     /** @param array<string, mixed> $data */
-    private function normalizedAttributes(array $data): array
+    private function normalizedAttributes(Store $store, array $data): array
     {
         $name = trim((string) ($data['name'] ?? ''));
         $slugInput = ! empty($data['slug']) ? Str::slug((string) $data['slug']) : Str::slug($name);
+        $categoryFields = $this->shouldResolveCategory($data)
+            ? $this->categoryService->resolveProductCategory($store, $data)
+            : [];
 
         return [
             'slug' => $slugInput !== '' ? $slugInput : 'product',
@@ -309,7 +318,7 @@ class StoreProductService
             'currency' => strtoupper((string) ($data['currency'] ?? 'NGN')),
             'image_url' => $data['image_url'] ?? null,
             'sku' => $data['sku'] ?? null,
-            'category' => $data['category'] ?? null,
+            ...$categoryFields,
             'stock_quantity' => array_key_exists('stock_quantity', $data) && $data['stock_quantity'] !== null
                 ? (int) $data['stock_quantity']
                 : null,
@@ -322,6 +331,12 @@ class StoreProductService
             'perks' => $data['perks'] ?? null,
             'sort_order' => isset($data['sort_order']) ? (int) $data['sort_order'] : 0,
         ];
+    }
+
+    /** @param array<string, mixed> $data */
+    private function shouldResolveCategory(array $data): bool
+    {
+        return array_key_exists('category_id', $data) || array_key_exists('category', $data);
     }
 
     private function uniqueSlug(Store $store, string $slug, string $ignoreId): string

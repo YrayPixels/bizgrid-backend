@@ -803,7 +803,7 @@ class StorefrontBuilderService
 
     public function isColorIntent(string $message): bool
     {
-        if ($this->isDesignChangeIntent($message)) {
+        if ($this->isDesignChangeIntent($message) || $this->isRebuildIntent($message)) {
             return false;
         }
 

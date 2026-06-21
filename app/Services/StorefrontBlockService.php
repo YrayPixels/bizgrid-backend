@@ -548,12 +548,55 @@ class StorefrontBlockService
     {
         $existing = data_get($storefront, 'pages.home.blocks');
         if (is_array($existing) && $existing !== []) {
-            return $existing;
+            return $this->ensureCategoryShowcaseBlock($existing, $storefront);
         }
 
         $templateId = (string) data_get($storefront, 'template.id', 'classic');
 
         return $this->buildDefaultHomeBlocks($storefront, $templateId);
+    }
+
+    /**
+     * @param  list<array<string, mixed>>  $blocks
+     * @param  array<string, mixed>  $storefront
+     * @return list<array<string, mixed>>
+     */
+    private function ensureCategoryShowcaseBlock(array $blocks, array $storefront): array
+    {
+        $templateId = (string) data_get($storefront, 'template.id', 'classic');
+        if (! in_array($templateId, ['fashion_lookbook', 'beauty'], true)) {
+            return $blocks;
+        }
+
+        foreach ($blocks as $block) {
+            if (($block['type'] ?? null) === 'category_showcase') {
+                return $blocks;
+            }
+        }
+
+        $categoryBlock = [
+            'id' => 'category-showcase',
+            'type' => 'category_showcase',
+            'props' => $this->defaultCategoryShowcaseProps($storefront),
+        ];
+
+        $trustIndex = collect($blocks)->search(fn (array $block): bool => ($block['id'] ?? null) === 'trust-features');
+        if (is_int($trustIndex)) {
+            array_splice($blocks, $trustIndex + 1, 0, [$categoryBlock]);
+
+            return $blocks;
+        }
+
+        $heroIndex = collect($blocks)->search(fn (array $block): bool => ($block['id'] ?? null) === 'hero-main');
+        if (is_int($heroIndex)) {
+            array_splice($blocks, $heroIndex + 1, 0, [$categoryBlock]);
+
+            return $blocks;
+        }
+
+        array_unshift($blocks, $categoryBlock);
+
+        return $blocks;
     }
 
     /**
@@ -580,7 +623,7 @@ class StorefrontBlockService
 
         $productTitle = $templateId === 'beauty' ? 'Shop the collection' : 'Featured products';
 
-        return [
+        $blocks = [
             [
                 'id' => 'hero-main',
                 'type' => 'hero',
@@ -602,20 +645,31 @@ class StorefrontBlockService
                     'items' => array_slice(is_array($storefront['value_props'] ?? null) ? $storefront['value_props'] : [], 0, 3),
                 ],
             ],
-            [
-                'id' => 'featured-products',
-                'type' => 'product_grid',
-                'props' => ['title' => $productTitle, 'limit' => $productLimit],
-            ],
-            [
-                'id' => 'home-faq',
-                'type' => 'faq',
-                'props' => [
-                    'title' => (string) data_get($storefront, 'pages.faq.title', 'Frequently asked questions'),
-                    'items' => is_array(data_get($storefront, 'pages.faq.items')) ? data_get($storefront, 'pages.faq.items') : [],
-                ],
+        ];
+
+        if (in_array($templateId, ['fashion_lookbook', 'beauty'], true)) {
+            $blocks[] = [
+                'id' => 'category-showcase',
+                'type' => 'category_showcase',
+                'props' => $this->defaultHomeBlockProps($storefront, 'category_showcase'),
+            ];
+        }
+
+        $blocks[] = [
+            'id' => 'featured-products',
+            'type' => 'product_grid',
+            'props' => ['title' => $productTitle, 'limit' => $productLimit],
+        ];
+        $blocks[] = [
+            'id' => 'home-faq',
+            'type' => 'faq',
+            'props' => [
+                'title' => (string) data_get($storefront, 'pages.faq.title', 'Frequently asked questions'),
+                'items' => is_array(data_get($storefront, 'pages.faq.items')) ? data_get($storefront, 'pages.faq.items') : [],
             ],
         ];
+
+        return $blocks;
     }
 
     /**
@@ -891,6 +945,7 @@ class StorefrontBlockService
             'cta_banner',
             'feature_grid',
             'product_grid',
+            'category_showcase',
             'faq',
         ], true);
     }
@@ -920,6 +975,7 @@ class StorefrontBlockService
             'cta_banner' => 'promo-banner',
             'feature_grid' => 'feature-grid',
             'product_grid' => 'featured-products',
+            'category_showcase' => 'category-showcase',
             'faq' => 'home-faq',
             default => str_replace('_', '-', $type),
         };
@@ -994,12 +1050,59 @@ class StorefrontBlockService
                 'title' => 'Shop the line',
                 'limit' => 4,
             ],
+            'category_showcase' => $this->defaultCategoryShowcaseProps($storefront),
             'faq' => [
                 'title' => (string) data_get($storefront, 'pages.faq.title', 'Frequently asked questions'),
                 'items' => array_slice(is_array(data_get($storefront, 'pages.faq.items')) ? data_get($storefront, 'pages.faq.items') : [], 0, 4),
             ],
             default => [],
         };
+    }
+
+    /**
+     * @param  array<string, mixed>  $storefront
+     * @return array<string, mixed>
+     */
+    private function defaultCategoryShowcaseProps(array $storefront): array
+    {
+        $templateId = (string) data_get($storefront, 'template.id', 'classic');
+
+        if ($templateId === 'beauty') {
+            return [
+                'title' => 'Choose your style',
+                'layout' => 'style_tiles',
+                'items' => [
+                    ['label' => 'Wefted hair & closures', 'image_url' => 'https://images.unsplash.com/photo-1499952127939-9bbf5af6c51c?auto=format&fit=crop&w=900&q=88'],
+                    ['label' => 'Kinky curl', 'image_url' => 'https://images.unsplash.com/photo-1524504388940-b1c1722653e1?auto=format&fit=crop&w=900&q=88'],
+                    ['label' => 'Blowout volume', 'image_url' => 'https://images.unsplash.com/photo-1531123897727-8f129e1688ce?auto=format&fit=crop&w=900&q=88'],
+                    ['label' => 'Sleek ponytails', 'image_url' => 'https://images.unsplash.com/photo-1517841905240-472988babdf9?auto=format&fit=crop&w=900&q=88'],
+                ],
+            ];
+        }
+
+        if (in_array($templateId, ['minimalistic', 'classic'], true)) {
+            return [
+                'title' => 'Shop by category',
+                'layout' => 'compact_grid',
+                'items' => [
+                    ['label' => 'Hoodies', 'image_url' => 'https://images.unsplash.com/photo-1620799140408-edc6dcb6d633?auto=format&fit=crop&w=900&q=85'],
+                    ['label' => 'Sweatshirts', 'image_url' => 'https://images.unsplash.com/photo-1515886657613-9f3515b0c78f?auto=format&fit=crop&w=900&q=85'],
+                    ['label' => 'T-Shirts', 'image_url' => 'https://images.unsplash.com/photo-1503341504253-dff4815485f1?auto=format&fit=crop&w=900&q=85'],
+                ],
+            ];
+        }
+
+        return [
+            'title' => 'Shop the Essentials',
+            'eyebrow' => 'Minimal. Comfortable. Timeless.',
+            'layout' => 'editorial_grid',
+            'items' => [
+                ['label' => 'Hoodies', 'image_url' => 'https://images.unsplash.com/photo-1620799140408-edc6dcb6d633?auto=format&fit=crop&w=900&q=85'],
+                ['label' => 'Sweatshirts', 'image_url' => 'https://images.unsplash.com/photo-1515886657613-9f3515b0c78f?auto=format&fit=crop&w=900&q=85'],
+                ['label' => 'T-Shirts', 'image_url' => 'https://images.unsplash.com/photo-1503341504253-dff4815485f1?auto=format&fit=crop&w=900&q=85'],
+                ['label' => 'Everyday Basics', 'image_url' => 'https://images.unsplash.com/photo-1487222477894-8943e31ef7b2?auto=format&fit=crop&w=900&q=85'],
+            ],
+        ];
     }
 
     /**
@@ -1092,6 +1195,10 @@ class StorefrontBlockService
             return 'product_grid';
         }
 
+        if (preg_match('/\b(categor(y|ies)|essentials|shop by|style tiles?|choose your style|shop the essentials)\b/u', $lower) === 1) {
+            return 'category_showcase';
+        }
+
         if (preg_match('/\bfaq\b|\bquestions\b/u', $lower) === 1) {
             return 'faq';
         }
@@ -1118,6 +1225,12 @@ class StorefrontBlockService
             $block = collect($blocks)->firstWhere('type', 'product_grid');
 
             return is_array($block) ? (string) ($block['id'] ?? 'featured-products') : 'featured-products';
+        }
+
+        if (preg_match('/\b(categor(y|ies)|essentials|style tiles?)\b/u', $lower) === 1) {
+            $block = collect($blocks)->firstWhere('type', 'category_showcase');
+
+            return is_array($block) ? (string) ($block['id'] ?? 'category-showcase') : 'category-showcase';
         }
 
         if (preg_match('/\bfaq\b|\bquestions\b/u', $lower) === 1) {
@@ -1150,6 +1263,7 @@ class StorefrontBlockService
             'cta_banner' => 'promo banner',
             'feature_grid' => 'trust highlights',
             'product_grid' => 'product section',
+            'category_showcase' => 'category showcase',
             'faq' => 'FAQ section',
             default => 'homepage section',
         };

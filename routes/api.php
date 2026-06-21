@@ -3,6 +3,7 @@
 use App\Http\Controllers\AdminController;
 use App\Http\Controllers\AdminMerchantController;
 use App\Http\Controllers\AdminStorefrontTemplateController;
+use App\Http\Controllers\StoreCategoryController;
 use App\Http\Controllers\StoreProductController;
 use App\Http\Controllers\StorefrontBuilderController;
 use App\Http\Controllers\StorefrontTemplateController;
@@ -74,6 +75,11 @@ Route::prefix('storehause')->group(function () {
         Route::post('/products/{productId}/duplicate', [StoreProductController::class, 'duplicate']);
         Route::patch('/products/{productId}', [StoreProductController::class, 'update']);
         Route::delete('/products/{productId}', [StoreProductController::class, 'destroy']);
+
+        Route::get('/categories', [StoreCategoryController::class, 'index']);
+        Route::post('/categories', [StoreCategoryController::class, 'store']);
+        Route::patch('/categories/{categoryId}', [StoreCategoryController::class, 'update']);
+        Route::delete('/categories/{categoryId}', [StoreCategoryController::class, 'destroy']);
 
         Route::prefix('storefront-builder')->group(function () {
             Route::post('/sessions', [StorefrontBuilderController::class, 'startSession']);

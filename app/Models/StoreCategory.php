@@ -6,8 +6,9 @@ use Illuminate\Database\Eloquent\Concerns\HasUuids;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 
-class StoreProduct extends Model
+class StoreCategory extends Model
 {
     use HasFactory;
     use HasUuids;
@@ -18,29 +19,15 @@ class StoreProduct extends Model
 
     protected $fillable = [
         'store_id',
-        'slug',
+        'parent_id',
         'name',
-        'description',
-        'price',
-        'currency',
-        'image_url',
-        'sku',
-        'category',
-        'category_id',
-        'stock_quantity',
-        'status',
-        'variants',
-        'perks',
+        'slug',
         'sort_order',
     ];
 
     protected function casts(): array
     {
         return [
-            'price' => 'decimal:2',
-            'stock_quantity' => 'integer',
-            'variants' => 'array',
-            'perks' => 'array',
             'sort_order' => 'integer',
         ];
     }
@@ -50,8 +37,18 @@ class StoreProduct extends Model
         return $this->belongsTo(Store::class);
     }
 
-    public function categoryRelation(): BelongsTo
+    public function parent(): BelongsTo
     {
-        return $this->belongsTo(StoreCategory::class, 'category_id');
+        return $this->belongsTo(self::class, 'parent_id');
+    }
+
+    public function children(): HasMany
+    {
+        return $this->hasMany(self::class, 'parent_id')->orderBy('sort_order')->orderBy('name');
+    }
+
+    public function products(): HasMany
+    {
+        return $this->hasMany(StoreProduct::class, 'category_id');
     }
 }

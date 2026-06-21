@@ -10,6 +10,7 @@ use App\Models\StoreProduct;
 use App\Models\StorefrontTemplate;
 use App\Models\StoreVisit;
 use App\Models\User;
+use App\Services\StoreCategoryService;
 use App\Services\StorefrontBuilderService;
 use App\Services\StorefrontPublishService;
 use App\Services\StoreProductService;
@@ -27,6 +28,7 @@ class StorehauseController extends Controller
     public function __construct(
         private readonly StorefrontBuilderService $builderService,
         private readonly StoreProductService $productService,
+        private readonly StoreCategoryService $categoryService,
         private readonly StorefrontPublishService $publishService,
     ) {}
 
@@ -877,6 +879,7 @@ class StorehauseController extends Controller
         return [
             'store' => $this->formatStore($store),
             'storefront' => $this->productService->mergeIntoStorefront($storefront, $store, activeOnly: true),
+            'categories' => $this->categoryService->listForStore($store),
             'generation_id' => $store->storefront_generation_id,
         ];
     }
@@ -889,6 +892,7 @@ class StorehauseController extends Controller
         return [
             'store' => $this->formatStore($store),
             'storefront' => $this->productService->mergeIntoStorefront($storefront, $store, activeOnly: true),
+            'categories' => $this->categoryService->listForStore($store),
             'generation_id' => $store->storefront_generation_id,
         ];
     }

@@ -127,6 +127,36 @@ it('merges products into public storefront responses', function () {
         ->assertJsonPath('storefront.data_plugs.home_products_source', 'merchant_products');
 });
 
+it('includes store categories on the public storefront payload', function () {
+    $user = User::factory()->create();
+    $store = createMerchantStore($user);
+
+    $category = \App\Models\StoreCategory::create([
+        'id' => (string) Str::uuid(),
+        'store_id' => $store->id,
+        'name' => 'Serums',
+        'slug' => 'serums',
+    ]);
+
+    StoreProduct::create([
+        'id' => (string) Str::uuid(),
+        'store_id' => $store->id,
+        'category_id' => $category->id,
+        'category' => 'Serums',
+        'slug' => 'glow-serum',
+        'name' => 'Glow Serum',
+        'description' => 'Daily serum.',
+        'price' => 12000,
+        'currency' => 'NGN',
+        'status' => 'active',
+    ]);
+
+    $this->getJson('/api/storehause/public/storefronts/glow-rituals')
+        ->assertOk()
+        ->assertJsonPath('categories.0.name', 'Serums')
+        ->assertJsonPath('storefront.products.0.category_id', $category->id);
+});
+
 it('updates storefront content without overwriting products', function () {
     $user = User::factory()->create();
     $store = createMerchantStore($user);

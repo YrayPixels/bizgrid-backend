@@ -80,6 +80,12 @@ class StorefrontPathEditor
             'pages.home.blocks.trust-features.props.body',
             'pages.home.blocks.trust-features.props.items[N].title',
             'pages.home.blocks.trust-features.props.items[N].body',
+            'pages.home.blocks.category-showcase.props.title',
+            'pages.home.blocks.category-showcase.props.eyebrow',
+            'pages.home.blocks.category-showcase.props.items[N].label',
+            'pages.home.blocks.category-showcase.props.items[N].image_url',
+            'pages.home.blocks.category-showcase.props.items[N].category_id',
+            'pages.home.blocks.category-showcase.props.items[N].cta_label',
         ];
     }
 

@@ -334,7 +334,7 @@ it('rebuilds the draft when the merchant asks to build for cosmetics', function 
         ->where('role', 'assistant')
         ->last();
 
-    expect($lastAssistant['content'])->toContain('rebuilt');
+    expect($lastAssistant['content'])->toContain('refreshed');
 });
 
 it('guides merchants to the products page when they want to add a product', function () {

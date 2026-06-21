@@ -108,6 +108,7 @@ class StoreProductController extends Controller
             'image_url' => 'nullable|string|max:2000000',
             'sku' => 'nullable|string|max:120',
             'category' => 'nullable|string|max:120',
+            'category_id' => 'nullable|uuid',
             'stock_quantity' => 'nullable|integer|min:0',
             'status' => 'nullable|string|in:active,draft,archived',
             'variants' => 'nullable|array',
