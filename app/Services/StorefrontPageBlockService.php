@@ -58,7 +58,10 @@ class StorefrontPageBlockService
     public function tryRegenerateSectionFormatted(array $storefront, string $instruction, ?Store $store = null): ?array
     {
         $lower = strtolower($instruction);
-        if (preg_match('/\b(redesign|regenerate|refresh|rewrite|fix)\b/u', $lower) !== 1) {
+        $sectionRefresh = preg_match('/\b(redesign|regenerate|refresh|rewrite|fix)\b/u', $lower) === 1
+            || (preg_match('/\b(essentials|essentials page|shop the essentials|category showcase|categories section|category grid|shop by category)\b/u', $lower) === 1
+                && preg_match('/\b(update|refined|change|copy|images?|photos?|labels?|titles?|theme)\b/u', $lower) === 1);
+        if (! $sectionRefresh) {
             return null;
         }
 
