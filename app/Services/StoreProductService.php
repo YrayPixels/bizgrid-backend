@@ -8,6 +8,19 @@ use Illuminate\Support\Str;
 
 class StoreProductService
 {
+    public const LOW_STOCK_THRESHOLD = 10;
+
+    public function isInStock(StoreProduct $product): bool
+    {
+        return $product->stock_quantity === null || $product->stock_quantity > 0;
+    }
+
+    public function isLowStock(StoreProduct $product): bool
+    {
+        return $product->stock_quantity !== null
+            && $product->stock_quantity > 0
+            && $product->stock_quantity <= self::LOW_STOCK_THRESHOLD;
+    }
     /** @return list<array<string, mixed>> */
     public function listForStore(Store $store, bool $activeOnly = false): array
     {
@@ -101,25 +114,141 @@ class StoreProductService
         return $product->fresh();
     }
 
-    /** @param list<array<string, mixed>> $items */
-    public function importForStore(Store $store, array $items): int
+    public function duplicateProduct(StoreProduct $product): StoreProduct
     {
-        $created = 0;
+        $store = $product->store;
+        $copyName = trim($product->name).' (Copy)';
+        $baseSlug = Str::slug($copyName) ?: 'product-copy';
+
+        return $this->createForStore($store, [
+            'name' => $copyName,
+            'slug' => $this->uniqueSlug($store, $baseSlug, ''),
+            'description' => $product->description,
+            'price' => (float) $product->price,
+            'currency' => $product->currency,
+            'image_url' => $product->image_url,
+            'sku' => $product->sku,
+            'category' => $product->category,
+            'stock_quantity' => $product->stock_quantity,
+            'status' => 'draft',
+            'variants' => $product->variants,
+            'perks' => $product->perks,
+        ]);
+    }
+
+    public function decrementStockForOrderItems(array $items): void
+    {
+        foreach ($items as $line) {
+            if (! is_array($line)) {
+                continue;
+            }
+
+            $product = StoreProduct::query()->find($line['product_id'] ?? null);
+            if (! $product || $product->stock_quantity === null) {
+                continue;
+            }
+
+            $product->stock_quantity = max(0, $product->stock_quantity - (int) ($line['quantity'] ?? 0));
+            $product->save();
+        }
+    }
+
+    /** @param list<array<string, mixed>> $items
+     * @return array{imported: int, failed: int, errors: list<array{row: int, field: string|null, message: string}>}
+     */
+    public function importForStore(Store $store, array $items): array
+    {
+        $imported = 0;
+        $failed = 0;
+        $errors = [];
         $sortOrder = (int) StoreProduct::where('store_id', $store->id)->max('sort_order');
 
-        foreach ($items as $payload) {
-            if (! is_array($payload) || empty($payload['name'])) {
+        foreach ($items as $index => $payload) {
+            $row = $index + 1;
+
+            if (! is_array($payload)) {
+                $failed++;
+                $errors[] = [
+                    'row' => $row,
+                    'field' => null,
+                    'message' => 'Each import row must be an object.',
+                ];
+
+                continue;
+            }
+
+            $rowErrors = $this->validateImportRow($payload);
+            if ($rowErrors !== []) {
+                $failed++;
+                foreach ($rowErrors as $error) {
+                    $errors[] = [
+                        'row' => $row,
+                        'field' => $error['field'],
+                        'message' => $error['message'],
+                    ];
+                }
+
                 continue;
             }
 
             $sortOrder++;
             $this->upsertFromPayload($store, $payload, $sortOrder);
-            $created++;
+            $imported++;
         }
 
-        $this->syncCount($store);
+        if ($imported > 0) {
+            $this->syncCount($store);
+        }
 
-        return $created;
+        return [
+            'imported' => $imported,
+            'failed' => $failed,
+            'errors' => $errors,
+        ];
+    }
+
+    /**
+     * @param  array<string, mixed>  $payload
+     * @return list<array{field: string|null, message: string}>
+     */
+    public function validateImportRow(array $payload): array
+    {
+        $errors = [];
+        $name = trim((string) ($payload['name'] ?? ''));
+
+        if ($name === '') {
+            $errors[] = ['field' => 'name', 'message' => 'Product name is required.'];
+        } elseif (strlen($name) > 180) {
+            $errors[] = ['field' => 'name', 'message' => 'Product name must be 180 characters or fewer.'];
+        }
+
+        if (array_key_exists('price', $payload) && $payload['price'] !== null && $payload['price'] !== '') {
+            if (! is_numeric($payload['price']) || (float) $payload['price'] < 0) {
+                $errors[] = ['field' => 'price', 'message' => 'Price must be a number greater than or equal to 0.'];
+            }
+        }
+
+        if (array_key_exists('stock_quantity', $payload) && $payload['stock_quantity'] !== null && $payload['stock_quantity'] !== '') {
+            if (! is_numeric($payload['stock_quantity']) || (int) $payload['stock_quantity'] < 0) {
+                $errors[] = ['field' => 'stock_quantity', 'message' => 'Stock quantity must be a whole number of 0 or more.'];
+            }
+        }
+
+        if (array_key_exists('status', $payload) && $payload['status'] !== null && $payload['status'] !== '') {
+            $status = strtolower((string) $payload['status']);
+            if (! in_array($status, ['active', 'draft', 'archived'], true)) {
+                $errors[] = ['field' => 'status', 'message' => 'Status must be active, draft, or archived.'];
+            }
+        }
+
+        if (array_key_exists('currency', $payload) && $payload['currency'] !== null && $payload['currency'] !== '') {
+            $currency = strtoupper(trim((string) $payload['currency']));
+            if (strlen($currency) > 10) {
+                $errors[] = ['field' => 'currency', 'message' => 'Currency code is too long.'];
+            }
+        }
+
+        return $errors;
     }
 
     /** @return array<string, mixed> */
@@ -137,6 +266,8 @@ class StoreProductService
             'category' => $product->category,
             'stock_quantity' => $product->stock_quantity,
             'status' => $product->status,
+            'in_stock' => $this->isInStock($product),
+            'low_stock' => $this->isLowStock($product),
             'variants' => $product->variants,
             'perks' => $product->perks,
         ];
@@ -182,7 +313,11 @@ class StoreProductService
             'stock_quantity' => array_key_exists('stock_quantity', $data) && $data['stock_quantity'] !== null
                 ? (int) $data['stock_quantity']
                 : null,
-            'status' => ($data['status'] ?? 'active') === 'draft' ? 'draft' : 'active',
+            'status' => match ($data['status'] ?? 'active') {
+                'draft' => 'draft',
+                'archived' => 'archived',
+                default => 'active',
+            },
             'variants' => $data['variants'] ?? null,
             'perks' => $data['perks'] ?? null,
             'sort_order' => isset($data['sort_order']) ? (int) $data['sort_order'] : 0,

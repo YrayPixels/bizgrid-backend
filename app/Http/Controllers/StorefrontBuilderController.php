@@ -10,6 +10,7 @@ use App\Models\StorefrontBuilderSession;
 use App\Models\StorefrontTemplate;
 use App\Models\User;
 use App\Services\StorefrontBuilderService;
+use App\Services\StorefrontPublishService;
 use App\Services\StoreProductService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -21,6 +22,7 @@ class StorefrontBuilderController extends Controller
     public function __construct(
         private readonly StorefrontBuilderService $builderService,
         private readonly StoreProductService $productService,
+        private readonly StorefrontPublishService $publishService,
     ) {}
 
     public function startSession(Request $request): JsonResponse
@@ -204,7 +206,7 @@ class StorefrontBuilderController extends Controller
 
         $generationId = (string) Str::uuid();
         $storefront = $this->productService->extractEmbeddedProducts($store, $storefront);
-        $store->storefront_content = $storefront;
+        $this->publishService->assignDraft($store, $storefront);
         $store->storefront_generation_id = $generationId;
         $store->save();
 
@@ -258,7 +260,7 @@ class StorefrontBuilderController extends Controller
         } else {
             try {
                 $baseStorefront = $session->storefront_snapshot
-                    ?? $store->storefront_content
+                    ?? $this->publishService->resolveDraft($store)
                     ?? $this->builderService->synthesizeStorefront($store->load('merchant'));
                 $result = $this->builderService->applyChatEdit($baseStorefront, $data['instruction'], $store);
                 $storefront = $result['storefront'];
@@ -270,7 +272,7 @@ class StorefrontBuilderController extends Controller
         }
 
         unset($storefront['products']);
-        $store->storefront_content = $storefront;
+        $this->publishService->assignDraft($store, $storefront);
         $store->save();
 
         $session->storefront_snapshot = $storefront;
@@ -354,8 +356,8 @@ class StorefrontBuilderController extends Controller
             }
 
             $session->storefront_snapshot = $storefront;
-            $session->store->storefront_content = $storefront;
             $session->store->storefront_generation_id = $generationId;
+            $this->publishService->assignDraft($session->store, $storefront);
             $session->store->save();
             $session->status = 'content_generated';
         }
@@ -400,16 +402,18 @@ class StorefrontBuilderController extends Controller
             'selected_template_id' => $store?->storefront_template_id !== 'ai_pick'
                 ? $store?->storefront_template_id
                 : null,
-            'storefront_snapshot' => $store?->storefront_content,
+            'storefront_snapshot' => $store ? $this->publishService->resolveDraft($store) : null,
         ]);
     }
 
     private function processUserMessage(StorefrontBuilderSession $session, string $message): void
     {
+        $context = $this->sessionContext($session, $message);
+
         if (! $this->builderService->isSubstantiveMessage($message)) {
             $this->appendAssistantMessage(
                 $session,
-                $this->builderService->conversationalReply($this->sessionContext($session), $message),
+                $this->builderService->conversationalReply($context, $message),
                 ['type' => 'conversation'],
             );
 
@@ -419,6 +423,7 @@ class StorefrontBuilderController extends Controller
         $profile = $this->builderService->extractBusinessProfileFromMessage(
             $message,
             $session->business_profile ?? [],
+            $context['recent_messages'] ?? [],
         );
         $session->business_profile = $profile;
         $session->last_intent = $message;
@@ -579,7 +584,7 @@ class StorefrontBuilderController extends Controller
         if ($hasDraft) {
             $this->appendAssistantMessage(
                 $session,
-                $this->builderService->conversationalReply($this->sessionContext($session), $message),
+                $this->builderService->conversationalReply($context, $message),
                 ['type' => 'conversation'],
             );
 
@@ -623,7 +628,7 @@ class StorefrontBuilderController extends Controller
         try {
             $agentTurn = $this->builderService->planBuilderTurn(
                 $message,
-                $this->sessionContext($session),
+                $context,
                 $profile,
                 $recommendations,
             );
@@ -803,7 +808,7 @@ class StorefrontBuilderController extends Controller
         $storefront = $this->productService->extractEmbeddedProducts($store, $storefront);
         $generationId = (string) Str::uuid();
 
-        $store->storefront_content = $storefront;
+        $this->publishService->assignDraft($store, $storefront);
         $store->storefront_generation_id = $generationId;
         $store->save();
 
@@ -953,7 +958,7 @@ class StorefrontBuilderController extends Controller
         }
 
         $baseStorefront = $session->storefront_snapshot
-            ?? $store->storefront_content
+            ?? $this->publishService->resolveDraft($store)
             ?? $this->builderService->synthesizeStorefront($store->load('merchant'));
         $result = $this->builderService->applyChatEdit($baseStorefront, $instruction, $session->store);
         $storefront = $result['storefront'];
@@ -961,7 +966,7 @@ class StorefrontBuilderController extends Controller
         $summary = $result['assistant_message'] ?? $this->builderService->describeStorefrontEdit($changedPaths);
 
         unset($storefront['products']);
-        $store->storefront_content = $storefront;
+        $this->publishService->assignDraft($store, $storefront);
         $store->save();
 
         $session->storefront_snapshot = $storefront;
@@ -1039,7 +1044,7 @@ class StorefrontBuilderController extends Controller
         }
 
         $baseStorefront = $session->storefront_snapshot
-            ?? $store->storefront_content
+            ?? $this->publishService->resolveDraft($store)
             ?? null;
 
         if (! is_array($baseStorefront)) {
@@ -1116,7 +1121,7 @@ class StorefrontBuilderController extends Controller
         }
 
         unset($storefront['products']);
-        $store->storefront_content = $storefront;
+        $this->publishService->assignDraft($store, $storefront);
         $store->save();
 
         $session->storefront_snapshot = $storefront;
@@ -1139,7 +1144,7 @@ class StorefrontBuilderController extends Controller
     /**
      * @return array<string, mixed>
      */
-    private function sessionContext(StorefrontBuilderSession $session): array
+    private function sessionContext(StorefrontBuilderSession $session, ?string $currentMessage = null): array
     {
         $profile = $session->business_profile ?? [];
 
@@ -1151,6 +1156,8 @@ class StorefrontBuilderController extends Controller
             'has_store' => (bool) $session->store_id,
             'selected_template_id' => $session->selected_template_id,
             'has_storefront_draft' => ! empty($session->storefront_snapshot),
+            'last_intent' => $session->last_intent,
+            'recent_messages' => $this->builderService->recentConversationHistory($session, $currentMessage),
         ];
     }
 
@@ -1229,10 +1236,13 @@ class StorefrontBuilderController extends Controller
             'description' => $store->description ?? '',
             'brand_color' => $store->brand_color ?? '#0E7C66',
             'logo_url' => $store->logo_url,
+            'contact_email' => $store->contact_email ?? $store->merchant?->email,
+            'contact_phone' => $store->contact_phone,
             'storefront_template_id' => $store->storefront_template_id ?? 'ai_pick',
             'subdomain' => $store->slug,
             'subdomain_host' => $subdomainHost,
             'primary_domain' => $store->primary_domain ?? $subdomainHost,
+            ...$this->publishService->publishMeta($store),
         ];
     }
 

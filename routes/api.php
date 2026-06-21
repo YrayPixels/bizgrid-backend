@@ -57,11 +57,13 @@ Route::prefix('storehause')->group(function () {
         Route::post('/auth/logout', [StorehauseController::class, 'logout']);
         Route::get('/dashboard', [StorehauseController::class, 'dashboard']);
         Route::get('/orders', [StorehauseController::class, 'myOrders']);
+        Route::get('/orders/{orderId}', [StorehauseController::class, 'myOrder']);
         Route::patch('/orders/{orderId}/status', [StorehauseController::class, 'updateMyOrderStatus']);
         Route::post('/stores', [StorehauseController::class, 'createStore']);
         Route::get('/stores/me', [StorehauseController::class, 'myStore']);
         Route::patch('/stores/me', [StorehauseController::class, 'updateMyStore']);
         Route::post('/stores/{storeId}/images', [StorehauseController::class, 'uploadStorefrontImage']);
+        Route::post('/stores/{storeId}/publish', [StorehauseController::class, 'publishStorefront']);
         Route::post('/ai/storefront/generate', [StorehauseController::class, 'generateStorefront']);
         Route::get('/ai/storefront/{storeId}', [StorehauseController::class, 'getStorefront']);
         Route::patch('/ai/storefront/{storeId}', [StorehauseController::class, 'updateStorefront']);
@@ -69,6 +71,7 @@ Route::prefix('storehause')->group(function () {
         Route::get('/products', [StoreProductController::class, 'index']);
         Route::post('/products', [StoreProductController::class, 'store']);
         Route::post('/products/import', [StoreProductController::class, 'import']);
+        Route::post('/products/{productId}/duplicate', [StoreProductController::class, 'duplicate']);
         Route::patch('/products/{productId}', [StoreProductController::class, 'update']);
         Route::delete('/products/{productId}', [StoreProductController::class, 'destroy']);
 

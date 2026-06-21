@@ -71,7 +71,7 @@ function builderSessionWithDraft(App\Models\User $user, App\Models\Store $store,
 {
     $builderService = app(App\Services\StorefrontBuilderService::class);
     $storefront = $builderService->synthesizeStorefront($store->fresh('merchant'));
-    $store->storefront_content = $storefront;
+    $store->draft_json = $storefront;
     $store->save();
 
     return App\Models\StorefrontBuilderSession::create(array_merge([

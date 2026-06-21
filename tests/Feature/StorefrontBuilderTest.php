@@ -73,7 +73,7 @@ it('generates a storefront draft from a builder session', function () {
         ->assertJsonStructure(['storefront' => ['hero', 'about', 'seo', 'products']]);
 
     $store->refresh();
-    expect($store->storefront_content)->not->toBeNull();
+    expect($store->draft_json)->not->toBeNull();
 });
 
 it('responds conversationally to greetings when the merchant already has a store', function () {
@@ -172,7 +172,7 @@ it('can generate a storefront draft from a structured chat tool turn', function 
         ->assertJsonPath('session.messages.1.payload.type', 'website_generated');
 
     $store->refresh();
-    expect($store->storefront_content)->not->toBeNull();
+    expect($store->draft_json)->not->toBeNull();
 });
 
 it('generates a storefront draft when OpenAI synthesis enhancement fails', function () {
@@ -224,7 +224,7 @@ it('generates a storefront draft when OpenAI synthesis enhancement fails', funct
         ->assertJsonStructure(['storefront' => ['hero', 'about', 'seo']]);
 
     $store->refresh();
-    expect($store->storefront_content)->not->toBeNull();
+    expect($store->draft_json)->not->toBeNull();
 });
 
 it('starts a builder session without requiring OpenAI', function () {
@@ -1010,7 +1010,7 @@ it('serves catalog products in builder preview without persisting them in storef
     $response->assertOk();
 
     $store->refresh();
-    expect($store->storefront_content)->not->toHaveKey('products');
+    expect($store->draft_json)->not->toHaveKey('products');
 
     $previewProducts = $response->json('storefront.products');
     expect($previewProducts)->toBeArray()->not->toBeEmpty();
@@ -1039,6 +1039,13 @@ it('accepts public contact form submissions', function () {
         'description' => 'Organic skincare for busy professionals.',
         'brand_color' => '#0E7C66',
         'storefront_template_id' => 'cosmetics',
+        'published_json' => [
+            'hero' => ['headline' => 'Hi', 'subheadline' => 'Sub', 'cta_label' => 'Shop'],
+            'about' => ['title' => 'About', 'body' => 'Body'],
+            'value_props' => [['title' => 'One', 'body' => 'Two']],
+            'seo' => ['title' => 'SEO', 'description' => 'Desc'],
+        ],
+        'published_at' => now(),
     ]);
 
     $response = $this->postJson('/api/storehause/public/storefronts/glow-rituals/contact', [

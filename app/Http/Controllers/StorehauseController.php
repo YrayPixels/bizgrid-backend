@@ -11,6 +11,7 @@ use App\Models\StorefrontTemplate;
 use App\Models\StoreVisit;
 use App\Models\User;
 use App\Services\StorefrontBuilderService;
+use App\Services\StorefrontPublishService;
 use App\Services\StoreProductService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -26,6 +27,7 @@ class StorehauseController extends Controller
     public function __construct(
         private readonly StorefrontBuilderService $builderService,
         private readonly StoreProductService $productService,
+        private readonly StorefrontPublishService $publishService,
     ) {}
 
     public function register(Request $request): JsonResponse
@@ -144,6 +146,7 @@ class StorehauseController extends Controller
             'description' => $data['description'],
             'brand_color' => $data['brand_color'],
             'logo_url' => $data['logo_url'] ?? null,
+            'contact_email' => $user->email,
             'storefront_template_id' => $data['storefront_template_id'] ?? 'ai_pick',
         ])->load('merchant');
 
@@ -173,13 +176,34 @@ class StorehauseController extends Controller
     public function updateMyStore(Request $request): JsonResponse
     {
         $data = $request->validate([
-            'brand_color' => ['nullable', 'string', 'regex:/^#[0-9A-Fa-f]{6}$/'],
+            'business_name' => 'sometimes|string|max:160',
+            'description' => 'sometimes|nullable|string|max:1000',
+            'contact_email' => 'sometimes|nullable|email|max:255',
+            'contact_phone' => 'sometimes|nullable|string|max:40',
+            'brand_color' => ['sometimes', 'string', 'regex:/^#[0-9A-Fa-f]{6}$/'],
         ]);
 
         $store = Store::with('merchant')
             ->whereHas('merchant', fn ($query) => $query->where('owner_user_id', $request->user()->id))
             ->latest()
             ->firstOrFail();
+
+        if (array_key_exists('business_name', $data)) {
+            $store->name = trim($data['business_name']);
+            $store->merchant?->update(['business_name' => $store->name]);
+        }
+
+        if (array_key_exists('description', $data)) {
+            $store->description = $data['description'];
+        }
+
+        if (array_key_exists('contact_email', $data)) {
+            $store->contact_email = $data['contact_email'];
+        }
+
+        if (array_key_exists('contact_phone', $data)) {
+            $store->contact_phone = $data['contact_phone'];
+        }
 
         if (isset($data['brand_color'])) {
             $store->brand_color = $data['brand_color'];
@@ -188,7 +212,7 @@ class StorehauseController extends Controller
         $store->save();
 
         return response()->json([
-            'store' => $this->formatStore($store),
+            'store' => $this->formatStore($store->fresh('merchant')),
         ]);
     }
 
@@ -236,22 +260,27 @@ class StorehauseController extends Controller
 
         $generationId = (string) Str::uuid();
 
-        $store->storefront_content = $this->productService->extractEmbeddedProducts($store, $storefront);
+        $store->draft_json = $this->productService->extractEmbeddedProducts($store, $storefront);
         $store->storefront_generation_id = $generationId;
         $store->save();
 
         return response()->json([
             'generation_id' => $generationId,
-            'storefront' => $this->productService->mergeIntoStorefront($store->storefront_content, $store),
+            'storefront' => $this->productService->mergeIntoStorefront($store->draft_json, $store),
+            'publish' => $this->publishService->publishMeta($store),
         ]);
     }
 
     public function getStorefront(Request $request, int $storeId): JsonResponse
     {
         $store = $this->findOwnedStore($request, $storeId);
+        $draft = $this->publishService->resolveDraft($store);
 
         return response()->json([
-            'storefront' => $this->productService->mergeIntoStorefront($store->storefront_content, $store),
+            'storefront' => $draft
+                ? $this->productService->mergeIntoStorefront($draft, $store)
+                : null,
+            'publish' => $this->publishService->publishMeta($store),
         ]);
     }
 
@@ -309,12 +338,29 @@ class StorehauseController extends Controller
         }
 
         unset($data['storefront']['products']);
-        $store->storefront_content = $data['storefront'];
+        $this->publishService->assignDraft($store, $data['storefront']);
         $store->save();
 
         return response()->json([
             'generation_id' => $store->storefront_generation_id,
-            'storefront' => $this->productService->mergeIntoStorefront($store->storefront_content, $store),
+            'storefront' => $this->productService->mergeIntoStorefront($store->draft_json, $store),
+            'publish' => $this->publishService->publishMeta($store),
+        ]);
+    }
+
+    public function publishStorefront(Request $request, int $storeId): JsonResponse
+    {
+        $store = $this->findOwnedStore($request, $storeId);
+        $store = $this->publishService->publish($store);
+        $published = $this->publishService->resolvePublished($store);
+
+        return response()->json([
+            'store' => $this->formatStore($store),
+            'storefront' => $published
+                ? $this->productService->mergeIntoStorefront($published, $store, activeOnly: true)
+                : null,
+            'publish' => $this->publishService->publishMeta($store),
+            'message' => 'Your storefront is live.',
         ]);
     }
 
@@ -337,6 +383,12 @@ class StorehauseController extends Controller
             ], 404);
         }
 
+        if (! $this->publishService->isPublished($store)) {
+            return response()->json([
+                'message' => 'This storefront has not been published yet.',
+            ], 404);
+        }
+
         return response()->json($this->formatPublicPayload($store));
     }
 
@@ -347,6 +399,12 @@ class StorehauseController extends Controller
         if (! $store) {
             return response()->json([
                 'message' => 'Storefront not found.',
+            ], 404);
+        }
+
+        if (! $this->publishService->isPublished($store)) {
+            return response()->json([
+                'message' => 'This storefront has not been published yet.',
             ], 404);
         }
 
@@ -363,7 +421,7 @@ class StorehauseController extends Controller
             ], 404);
         }
 
-        return response()->json($this->formatPublicPayload($store));
+        return response()->json($this->formatPreviewPayload($store));
     }
 
     public function dashboard(Request $request): JsonResponse
@@ -451,6 +509,16 @@ class StorehauseController extends Controller
         ]);
     }
 
+    public function myOrder(Request $request, int $orderId): JsonResponse
+    {
+        $store = $this->findOwnedStoreForUser($request);
+        $order = StoreOrder::where('store_id', $store->id)->findOrFail($orderId);
+
+        return response()->json([
+            'order' => $this->formatOrder($order),
+        ]);
+    }
+
     public function updateMyOrderStatus(Request $request, int $orderId): JsonResponse
     {
         $data = $request->validate([
@@ -475,6 +543,12 @@ class StorehauseController extends Controller
         if (! $store) {
             return response()->json([
                 'message' => 'Storefront not found.',
+            ], 404);
+        }
+
+        if (! $this->publishService->isPublished($store)) {
+            return response()->json([
+                'message' => 'This storefront has not been published yet.',
             ], 404);
         }
 
@@ -508,6 +582,12 @@ class StorehauseController extends Controller
             }
 
             $quantity = (int) $line['quantity'];
+            if ($product->stock_quantity !== null && $product->stock_quantity < $quantity) {
+                return response()->json([
+                    'message' => "{$product->name} only has {$product->stock_quantity} left in stock.",
+                ], 422);
+            }
+
             $unitPrice = (float) $product->price;
             $lineTotal = $unitPrice * $quantity;
             $currency = (string) ($product->currency ?: $currency);
@@ -540,6 +620,8 @@ class StorehauseController extends Controller
                 'placed_at' => now(),
             ]);
 
+            $this->productService->decrementStockForOrderItems($items);
+
             $store->increment('orders_count');
             $store->increment('gross_revenue', $subtotal);
 
@@ -558,6 +640,12 @@ class StorehauseController extends Controller
         if (! $store) {
             return response()->json([
                 'message' => 'Storefront not found.',
+            ], 404);
+        }
+
+        if (! $this->publishService->isPublished($store)) {
+            return response()->json([
+                'message' => 'This storefront has not been published yet.',
             ], 404);
         }
 
@@ -589,6 +677,12 @@ class StorehauseController extends Controller
         if (! $store) {
             return response()->json([
                 'message' => 'Storefront not found.',
+            ], 404);
+        }
+
+        if (! $this->publishService->isPublished($store)) {
+            return response()->json([
+                'message' => 'This storefront has not been published yet.',
             ], 404);
         }
 
@@ -689,10 +783,13 @@ class StorehauseController extends Controller
             'description' => $store->description ?? '',
             'brand_color' => $store->brand_color ?? '#0E7C66',
             'logo_url' => $store->logo_url,
+            'contact_email' => $store->contact_email ?? $store->merchant?->email,
+            'contact_phone' => $store->contact_phone,
             'storefront_template_id' => $store->storefront_template_id ?? 'ai_pick',
             'subdomain' => $store->slug,
             'subdomain_host' => $subdomainHost,
             'primary_domain' => $store->primary_domain ?? $subdomainHost,
+            ...$this->publishService->publishMeta($store),
         ];
     }
 
@@ -774,7 +871,20 @@ class StorehauseController extends Controller
 
     private function formatPublicPayload(Store $store): array
     {
-        $storefront = $store->storefront_content ?? $this->builderService->synthesizeStorefront($store);
+        $storefront = $this->publishService->resolvePublished($store)
+            ?? $this->builderService->synthesizeStorefront($store);
+
+        return [
+            'store' => $this->formatStore($store),
+            'storefront' => $this->productService->mergeIntoStorefront($storefront, $store, activeOnly: true),
+            'generation_id' => $store->storefront_generation_id,
+        ];
+    }
+
+    private function formatPreviewPayload(Store $store): array
+    {
+        $storefront = $this->publishService->resolveDraft($store)
+            ?? $this->builderService->synthesizeStorefront($store);
 
         return [
             'store' => $this->formatStore($store),

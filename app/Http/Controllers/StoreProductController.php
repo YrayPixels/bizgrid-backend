@@ -66,29 +66,32 @@ class StoreProductController extends Controller
         ]);
     }
 
+    public function duplicate(Request $request, string $productId): JsonResponse
+    {
+        $store = $this->ownedStore($request);
+        $product = StoreProduct::query()
+            ->where('store_id', $store->id)
+            ->findOrFail($productId);
+
+        $duplicate = $this->productService->duplicateProduct($product);
+
+        return response()->json([
+            'product' => $this->productService->format($duplicate),
+        ], 201);
+    }
+
     public function import(Request $request): JsonResponse
     {
         $data = $request->validate([
             'products' => 'required|array|min:1|max:500',
-            'products.*.name' => 'required|string|max:180',
-            'products.*.slug' => 'nullable|string|max:180',
-            'products.*.description' => 'nullable|string|max:5000',
-            'products.*.price' => 'nullable|numeric|min:0',
-            'products.*.currency' => 'nullable|string|max:10',
-            'products.*.image_url' => 'nullable|string|max:2000000',
-            'products.*.sku' => 'nullable|string|max:120',
-            'products.*.category' => 'nullable|string|max:120',
-            'products.*.stock_quantity' => 'nullable|integer|min:0',
-            'products.*.status' => 'nullable|string|in:active,draft',
-            'products.*.variants' => 'nullable|array',
-            'products.*.perks' => 'nullable|array',
+            'products.*' => 'array',
         ]);
 
         $store = $this->ownedStore($request);
-        $imported = $this->productService->importForStore($store, $data['products']);
+        $report = $this->productService->importForStore($store, $data['products']);
 
         return response()->json([
-            'imported' => $imported,
+            ...$report,
             'data' => $this->productService->listForStore($store),
         ]);
     }
@@ -106,7 +109,7 @@ class StoreProductController extends Controller
             'sku' => 'nullable|string|max:120',
             'category' => 'nullable|string|max:120',
             'stock_quantity' => 'nullable|integer|min:0',
-            'status' => 'nullable|string|in:active,draft',
+            'status' => 'nullable|string|in:active,draft,archived',
             'variants' => 'nullable|array',
             'variants.*.name' => 'required_with:variants|string|max:80',
             'variants.*.options' => 'required_with:variants|array|min:1',

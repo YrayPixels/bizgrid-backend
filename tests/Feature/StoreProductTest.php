@@ -32,7 +32,7 @@ function createMerchantStore(User $user): Store
         'description' => 'Organic skincare for busy professionals.',
         'brand_color' => '#0E7C66',
         'storefront_template_id' => 'cosmetics',
-        'storefront_content' => [
+        'draft_json' => [
             'hero' => [
                 'headline' => 'Welcome',
                 'subheadline' => 'Organic skincare',
@@ -50,6 +50,26 @@ function createMerchantStore(User $user): Store
                 'description' => 'Organic skincare.',
             ],
         ],
+        'published_json' => [
+            'hero' => [
+                'headline' => 'Welcome',
+                'subheadline' => 'Organic skincare',
+                'cta_label' => 'Shop now',
+            ],
+            'about' => [
+                'title' => 'About us',
+                'body' => 'We make organic skincare.',
+            ],
+            'value_props' => [
+                ['title' => 'Quality', 'body' => 'Premium ingredients.'],
+            ],
+            'seo' => [
+                'title' => 'Glow Rituals',
+                'description' => 'Organic skincare.',
+            ],
+        ],
+        'status' => 'published',
+        'published_at' => now(),
     ]);
 }
 
@@ -80,7 +100,7 @@ it('creates and lists products without touching storefront content', function ()
         ->assertJsonPath('data.0.id', $productId);
 
     $store->refresh();
-    expect($store->storefront_content)->not->toHaveKey('products');
+    expect($store->draft_json)->not->toHaveKey('products');
     expect($store->products_count)->toBe(1);
     expect(StoreProduct::where('store_id', $store->id)->count())->toBe(1);
 });
@@ -125,7 +145,7 @@ it('updates storefront content without overwriting products', function () {
     $this->actingAs($user, 'sanctum')
         ->patchJson("/api/storehause/ai/storefront/{$store->id}", [
             'storefront' => [
-                ...$store->storefront_content,
+                ...$store->draft_json,
                 'hero' => [
                     'headline' => 'Updated headline',
                     'subheadline' => 'Updated subheadline',
@@ -172,4 +192,124 @@ it('updates a legacy non-uuid product id', function () {
         ])
         ->assertOk()
         ->assertJsonPath('product.name', 'Legacy Item Updated');
+});
+
+it('duplicates a product as a draft copy', function () {
+    $user = User::factory()->create();
+    $store = createMerchantStore($user);
+
+    $product = StoreProduct::create([
+        'id' => (string) Str::uuid(),
+        'store_id' => $store->id,
+        'slug' => 'face-oil',
+        'name' => 'Face Oil',
+        'description' => 'Hydrating face oil.',
+        'price' => 12000,
+        'currency' => 'NGN',
+        'status' => 'active',
+        'stock_quantity' => 8,
+    ]);
+
+    $response = $this->actingAs($user, 'sanctum')
+        ->postJson("/api/storehause/products/{$product->id}/duplicate");
+
+    $response->assertCreated()
+        ->assertJsonPath('product.name', 'Face Oil (Copy)')
+        ->assertJsonPath('product.status', 'draft');
+
+    expect(StoreProduct::where('store_id', $store->id)->count())->toBe(2);
+});
+
+it('rejects checkout when stock is insufficient', function () {
+    $user = User::factory()->create();
+    $store = createMerchantStore($user);
+
+    $product = StoreProduct::create([
+        'id' => (string) Str::uuid(),
+        'store_id' => $store->id,
+        'slug' => 'limited-item',
+        'name' => 'Limited Item',
+        'description' => 'Only one left.',
+        'price' => 5000,
+        'currency' => 'NGN',
+        'status' => 'active',
+        'stock_quantity' => 1,
+    ]);
+
+    $this->postJson('/api/storehause/public/storefronts/glow-rituals/orders', [
+        'customer' => [
+            'first_name' => 'Ada',
+            'last_name' => 'Lovelace',
+            'email' => 'ada@example.com',
+            'phone' => '+2348000000000',
+        ],
+        'delivery_address' => '12 Marina, Lagos',
+        'items' => [
+            ['product_id' => $product->id, 'quantity' => 2],
+        ],
+    ])->assertStatus(422);
+
+    $this->postJson('/api/storehause/public/storefronts/glow-rituals/orders', [
+        'customer' => [
+            'first_name' => 'Ada',
+            'last_name' => 'Lovelace',
+            'email' => 'ada@example.com',
+            'phone' => '+2348000000000',
+        ],
+        'delivery_address' => '12 Marina, Lagos',
+        'items' => [
+            ['product_id' => $product->id, 'quantity' => 1],
+        ],
+    ])->assertCreated();
+
+    $product->refresh();
+    expect($product->stock_quantity)->toBe(0);
+});
+
+it('imports valid product rows and reports row validation errors', function () {
+    $user = User::factory()->create();
+    $store = createMerchantStore($user);
+
+    $response = $this->actingAs($user, 'sanctum')
+        ->postJson('/api/storehause/products/import', [
+            'products' => [
+                [
+                    'name' => 'Imported Serum',
+                    'price' => 9000,
+                    'status' => 'active',
+                ],
+                [
+                    'name' => '',
+                    'price' => -5,
+                ],
+                [
+                    'name' => 'Draft Moisturizer',
+                    'price' => 12000,
+                    'status' => 'draft',
+                ],
+            ],
+        ]);
+
+    $response->assertOk()
+        ->assertJsonPath('imported', 2)
+        ->assertJsonPath('failed', 1)
+        ->assertJsonCount(2, 'errors');
+
+    expect(StoreProduct::where('store_id', $store->id)->count())->toBe(2);
+});
+
+it('reports validation errors when every import row fails', function () {
+    $user = User::factory()->create();
+    createMerchantStore($user);
+
+    $this->actingAs($user, 'sanctum')
+        ->postJson('/api/storehause/products/import', [
+            'products' => [
+                ['name' => '', 'price' => -1],
+                ['price' => 'invalid'],
+            ],
+        ])
+        ->assertOk()
+        ->assertJsonPath('imported', 0)
+        ->assertJsonPath('failed', 2);
 });

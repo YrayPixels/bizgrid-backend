@@ -31,10 +31,14 @@ class StorefrontAiAgentService
 
     /**
      * @param  array<string, mixed>  $currentProfile
+     * @param  list<array{role: string, content: string}>  $conversationHistory
      * @return array<string, mixed>|null
      */
-    public function extractBusinessProfile(string $message, array $currentProfile = []): ?array
-    {
+    public function extractBusinessProfile(
+        string $message,
+        array $currentProfile = [],
+        array $conversationHistory = [],
+    ): ?array {
         $result = $this->chatJson([
             [
                 'role' => 'system',
@@ -45,6 +49,7 @@ class StorefrontAiAgentService
                     'industry must be one of: '.implode(', ', self::INDUSTRIES).'.',
                     'Use null for unknown scalar values. tone must be an array of short lowercase style words.',
                     'Do not invent facts the user did not imply.',
+                    'Use recent_messages to preserve facts the merchant shared earlier in the chat.',
                 ]),
             ],
             [
@@ -52,6 +57,7 @@ class StorefrontAiAgentService
                 'content' => json_encode([
                     'current_profile' => $currentProfile,
                     'message' => $message,
+                    'recent_messages' => array_slice($conversationHistory, -StorefrontBuilderService::CHAT_HISTORY_LIMIT),
                 ]),
             ],
         ], 0.2);
@@ -293,6 +299,7 @@ class StorefrontAiAgentService
                     'assistant_message should be 1-3 short sentences. Be warm, confident, and practical.',
                     'Speak like a helpful shop consultant — never mention templates, themes, tools, agents, JSON, hero, or CTA.',
                     'Use the merchant\'s own words when reflecting their business back to them.',
+                    'Use recent_messages and last_intent to stay consistent with earlier turns.',
                     'Ask at most one clarifying question at a time.',
                     'If the merchant only greeted you, greet them back and explain the next step for their current session state.',
                     'If a draft exists, invite them to request copy changes and check the preview on the right.',
@@ -305,6 +312,8 @@ class StorefrontAiAgentService
                 'content' => json_encode([
                     'message' => $message,
                     'session' => $sessionContext,
+                    'recent_messages' => $sessionContext['recent_messages'] ?? [],
+                    'last_intent' => $sessionContext['last_intent'] ?? null,
                 ]),
             ],
         ], 0.4);
@@ -342,6 +351,7 @@ class StorefrontAiAgentService
                     'Use ask_clarifying_question when required profile or intent is still missing — one question only.',
                     'If the merchant asks you to build, create, draft, generate, or "go ahead", prefer selecting the top recommendation if no template is selected, then generate_draft.',
                     'If a storefront draft already exists and the user asks for copy changes, do not use these tools; the edit endpoint handles that separately.',
+                    'Use recent_messages and last_intent to stay consistent with earlier turns.',
                     'Briefly explain what you are doing in plain language when you call tools.',
                     'Available template IDs: '.implode(', ', $availableTemplateIds).'.',
                 ]),
@@ -353,6 +363,8 @@ class StorefrontAiAgentService
                     'session' => $sessionContext,
                     'profile' => $profile,
                     'recommendations' => $recommendations,
+                    'recent_messages' => $sessionContext['recent_messages'] ?? [],
+                    'last_intent' => $sessionContext['last_intent'] ?? null,
                 ]),
             ],
         ], $this->builderToolDefinitions($availableTemplateIds), 0.25);

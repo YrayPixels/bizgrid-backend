@@ -20,8 +20,13 @@ class Store extends Model
         'description',
         'brand_color',
         'logo_url',
+        'contact_email',
+        'contact_phone',
         'storefront_template_id',
         'storefront_content',
+        'draft_json',
+        'published_json',
+        'published_at',
         'storefront_generation_id',
         'products_count',
         'orders_count',
@@ -33,6 +38,9 @@ class Store extends Model
         return [
             'gross_revenue' => 'decimal:2',
             'storefront_content' => 'array',
+            'draft_json' => 'array',
+            'published_json' => 'array',
+            'published_at' => 'datetime',
         ];
     }
 

@@ -4,11 +4,14 @@ namespace App\Services;
 
 use App\Exceptions\StorefrontAiUnavailableException;
 use App\Models\Store;
+use App\Models\StorefrontBuilderSession;
 use App\Models\StorefrontTemplate;
 use Illuminate\Support\Str;
 
 class StorefrontBuilderService
 {
+    public const CHAT_HISTORY_LIMIT = 20;
+
     /** @var list<string> */
     public const EDITABLE_PATHS = StorefrontPathEditor::BASE_PATHS;
 
@@ -601,11 +604,44 @@ class StorefrontBuilderService
     }
 
     /**
+     * @return list<array{role: string, content: string}>
+     */
+    public function recentConversationHistory(
+        StorefrontBuilderSession $session,
+        ?string $excludeLatestUserMessage = null,
+        int $limit = self::CHAT_HISTORY_LIMIT,
+    ): array {
+        $session->loadMissing('messages');
+        $messages = $session->messages->sortBy('created_at')->values();
+
+        if ($excludeLatestUserMessage !== null && $messages->isNotEmpty()) {
+            $last = $messages->last();
+            if ($last->role === 'user' && trim($last->content) === trim($excludeLatestUserMessage)) {
+                $messages = $messages->slice(0, -1);
+            }
+        }
+
+        return $messages
+            ->slice(-$limit)
+            ->filter(fn ($message) => in_array($message->role, ['user', 'assistant'], true))
+            ->map(fn ($message) => [
+                'role' => $message->role,
+                'content' => $message->content,
+            ])
+            ->values()
+            ->all();
+    }
+
+    /**
      * @param  array<string, mixed>  $profile
+     * @param  list<array{role: string, content: string}>  $conversationHistory
      * @return array<string, mixed>
      */
-    public function extractBusinessProfileFromMessage(string $message, array $profile = []): array
-    {
+    public function extractBusinessProfileFromMessage(
+        string $message,
+        array $profile = [],
+        array $conversationHistory = [],
+    ): array {
         $profile = array_merge([
             'business_name' => null,
             'description' => null,
@@ -616,7 +652,7 @@ class StorefrontBuilderService
 
         if ($this->aiAgent->available()) {
             try {
-                $extracted = $this->aiAgent->extractBusinessProfile($message, $profile);
+                $extracted = $this->aiAgent->extractBusinessProfile($message, $profile, $conversationHistory);
                 if (is_array($extracted)) {
                     return $extracted;
                 }
@@ -879,8 +915,8 @@ class StorefrontBuilderService
             'industry' => $profile['industry'] ?? $store?->merchant?->industry,
             'description' => $profile['description'] ?? $store?->description,
             'brand_color' => $profile['brand_color'] ?? $store?->brand_color,
-            'current_palette' => is_array($store?->storefront_content['palette'] ?? null)
-                ? $store->storefront_content['palette']
+            'current_palette' => is_array(($store?->draft_json ?? $store?->storefront_content)['palette'] ?? null)
+                ? ($store->draft_json ?? $store->storefront_content)['palette']
                 : null,
         ];
 
