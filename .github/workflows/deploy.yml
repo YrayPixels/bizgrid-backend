@@ -41,11 +41,11 @@ jobs:
             release.zip
 
       # 5️⃣ Run migrations (after files are uploaded)
-      # - name: Run migrations
-      #   run: |
-      #     curl -f -sS "https://hey.yraytestings.com.ng/maintenance/migrate?key=${{ secrets.DEPLOY_KEY }}"
+      - name: Run migrations
+        run: |
+          curl -f -sS "https://business.yraytestings.com.ng/maintenance/migrate?key=${{ secrets.DEPLOY_KEY }}"
 
-      # # 6️⃣ Clear and rebuild Laravel caches
-      # - name: Clear Laravel cache
-      #   run: |
-      #     curl -f -sS "https://hey.yraytestings.com.ng/maintenance/cache-clear?key=${{ secrets.DEPLOY_KEY }}"
+      # 6️⃣ Clear and rebuild Laravel caches
+      - name: Clear Laravel cache
+        run: |
+          curl -f -sS "https://business.yraytestings.com.ng/maintenance/cache-clear?key=${{ secrets.DEPLOY_KEY }}"
