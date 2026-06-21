@@ -1063,6 +1063,15 @@ class StorefrontBlockService
      * @param  array<string, mixed>  $storefront
      * @return array<string, mixed>
      */
+    public function categoryShowcaseBlockProps(array $storefront): array
+    {
+        return $this->defaultCategoryShowcaseProps($storefront);
+    }
+
+    /**
+     * @param  array<string, mixed>  $storefront
+     * @return array<string, mixed>
+     */
     private function defaultCategoryShowcaseProps(array $storefront): array
     {
         $templateId = (string) data_get($storefront, 'template.id', 'classic');

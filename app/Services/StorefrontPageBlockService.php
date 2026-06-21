@@ -387,6 +387,11 @@ class StorefrontPageBlockService
             'products' => 'featured-products',
             'promo' => 'serum-promo',
             'banner' => 'serum-promo',
+            'essentials' => 'category-showcase',
+            'essentials page' => 'category-showcase',
+            'shop the essentials' => 'category-showcase',
+            'category showcase' => 'category-showcase',
+            'categories section' => 'category-showcase',
         ];
 
         foreach ($aliases as $keyword => $blockId) {
@@ -396,6 +401,24 @@ class StorefrontPageBlockService
                     return $blockId;
                 }
             }
+        }
+
+        if (preg_match('/\b(essentials|essentials page|shop the essentials|category showcase|categories section|category grid|shop by category)\b/u', $lower) === 1) {
+            $block = collect($blocks)->firstWhere('type', 'category_showcase');
+            if (is_array($block)) {
+                return (string) ($block['id'] ?? 'category-showcase');
+            }
+
+            return 'category-showcase';
+        }
+
+        if (preg_match('/\b(products?|shop)\b/u', $lower) === 1 && preg_match('/\bshop the essentials\b/u', $lower) !== 1) {
+            $block = collect($blocks)->firstWhere('type', 'product_grid');
+            if (is_array($block)) {
+                return (string) ($block['id'] ?? 'featured-products');
+            }
+
+            return 'featured-products';
         }
 
         foreach ($blocks as $block) {
@@ -459,6 +482,7 @@ class StorefrontPageBlockService
                 'cta_href' => '/products',
             ],
             'product_grid' => ['title' => 'Shop the line', 'limit' => 4],
+            'category_showcase' => $this->blockService->categoryShowcaseBlockProps($storefront),
             'faq' => [
                 'title' => (string) data_get($storefront, 'pages.faq.title', 'Frequently asked questions'),
                 'items' => [
