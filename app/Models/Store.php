@@ -22,6 +22,11 @@ class Store extends Model
         'logo_url',
         'contact_email',
         'contact_phone',
+        'business_location',
+        'weekly_orders',
+        'payment_currencies',
+        'staff_count',
+        'physical_store_count',
         'storefront_template_id',
         'storefront_content',
         'draft_json',
@@ -37,6 +42,7 @@ class Store extends Model
     {
         return [
             'gross_revenue' => 'decimal:2',
+            'payment_currencies' => 'array',
             'storefront_content' => 'array',
             'draft_json' => 'array',
             'published_json' => 'array',

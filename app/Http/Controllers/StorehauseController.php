@@ -96,14 +96,15 @@ class StorehauseController extends Controller
 
     public function createStore(Request $request): JsonResponse
     {
-        $data = $request->validate([
+        $data = $request->validate(array_merge([
             'business_name' => 'required|string|max:160',
+            'slug' => ['nullable', 'string', 'max:80', 'regex:/^[a-z0-9]+(?:-[a-z0-9]+)*$/'],
             'industry' => 'required|string|max:80',
             'description' => 'required|string|max:1000',
             'brand_color' => ['required', 'string', 'regex:/^#[0-9A-Fa-f]{6}$/'],
             'logo_url' => 'nullable|url|max:2048',
             'storefront_template_id' => ['nullable', 'string', Rule::in(array_merge(['ai_pick'], StorefrontTemplate::activeConcreteIds()))],
-        ]);
+        ], $this->businessProfileRules(required: true)));
 
         $user = $request->user();
         $existingStore = Store::whereHas('merchant', fn ($query) => $query->where('owner_user_id', $user->id))->first();
@@ -136,7 +137,9 @@ class StorehauseController extends Controller
             'industry' => $data['industry'],
         ])->save();
 
-        $slug = $this->uniqueStoreSlug($data['business_name']);
+        $slug = isset($data['slug'])
+            ? $this->uniqueStoreSlug($data['slug'], baseSlug: Str::slug($data['slug']))
+            : $this->uniqueStoreSlug($data['business_name']);
         $platformDomain = config('storehause.platform_domain', 'yrayhostings.com.ng');
 
         $store = Store::create([
@@ -149,6 +152,11 @@ class StorehauseController extends Controller
             'brand_color' => $data['brand_color'],
             'logo_url' => $data['logo_url'] ?? null,
             'contact_email' => $user->email,
+            'business_location' => $data['business_location'],
+            'weekly_orders' => $data['weekly_orders'],
+            'payment_currencies' => $data['payment_currencies'],
+            'staff_count' => $data['staff_count'],
+            'physical_store_count' => $data['physical_store_count'],
             'storefront_template_id' => $data['storefront_template_id'] ?? 'ai_pick',
         ])->load('merchant');
 
@@ -177,13 +185,13 @@ class StorehauseController extends Controller
 
     public function updateMyStore(Request $request): JsonResponse
     {
-        $data = $request->validate([
+        $data = $request->validate(array_merge([
             'business_name' => 'sometimes|string|max:160',
             'description' => 'sometimes|nullable|string|max:1000',
             'contact_email' => 'sometimes|nullable|email|max:255',
             'contact_phone' => 'sometimes|nullable|string|max:40',
             'brand_color' => ['sometimes', 'string', 'regex:/^#[0-9A-Fa-f]{6}$/'],
-        ]);
+        ], $this->businessProfileRules(required: false)));
 
         $store = Store::with('merchant')
             ->whereHas('merchant', fn ($query) => $query->where('owner_user_id', $request->user()->id))
@@ -209,6 +217,16 @@ class StorehauseController extends Controller
 
         if (isset($data['brand_color'])) {
             $store->brand_color = $data['brand_color'];
+        }
+
+        foreach (['business_location', 'weekly_orders', 'staff_count', 'physical_store_count'] as $field) {
+            if (array_key_exists($field, $data)) {
+                $store->{$field} = $data[$field];
+            }
+        }
+
+        if (array_key_exists('payment_currencies', $data)) {
+            $store->payment_currencies = $data['payment_currencies'];
         }
 
         $store->save();
@@ -787,6 +805,11 @@ class StorehauseController extends Controller
             'logo_url' => $store->logo_url,
             'contact_email' => $store->contact_email ?? $store->merchant?->email,
             'contact_phone' => $store->contact_phone,
+            'business_location' => $store->business_location,
+            'weekly_orders' => $store->weekly_orders,
+            'payment_currencies' => $store->payment_currencies ?? [],
+            'staff_count' => $store->staff_count,
+            'physical_store_count' => $store->physical_store_count,
             'storefront_template_id' => $store->storefront_template_id ?? 'ai_pick',
             'subdomain' => $store->slug,
             'subdomain_host' => $subdomainHost,
@@ -902,9 +925,26 @@ class StorehauseController extends Controller
         return $this->uniqueSlug($name, fn (string $slug): bool => Merchant::where('slug', $slug)->exists());
     }
 
-    private function uniqueStoreSlug(string $name): string
+    private function uniqueStoreSlug(string $name, ?string $baseSlug = null): string
     {
-        return $this->uniqueSlug($name, fn (string $slug): bool => Store::where('slug', $slug)->exists());
+        return $this->uniqueSlug($name, fn (string $slug): bool => Store::where('slug', $slug)->exists(), $baseSlug);
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function businessProfileRules(bool $required): array
+    {
+        $presence = $required ? 'required' : 'sometimes';
+
+        return [
+            'business_location' => [$presence, 'string', Rule::in(['nigeria', 'kenya'])],
+            'weekly_orders' => [$presence, 'string', Rule::in(['0-50', '51-100', '101-1000', '1001+'])],
+            'payment_currencies' => [$presence, 'array', 'min:1'],
+            'payment_currencies.*' => ['string', Rule::in(['NGN', 'KES', 'USD', 'GBP', 'CAD', 'others'])],
+            'staff_count' => [$presence, 'string', Rule::in(['none', '1-3', '4-5', '6-10', '11+'])],
+            'physical_store_count' => [$presence, 'string', Rule::in(['none', '1', '2', '3', '4+'])],
+        ];
     }
 
     private function uniqueOrderNumber(): string
@@ -916,9 +956,9 @@ class StorehauseController extends Controller
         return $orderNumber;
     }
 
-    private function uniqueSlug(string $name, callable $exists): string
+    private function uniqueSlug(string $name, callable $exists, ?string $baseSlug = null): string
     {
-        $base = Str::slug($name) ?: 'store';
+        $base = $baseSlug ?: (Str::slug($name) ?: 'store');
         $slug = $base;
         $suffix = 2;
 
