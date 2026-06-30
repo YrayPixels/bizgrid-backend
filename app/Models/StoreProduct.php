@@ -32,6 +32,7 @@ class StoreProduct extends Model
         'variants',
         'perks',
         'sort_order',
+        'id',
     ];
 
     protected function casts(): array

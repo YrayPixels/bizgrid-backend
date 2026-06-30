@@ -44,7 +44,6 @@ class StorehauseController extends Controller
             'name' => $data['name'],
             'email' => strtolower($data['email']),
             'password' => Hash::make($data['password']),
-            'email_verified_at' => now(),
         ]);
 
         $token = $user->createToken('storehause')->plainTextToken;

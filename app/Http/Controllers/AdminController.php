@@ -1,19 +1,22 @@
 <?php
 
+declare(strict_types=1);
+
 namespace App\Http\Controllers;
 
-use Illuminate\Http\Request;
-use App\Models\User;
-use Illuminate\Support\Facades\Hash;
-use Illuminate\Support\Facades\Mail;
 use App\Mail\AdminCreated;
 use App\Mail\AdminPasswordReset;
+use App\Models\User;
+use Illuminate\Http\JsonResponse;
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Support\Str;
 
 class AdminController extends Controller
 {
-    public function create_admin(Request $request)
+    public function create_admin(Request $request): JsonResponse
     {
         try {
 
@@ -25,18 +28,7 @@ class AdminController extends Controller
                 return response()->json(['message' => 'Validation failed', 'errors' => $validator->errors()], 422);
             }
 
-            // create a random password words and numbers mixed together
-            $alphabets = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm', 'n', 'o', 'p', 'q', 'r', 's', 't', 'u', 'v', 'w', 'x', 'y', 'z'];
-            $numbers = ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9'];
-
-            $password = '';
-            for ($i = 0; $i < 8; $i++) {
-                if ($i % 2 == 0) {
-                    $password .= $alphabets[array_rand($alphabets)];
-                } else {
-                    $password .= $numbers[array_rand($numbers)];
-                }
-            }
+            $password = Str::password(16, letters: true, numbers: true, symbols: true);
 
             // check if admin already exists
             $admin = User::where('email', $request->email)->first();
@@ -49,6 +41,7 @@ class AdminController extends Controller
                 'name' => $request->name,
                 'email' => $request->email,
                 'password' => Hash::make($password),
+                'is_admin' => true,
             ]);
 
             $token = $admin->createToken('admin-token')->plainTextToken;
@@ -69,7 +62,7 @@ class AdminController extends Controller
     }
 
 
-    public function login_admin(Request $request)
+    public function login_admin(Request $request): JsonResponse
     {
         $admin = User::where('email', $request->email)->first();
         if (!$admin) {
@@ -99,7 +92,7 @@ class AdminController extends Controller
     }
 
 
-    public function verify_admin(Request $request)
+    public function verify_admin(Request $request): JsonResponse
     {
         try {
 
@@ -129,7 +122,7 @@ class AdminController extends Controller
         }
     }
 
-    public function delete_admin(Request $request)
+    public function delete_admin(Request $request): JsonResponse
     {
         $admin = User::where('email', $request->email)->first();
         if (!$admin) {
@@ -143,7 +136,7 @@ class AdminController extends Controller
         ]);
     }
 
-    public function fetch_admins(Request $request)
+    public function fetch_admins(Request $request): JsonResponse
     {
         $admins = User::all();
         return response()->json([
@@ -152,7 +145,7 @@ class AdminController extends Controller
         ]);
     }
 
-    public function reset_admin_password(Request $request)
+    public function reset_admin_password(Request $request): JsonResponse
     {
         try {
             $validator = Validator::make($request->all(), [
@@ -167,8 +160,7 @@ class AdminController extends Controller
                 return response()->json(['message' => 'Admin not found'], 404);
             }
 
-            // Generate a new temporary password and email it to the admin
-            $password = Str::lower(Str::random(10)) . rand(10, 99);
+            $password = Str::password(16, letters: true, numbers: true, symbols: true);
 
             $admin->password = Hash::make($password);
             $admin->save();
