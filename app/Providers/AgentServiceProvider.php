@@ -10,6 +10,7 @@ use App\Agents\DesignDirectorAgent;
 use App\Agents\EditorAgent;
 use App\Agents\InterpreterAgent;
 use App\Agents\StorefrontWriterAgent;
+use App\Agents\VisionAgent;
 use App\Services\PromptService;
 use Illuminate\Support\ServiceProvider;
 
@@ -21,6 +22,7 @@ class AgentServiceProvider extends ServiceProvider
     public function register(): void
     {
         $this->app->singleton(PromptService::class);
+        $this->app->singleton(VisionAgent::class);
 
         $this->app->singleton(AgentRegistry::class, function ($app) {
             $registry = new AgentRegistry;

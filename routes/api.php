@@ -5,6 +5,7 @@ use App\Http\Controllers\AdminMerchantController;
 use App\Http\Controllers\AdminStorefrontTemplateController;
 use App\Http\Controllers\AiChatController;
 use App\Http\Controllers\AuthController;
+use App\Http\Controllers\VisionController;
 use App\Http\Controllers\OrderController;
 use App\Http\Controllers\PublicStorefrontController;
 use App\Http\Controllers\StoreCategoryController;
@@ -62,6 +63,7 @@ Route::prefix('storehause')->group(function () {
 
     // AI chat proxy — uses backend API key, no user auth needed
     Route::post('/ai/chat', [AiChatController::class, 'chat'])->middleware('throttle:60,1');
+    Route::post('/ai/vision/product', [VisionController::class, 'analyzeProduct'])->middleware('throttle:30,1');
 
     Route::middleware('auth:sanctum')->group(function () {
         Route::get('/auth/me', [AuthController::class, 'me']);
