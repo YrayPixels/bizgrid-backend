@@ -12,10 +12,12 @@ use App\Models\User;
 use App\Services\StorefrontBuilderService;
 use App\Services\StorefrontPublishService;
 use App\Services\StoreProductService;
+use App\Support\SseStream;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
+use Symfony\Component\HttpFoundation\StreamedResponse;
 
 class StorefrontBuilderController extends Controller
 {
@@ -231,6 +233,84 @@ class StorefrontBuilderController extends Controller
             'generation_id' => $generationId,
             'storefront' => $mergedStorefront,
         ]);
+    }
+
+    public function generateDraftStream(Request $request, int $sessionId): StreamedResponse
+    {
+        $data = $request->validate([
+            'storefront' => 'nullable|array',
+            'selected_template_id' => ['nullable', 'string', Rule::in(StorefrontTemplate::activeConcreteIds())],
+        ]);
+
+        $session = $this->findOwnedSession($request, $sessionId);
+        $store = $this->ensureStoreForSession($session, $request->user());
+        $this->syncStoreFromProfile($store, $session->business_profile ?? []);
+        $templateId = $data['selected_template_id'] ?? $session->selected_template_id;
+
+        if ($templateId) {
+            $session->selected_template_id = $templateId;
+            $store->storefront_template_id = $templateId;
+            $store->save();
+        }
+
+        return SseStream::response(function ($emit) use ($data, $session, $store) {
+            try {
+                if (! empty($data['storefront'])) {
+                    $storefront = $data['storefront'];
+                    SseStream::log($emit, 'builder', 'generate', 'Using provided content', 'Applying your custom storefront content.');
+                } else {
+                    SseStream::log($emit, 'interpreter', 'analyze', 'Analyzing your business', 'Understanding your brand and products...');
+                    sleep(0); // flush
+
+                    SseStream::log($emit, 'design-director', 'design', 'Picking the best design', 'Matching a design to your business type and style...');
+
+                    try {
+                        $storefront = $this->builderService->synthesizeStorefront($store->fresh('merchant'));
+                    } catch (StorefrontAiUnavailableException $e) {
+                        SseStream::error($emit, $e->getMessage());
+
+                        return;
+                    }
+
+                    SseStream::log($emit, 'storefront-writer', 'write', 'Writing your website content', 'Creating hero, about, value props, FAQs, and SEO...');
+                }
+
+                $generationId = (string) Str::uuid();
+
+                SseStream::log($emit, 'builder', 'save', 'Saving your draft', 'Storing your storefront and preparing preview...');
+
+                $storefront = $this->productService->extractEmbeddedProducts($store, $storefront);
+                $this->publishService->assignDraft($store, $storefront);
+                $store->storefront_generation_id = $generationId;
+                $store->save();
+
+                $session->store_id = $store->id;
+                $session->storefront_snapshot = $storefront;
+                $session->status = 'content_generated';
+                $session->save();
+
+                $mergedStorefront = $this->productService->mergeIntoStorefront($storefront, $store);
+
+                $this->appendAssistantMessage(
+                    $session,
+                    'Your website is ready. Preview it on the right, then tell me what to refine — headline, about section, CTA, or SEO.',
+                    [
+                        'type' => 'website_generated',
+                        'generation_id' => $generationId,
+                    ],
+                );
+
+                SseStream::log($emit, 'builder', 'done', 'Website ready', 'Your storefront is live in preview.');
+
+                SseStream::complete($emit, [
+                    ...$this->formatSessionPayload($session->fresh(['messages', 'store.merchant'])),
+                    'generation_id' => $generationId,
+                    'storefront' => $mergedStorefront,
+                ]);
+            } catch (\Throwable $e) {
+                SseStream::error($emit, $e->getMessage());
+            }
+        });
     }
 
     public function applyEdit(Request $request, int $sessionId): JsonResponse

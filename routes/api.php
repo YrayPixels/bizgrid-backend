@@ -3,6 +3,7 @@
 use App\Http\Controllers\AdminController;
 use App\Http\Controllers\AdminMerchantController;
 use App\Http\Controllers\AdminStorefrontTemplateController;
+use App\Http\Controllers\AiChatController;
 use App\Http\Controllers\AuthController;
 use App\Http\Controllers\OrderController;
 use App\Http\Controllers\PublicStorefrontController;
@@ -59,6 +60,9 @@ Route::prefix('storehause')->group(function () {
     Route::post('/public/storefronts/{slug}/visits', [PublicStorefrontController::class, 'recordVisit'])->middleware('throttle:60,1');
     Route::get('/public/generations/{generationId}', [PublicStorefrontController::class, 'publicGeneration']);
 
+    // AI chat proxy — uses backend API key, no user auth needed
+    Route::post('/ai/chat', [AiChatController::class, 'chat'])->middleware('throttle:60,1');
+
     Route::middleware('auth:sanctum')->group(function () {
         Route::get('/auth/me', [AuthController::class, 'me']);
         Route::post('/auth/logout', [AuthController::class, 'logout']);
@@ -94,6 +98,7 @@ Route::prefix('storehause')->group(function () {
             Route::post('/sessions/{sessionId}/clear', [StorefrontBuilderController::class, 'clearMessages']);
             Route::post('/sessions/{sessionId}/select-template', [StorefrontBuilderController::class, 'selectTemplate']);
             Route::post('/sessions/{sessionId}/generate', [StorefrontBuilderController::class, 'generateDraft']);
+            Route::post('/sessions/{sessionId}/generate-stream', [StorefrontBuilderController::class, 'generateDraftStream']);
             Route::post('/sessions/{sessionId}/edit', [StorefrontBuilderController::class, 'applyEdit']);
         });
     });
