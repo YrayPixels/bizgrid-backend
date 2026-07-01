@@ -11,7 +11,8 @@ class VisionAgent
     /**
      * Analyze a product image using a vision-capable model.
      *
-     * @return array{name: string, price: float|null, description: string, category: string|null}|null
+     * @param  array<string, mixed>  $context
+     * @return array{name: string, price: float|null, description: string, category: string|null}|array{error: string}|null
      */
     public function analyzeProductImage(string $imageUrl, array $context = []): ?array
     {
@@ -21,7 +22,14 @@ class VisionAgent
         if (! $apiKey) {
             Log::warning('VisionAgent: OpenAI API key not configured.');
 
-            return null;
+            return ['error' => 'Vision model not configured.'];
+        }
+
+        // Resolve the image URL: for HTTP URLs, download and convert to base64
+        // so OpenAI can access it regardless of CDN restrictions.
+        $visionUrl = $this->resolveImageUrl($imageUrl);
+        if (! $visionUrl) {
+            return ['error' => 'Could not download the image. Make sure the URL is accessible.'];
         }
 
         $businessName = $context['business_name'] ?? '';
@@ -66,7 +74,7 @@ class VisionAgent
                             'role' => 'user',
                             'content' => [
                                 ['type' => 'text', 'text' => $userContent],
-                                ['type' => 'image_url', 'image_url' => ['url' => $imageUrl]],
+                                ['type' => 'image_url', 'image_url' => ['url' => $visionUrl]],
                             ],
                         ],
                     ],
@@ -84,12 +92,12 @@ class VisionAgent
 
             $content = $response->json('choices.0.message.content');
             if (! is_string($content) || trim($content) === '') {
-                return null;
+                return ['error' => 'Vision model returned no content.'];
             }
 
             $decoded = json_decode($content, true);
             if (! is_array($decoded)) {
-                return null;
+                return ['error' => 'Vision model returned invalid JSON.'];
             }
 
             $name = is_string($decoded['name'] ?? null) ? trim($decoded['name']) : '';
@@ -98,7 +106,7 @@ class VisionAgent
             $category = is_string($decoded['category'] ?? null) ? trim($decoded['category']) : null;
 
             if ($name === '' && $desc === '') {
-                return null;
+                return ['error' => 'Vision model could not identify a product in the image.'];
             }
 
             $usage = $response->json('usage');
@@ -118,7 +126,59 @@ class VisionAgent
         } catch (\Throwable $e) {
             Log::warning('VisionAgent: exception', ['message' => $e->getMessage()]);
 
-            return null;
+            return ['error' => 'Vision service error.'];
         }
+    }
+
+    /**
+     * Resolve an image URL for OpenAI vision.
+     * If it's an HTTP URL, download it and convert to a base64 data URL
+     * so OpenAI can access it regardless of CDN/CORS restrictions.
+     */
+    private function resolveImageUrl(string $imageUrl): ?string
+    {
+        // Already a data URL — pass through
+        if (str_starts_with($imageUrl, 'data:image/')) {
+            return $imageUrl;
+        }
+
+        // HTTP(S) URL — download and convert to base64
+        if (str_starts_with($imageUrl, 'http://') || str_starts_with($imageUrl, 'https://')) {
+            try {
+                $response = Http::timeout(15)->get($imageUrl);
+
+                if (! $response->successful()) {
+                    Log::warning('VisionAgent: could not download image', [
+                        'url' => $imageUrl,
+                        'status' => $response->status(),
+                    ]);
+
+                    return null;
+                }
+
+                $body = $response->body();
+                $mime = $response->header('Content-Type') ?? 'image/jpeg';
+
+                return 'data:'.$mime.';base64,'.base64_encode($body);
+            } catch (\Throwable $e) {
+                Log::warning('VisionAgent: image download exception', [
+                    'url' => $imageUrl,
+                    'message' => $e->getMessage(),
+                ]);
+
+                return null;
+            }
+        }
+
+        // Local file path — read and convert
+        if (file_exists($imageUrl)) {
+            $mime = mime_content_type($imageUrl) ?: 'image/jpeg';
+
+            return 'data:'.$mime.';base64,'.base64_encode(file_get_contents($imageUrl));
+        }
+
+        Log::warning('VisionAgent: unsupported image URL format', ['url' => $imageUrl]);
+
+        return null;
     }
 }
