@@ -5,6 +5,7 @@ use App\Http\Controllers\AdminMerchantController;
 use App\Http\Controllers\AdminStorefrontTemplateController;
 use App\Http\Controllers\AiChatController;
 use App\Http\Controllers\AuthController;
+use App\Http\Controllers\StorefrontCodeController;
 use App\Http\Controllers\VisionController;
 use App\Http\Controllers\OrderController;
 use App\Http\Controllers\PublicStorefrontController;
@@ -66,6 +67,7 @@ Route::prefix('storehause')->group(function () {
     Route::post('/ai/vision/product', [VisionController::class, 'analyzeProduct'])->middleware('throttle:30,1');
 
     Route::middleware('auth:sanctum')->group(function () {
+        Route::post('/ai/storefront-code/generate', [StorefrontCodeController::class, 'generate']);
         Route::get('/auth/me', [AuthController::class, 'me']);
         Route::post('/auth/logout', [AuthController::class, 'logout']);
         Route::get('/dashboard', [OrderController::class, 'dashboard']);
