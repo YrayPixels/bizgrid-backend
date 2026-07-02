@@ -208,9 +208,8 @@ class StorefrontBuilderController extends Controller
 
         $generationId = (string) Str::uuid();
         $storefront = $this->productService->extractEmbeddedProducts($store, $storefront);
-        $this->publishService->assignDraft($store, $storefront);
         $store->storefront_generation_id = $generationId;
-        $store->save();
+        $this->publishService->persistDraft($store, $storefront);
 
         $session->store_id = $store->id;
         $session->storefront_snapshot = $storefront;
@@ -280,13 +279,15 @@ class StorefrontBuilderController extends Controller
                 SseStream::log($emit, 'builder', 'save', 'Saving your draft', 'Storing your storefront and preparing preview...');
 
                 $storefront = $this->productService->extractEmbeddedProducts($store, $storefront);
-                $this->publishService->assignDraft($store, $storefront);
                 $store->storefront_generation_id = $generationId;
-                $store->save();
+                $this->publishService->persistDraft($store, $storefront);
 
                 $session->store_id = $store->id;
                 $session->storefront_snapshot = $storefront;
                 $session->status = 'content_generated';
+                if (\Illuminate\Support\Facades\DB::connection()->getDriverName() === 'mysql') {
+                    \Illuminate\Support\Facades\DB::reconnect();
+                }
                 $session->save();
 
                 $mergedStorefront = $this->productService->mergeIntoStorefront($storefront, $store);
@@ -352,8 +353,7 @@ class StorefrontBuilderController extends Controller
         }
 
         unset($storefront['products']);
-        $this->publishService->assignDraft($store, $storefront);
-        $store->save();
+        $this->publishService->persistDraft($store, $storefront);
 
         $session->storefront_snapshot = $storefront;
         $session->status = 'review_ready';
@@ -437,11 +437,13 @@ class StorefrontBuilderController extends Controller
 
             $session->storefront_snapshot = $storefront;
             $session->store->storefront_generation_id = $generationId;
-            $this->publishService->assignDraft($session->store, $storefront);
-            $session->store->save();
+            $this->publishService->persistDraft($session->store, $storefront);
             $session->status = 'content_generated';
         }
 
+        \Illuminate\Support\Facades\DB::connection()->getDriverName() === 'mysql'
+            ? \Illuminate\Support\Facades\DB::reconnect()
+            : null;
         $session->save();
 
         $this->appendAssistantMessage(
@@ -888,9 +890,8 @@ class StorefrontBuilderController extends Controller
         $storefront = $this->productService->extractEmbeddedProducts($store, $storefront);
         $generationId = (string) Str::uuid();
 
-        $this->publishService->assignDraft($store, $storefront);
         $store->storefront_generation_id = $generationId;
-        $store->save();
+        $this->publishService->persistDraft($store, $storefront);
 
         $session->store_id = $store->id;
         $session->storefront_snapshot = $storefront;
@@ -1046,8 +1047,7 @@ class StorefrontBuilderController extends Controller
         $summary = $result['assistant_message'] ?? $this->builderService->describeStorefrontEdit($changedPaths);
 
         unset($storefront['products']);
-        $this->publishService->assignDraft($store, $storefront);
-        $store->save();
+        $this->publishService->persistDraft($store, $storefront);
 
         $session->storefront_snapshot = $storefront;
         $session->status = 'review_ready';
@@ -1201,8 +1201,7 @@ class StorefrontBuilderController extends Controller
         }
 
         unset($storefront['products']);
-        $this->publishService->assignDraft($store, $storefront);
-        $store->save();
+        $this->publishService->persistDraft($store, $storefront);
 
         $session->storefront_snapshot = $storefront;
         $session->status = 'review_ready';

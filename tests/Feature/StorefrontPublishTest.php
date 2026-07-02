@@ -148,3 +148,45 @@ it('rejects publish when no draft exists', function () {
         ->postJson("/api/storehause/stores/{$store->id}/publish")
         ->assertStatus(422);
 });
+
+it('stores bolt custom project files on the builder session only, not in draft_json', function () {
+    $user = User::factory()->create();
+    $store = publishTestStorefront($user);
+    $service = app(\App\Services\StorefrontPublishService::class);
+
+    $storefront = [
+        ...$store->draft_json,
+        'custom_files' => [['path' => 'index.html', 'content' => '<html></html>']],
+        'custom_code' => '<html></html>',
+    ];
+
+    $service->persistDraft($store, $storefront);
+    $store->refresh();
+
+    expect($store->draft_json)->not->toHaveKey('custom_files');
+    expect($store->draft_json)->not->toHaveKey('custom_code');
+    expect($store->draft_json['hero']['headline'])->toBe('Welcome');
+});
+
+it('publishes custom bolt files from the active builder session snapshot', function () {
+    $user = User::factory()->create();
+    $store = publishTestStorefront($user);
+
+    \App\Models\StorefrontBuilderSession::create([
+        'user_id' => $user->id,
+        'store_id' => $store->id,
+        'status' => 'content_generated',
+        'storefront_snapshot' => [
+            ...$store->draft_json,
+            'custom_files' => [['path' => 'index.html', 'content' => '<html><body>Bolt</body></html>']],
+            'custom_code' => '<html><body>Bolt</body></html>',
+        ],
+    ]);
+
+    $service = app(\App\Services\StorefrontPublishService::class);
+    $service->publish($store->fresh());
+    $store->refresh();
+
+    expect($store->published_json)->toHaveKey('custom_files');
+    expect($store->published_json['custom_files'][0]['content'])->toContain('Bolt');
+});

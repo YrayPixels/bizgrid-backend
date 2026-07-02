@@ -357,8 +357,7 @@ class StorehauseController extends Controller
         }
 
         unset($data['storefront']['products']);
-        $this->publishService->assignDraft($store, $data['storefront']);
-        $store->save();
+        $this->publishService->persistDraft($store, $data['storefront']);
 
         return response()->json([
             'generation_id' => $store->storefront_generation_id,
