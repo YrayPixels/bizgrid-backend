@@ -12,6 +12,7 @@ use App\Models\User;
 use App\Services\StorefrontBuilderService;
 use App\Services\StorefrontPublishService;
 use App\Services\StoreProductService;
+use App\Services\WorkbenchProjectStorage;
 use App\Support\SseStream;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -25,6 +26,7 @@ class StorefrontBuilderController extends Controller
         private readonly StorefrontBuilderService $builderService,
         private readonly StoreProductService $productService,
         private readonly StorefrontPublishService $publishService,
+        private readonly WorkbenchProjectStorage $projectStorage,
     ) {}
 
     public function startSession(Request $request): JsonResponse
@@ -64,7 +66,7 @@ class StorefrontBuilderController extends Controller
     public function sendMessage(Request $request, int $sessionId): JsonResponse
     {
         $data = $request->validate([
-            'message' => 'required|string|max:2000',
+            'message' => 'required|string|max:8000',
             'business_profile' => 'nullable|array',
             'status' => 'nullable|string|in:collecting_requirements,template_recommendation,content_generated,products_pending,review_ready,published',
             'assistant_message' => 'nullable|string|max:4000',
@@ -91,6 +93,8 @@ class StorefrontBuilderController extends Controller
 
         if (! empty($data['assistant_message'])) {
             $this->persistClientTurn($session, $request->user(), $data);
+        } elseif (! empty($data['storefront_snapshot']) && is_array($data['storefront_snapshot'])) {
+            $this->persistStorefrontSnapshot($session, $request->user(), $data);
         } else {
             try {
                 $this->processUserMessage($session, $data['message']);
@@ -100,6 +104,72 @@ class StorefrontBuilderController extends Controller
         }
 
         return response()->json($this->formatSessionPayload($session->fresh(['messages', 'store.merchant'])));
+    }
+
+    public function saveSnapshot(Request $request, int $sessionId): JsonResponse
+    {
+        $data = $request->validate([
+            'storefront_snapshot' => 'required|array',
+            'status' => 'nullable|string|in:collecting_requirements,template_recommendation,content_generated,products_pending,review_ready,published',
+        ]);
+
+        $session = $this->findOwnedSession($request, $sessionId);
+        $this->persistStorefrontSnapshot($session, $request->user(), $data, syncStoreDraft: false);
+
+        return response()->json($this->formatSessionPayload($session->fresh(['messages', 'store.merchant'])));
+    }
+
+    public function saveProject(Request $request, int $sessionId): JsonResponse
+    {
+        $data = $request->validate([
+            'custom_files' => 'required|array',
+            'custom_files.*.path' => 'required|string|max:500',
+            'custom_files.*.content' => 'required|string',
+            'custom_files.*.encoding' => 'nullable|string|in:base64',
+            'edit_metadata' => 'nullable|array',
+            'edit_metadata.locked_paths' => 'nullable|array',
+            'edit_metadata.locked_paths.*' => 'string|max:500',
+        ]);
+
+        $session = $this->findOwnedSession($request, $sessionId);
+
+        $pointer = $this->projectStorage->save(
+            (int) $session->id,
+            $data['custom_files'],
+            is_array($data['edit_metadata'] ?? null) ? $data['edit_metadata'] : null,
+        );
+
+        $snapshot = is_array($session->storefront_snapshot) ? $session->storefront_snapshot : [];
+        unset($snapshot['custom_files'], $snapshot['custom_code']);
+        $snapshot['custom_project'] = $pointer;
+
+        if (! empty($data['edit_metadata']) && is_array($data['edit_metadata'])) {
+            $snapshot['edit_metadata'] = array_merge(
+                is_array($snapshot['edit_metadata'] ?? null) ? $snapshot['edit_metadata'] : [],
+                $data['edit_metadata'],
+            );
+        }
+
+        $session->storefront_snapshot = $snapshot;
+        $this->publishService->reconnectAndSaveModel($session);
+
+        return response()->json($this->formatSessionPayload($session->fresh(['messages', 'store.merchant'])));
+    }
+
+    public function getProject(Request $request, int $sessionId): JsonResponse
+    {
+        $session = $this->findOwnedSession($request, $sessionId);
+        $project = $this->projectStorage->load((int) $session->id);
+
+        if ($project === null) {
+            return response()->json([
+                'custom_files' => [],
+                'edit_metadata' => ['locked_paths' => []],
+                'custom_project' => null,
+            ]);
+        }
+
+        return response()->json($project);
     }
 
     public function clearMessages(Request $request, int $sessionId): JsonResponse
@@ -317,7 +387,7 @@ class StorefrontBuilderController extends Controller
     public function applyEdit(Request $request, int $sessionId): JsonResponse
     {
         $data = $request->validate([
-            'instruction' => 'required|string|max:2000',
+            'instruction' => 'required|string|max:8000',
             'storefront' => 'nullable|array',
             'changed_paths' => 'nullable|array',
             'changed_paths.*' => 'string',
@@ -419,13 +489,59 @@ class StorefrontBuilderController extends Controller
             $session->store->save();
         }
 
-        if (! empty($data['storefront_snapshot']) && is_array($data['storefront_snapshot']) && $session->store) {
-            $generationId = (string) Str::uuid();
-            $storefront = $this->productService->extractEmbeddedProducts(
-                $session->store,
-                $data['storefront_snapshot'],
-            );
-            if (! empty($data['selected_template_id']) && $session->selected_template_id) {
+        if (! empty($data['storefront_snapshot']) && is_array($data['storefront_snapshot'])) {
+            $this->persistStorefrontSnapshot($session, $user, $data);
+        } else {
+            \Illuminate\Support\Facades\DB::connection()->getDriverName() === 'mysql'
+                ? \Illuminate\Support\Facades\DB::reconnect()
+                : null;
+            $session->save();
+        }
+
+        $this->appendAssistantMessage(
+            $session,
+            (string) $data['assistant_message'],
+            is_array($data['assistant_payload'] ?? null) ? $data['assistant_payload'] : null,
+        );
+    }
+
+    /**
+     * @param  array<string, mixed>  $data
+     */
+    private function persistStorefrontSnapshot(
+        StorefrontBuilderSession $session,
+        User $user,
+        array $data,
+        bool $syncStoreDraft = true,
+    ): void {
+        if (empty($data['storefront_snapshot']) || ! is_array($data['storefront_snapshot'])) {
+            return;
+        }
+
+        $storefront = $this->publishService->compactSessionSnapshot($data['storefront_snapshot']);
+
+        $this->projectStorage->extractAndPersist((int) $session->id, $storefront);
+
+        if (! empty($data['selected_template_id'])) {
+            $session->selected_template_id = $data['selected_template_id'];
+        }
+
+        $profile = $session->business_profile ?? [];
+        $hasMinimum = ! empty($profile['business_name'])
+            && ! empty($profile['description'])
+            && strlen((string) $profile['description']) >= 10;
+
+        if ($hasMinimum && ! $session->store_id) {
+            $store = $this->createStoreFromProfile($user, $profile);
+            $session->store_id = $store->id;
+            $session->load('store.merchant');
+        }
+
+        if ($session->store && $syncStoreDraft) {
+            $storefront = $this->productService->extractEmbeddedProducts($session->store, $storefront);
+
+            $templateId = $data['selected_template_id'] ?? $session->selected_template_id;
+            if (! empty($templateId) && $session->selected_template_id) {
                 data_set($storefront, 'template.id', $session->selected_template_id);
                 data_set($storefront, 'template.source', 'merchant_selected');
             }
@@ -435,22 +551,19 @@ class StorefrontBuilderController extends Controller
                 $session->store->storefront_template_id = $snapshotTemplateId;
             }
 
-            $session->storefront_snapshot = $storefront;
-            $session->store->storefront_generation_id = $generationId;
+            $session->store->storefront_generation_id = (string) Str::uuid();
             $this->publishService->persistDraft($session->store, $storefront);
+        }
+
+        $session->storefront_snapshot = $storefront;
+
+        if (! empty($data['status'])) {
+            $session->status = $data['status'];
+        } elseif ($session->store && $session->status !== 'published') {
             $session->status = 'content_generated';
         }
 
-        \Illuminate\Support\Facades\DB::connection()->getDriverName() === 'mysql'
-            ? \Illuminate\Support\Facades\DB::reconnect()
-            : null;
-        $session->save();
-
-        $this->appendAssistantMessage(
-            $session,
-            (string) $data['assistant_message'],
-            is_array($data['assistant_payload'] ?? null) ? $data['assistant_payload'] : null,
-        );
+        $this->publishService->reconnectAndSaveModel($session);
     }
 
     private function findOrCreateActiveSession(User $user): StorefrontBuilderSession
@@ -1274,15 +1387,29 @@ class StorefrontBuilderController extends Controller
 
         $store = $session->store;
 
+        $storefrontSnapshot = $session->storefront_snapshot;
+
+        if (is_array($storefrontSnapshot) && ! empty($storefrontSnapshot['custom_files'])) {
+            $this->projectStorage->extractAndPersist((int) $session->id, $storefrontSnapshot);
+            $session->storefront_snapshot = $storefrontSnapshot;
+            $this->publishService->reconnectAndSaveModel($session);
+        }
+
+        $storefrontSnapshot = $this->projectStorage->hydrateSnapshot(
+            is_array($storefrontSnapshot) ? $storefrontSnapshot : null,
+            (int) $session->id,
+            migrateInline: false,
+        );
+
         return [
             'session' => [
                 'id' => (string) $session->id,
                 'status' => $session->status,
                 'business_profile' => $profile,
                 'selected_template_id' => $session->selected_template_id,
-                'storefront_snapshot' => $store && is_array($session->storefront_snapshot)
-                    ? $this->productService->mergeIntoStorefront($session->storefront_snapshot, $store)
-                    : $session->storefront_snapshot,
+                'storefront_snapshot' => $store && is_array($storefrontSnapshot)
+                    ? $this->productService->mergeIntoStorefront($storefrontSnapshot, $store)
+                    : $storefrontSnapshot,
                 'store' => $store ? $this->formatStore($store) : null,
                 'messages' => $session->messages
                     ->sortBy('created_at')

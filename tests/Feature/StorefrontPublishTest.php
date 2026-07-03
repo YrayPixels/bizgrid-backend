@@ -168,6 +168,20 @@ it('stores bolt custom project files on the builder session only, not in draft_j
     expect($store->draft_json['hero']['headline'])->toBe('Welcome');
 });
 
+it('compacts redundant custom_code out of session snapshots when custom_files exist', function () {
+    $service = app(\App\Services\StorefrontPublishService::class);
+
+    $compact = $service->compactSessionSnapshot([
+        'hero' => ['headline' => 'Welcome'],
+        'custom_files' => [['path' => 'index.html', 'content' => '<html></html>']],
+        'custom_code' => str_repeat('<html></html>', 1000),
+    ]);
+
+    expect($compact)->toHaveKey('custom_files');
+    expect($compact)->not->toHaveKey('custom_code');
+    expect($compact['hero']['headline'])->toBe('Welcome');
+});
+
 it('publishes custom bolt files from the active builder session snapshot', function () {
     $user = User::factory()->create();
     $store = publishTestStorefront($user);

@@ -4,11 +4,16 @@ namespace App\Services;
 
 use App\Models\Store;
 use App\Models\StorefrontBuilderSession;
+use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\QueryException;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
 
 class StorefrontPublishService
 {
+    public function __construct(
+        private readonly WorkbenchProjectStorage $projectStorage,
+    ) {}
     /**
      * Bolt custom project payloads can exceed MySQL max_allowed_packet when duplicated
      * into stores.draft_json. Keep them on the builder session snapshot instead.
@@ -84,6 +89,28 @@ class StorefrontPublishService
         return $stripped;
     }
 
+    /**
+     * Drop redundant legacy custom_code when multi-file custom_files are present.
+     * Duplicating both can exceed MySQL max_allowed_packet on session saves.
+     *
+     * @param  array<string, mixed>  $storefront
+     * @return array<string, mixed>
+     */
+    public function compactSessionSnapshot(array $storefront): array
+    {
+        $compact = $storefront;
+
+        if (
+            ! empty($compact['custom_files'])
+            && is_array($compact['custom_files'])
+            && count($compact['custom_files']) > 0
+        ) {
+            unset($compact['custom_code']);
+        }
+
+        return $compact;
+    }
+
     /** @return array<string, mixed>|null */
     public function resolvePublished(Store $store): ?array
     {
@@ -143,21 +170,50 @@ class StorefrontPublishService
     /** @return array<string, mixed>|null */
     private function findActiveSessionSnapshot(Store $store): ?array
     {
-        $snapshot = StorefrontBuilderSession::query()
+        $session = StorefrontBuilderSession::query()
             ->where('store_id', $store->id)
             ->whereNotIn('status', ['published'])
             ->latest('updated_at')
-            ->value('storefront_snapshot');
+            ->first(['id', 'storefront_snapshot']);
 
-        return is_array($snapshot) ? $snapshot : null;
+        if (! $session || ! is_array($session->storefront_snapshot)) {
+            return null;
+        }
+
+        return $this->projectStorage->hydrateSnapshot(
+            $session->storefront_snapshot,
+            (int) $session->id,
+        );
     }
 
     private function reconnectAndSave(Store $store): void
+    {
+        $this->reconnectAndSaveModel($store);
+    }
+
+    public function reconnectAndSaveModel(Model $model): void
     {
         if (DB::connection()->getDriverName() === 'mysql') {
             DB::reconnect();
         }
 
-        $store->save();
+        try {
+            $model->save();
+        } catch (QueryException $exception) {
+            if (! $this->isMysqlGoneAway($exception)) {
+                throw $exception;
+            }
+
+            DB::reconnect();
+            $model->save();
+        }
+    }
+
+    private function isMysqlGoneAway(QueryException $exception): bool
+    {
+        $message = $exception->getMessage();
+
+        return str_contains($message, '2006')
+            || str_contains($message, 'MySQL server has gone away');
     }
 }

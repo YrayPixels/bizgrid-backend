@@ -7,6 +7,7 @@ use App\Models\User;
 use App\Services\StorefrontBlockService;
 use App\Services\StorefrontPathEditor;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Storage;
 
 uses(RefreshDatabase::class);
 
@@ -1115,4 +1116,213 @@ test('path editor applies cosmetics homepage testimonials and block props', func
     $heroBlock = collect($storefront['pages']['home']['blocks'] ?? [])
         ->firstWhere('id', 'hero-main');
     expect($heroBlock['props']['eyebrow'] ?? null)->toBe('Nature-led skincare');
+});
+
+it('persists workbench custom files via the project endpoint', function () {
+    Storage::fake('local');
+
+    $user = User::factory()->create();
+    $merchant = Merchant::create([
+        'owner_user_id' => $user->id,
+        'business_name' => 'Glow Rituals',
+        'slug' => 'glow-rituals-snapshot',
+        'contact_name' => $user->name,
+        'email' => $user->email,
+        'industry' => 'beauty_and_skincare',
+        'status' => 'pending',
+        'subscription_plan' => 'starter',
+        'subscription_status' => 'trialing',
+    ]);
+    $store = Store::create([
+        'merchant_id' => $merchant->id,
+        'name' => 'Glow Rituals',
+        'slug' => 'glow-rituals-snapshot',
+        'status' => 'draft',
+        'primary_domain' => 'glow-rituals-snapshot.example.test',
+        'description' => 'Organic skincare for busy professionals.',
+        'brand_color' => '#0E7C66',
+        'storefront_template_id' => 'cosmetics',
+    ]);
+
+    $session = StorefrontBuilderSession::create([
+        'user_id' => $user->id,
+        'store_id' => $store->id,
+        'status' => 'content_generated',
+        'business_profile' => glowRitualsProfile(),
+        'selected_template_id' => 'cosmetics',
+        'storefront_snapshot' => ['hero' => ['headline' => 'Welcome']],
+    ]);
+
+    $customFiles = [
+        ['path' => 'src/App.tsx', 'content' => 'export default function App() { return <div>Hello</div>; }'],
+        ['path' => 'index.html', 'content' => '<html><body>Hello</body></html>'],
+    ];
+
+    $this->actingAs($user, 'sanctum')
+        ->putJson("/api/storehause/storefront-builder/sessions/{$session->id}/project", [
+            'custom_files' => $customFiles,
+            'edit_metadata' => ['locked_paths' => ['src/App.tsx']],
+        ])
+        ->assertOk()
+        ->assertJsonPath('session.storefront_snapshot.custom_files.0.path', 'src/App.tsx');
+
+    $session->refresh();
+    $store->refresh();
+
+    expect($session->storefront_snapshot)->not->toHaveKey('custom_files');
+    expect($session->storefront_snapshot['custom_project']['file_count'])->toBe(2);
+    expect($store->draft_json)->not->toHaveKey('custom_files');
+
+    Storage::disk('local')->assertExists("builder-projects/sessions/{$session->id}/src/App.tsx");
+    Storage::disk('local')->assertExists("builder-projects/sessions/{$session->id}/manifest.json");
+});
+
+it('persists custom files on the builder session even without a linked store', function () {
+    Storage::fake('local');
+
+    $user = User::factory()->create();
+
+    $session = StorefrontBuilderSession::create([
+        'user_id' => $user->id,
+        'status' => 'content_generated',
+        'storefront_snapshot' => null,
+    ]);
+
+    $customFiles = [
+        ['path' => 'index.html', 'content' => '<html><body>Workbench</body></html>'],
+    ];
+
+    $this->actingAs($user, 'sanctum')
+        ->putJson("/api/storehause/storefront-builder/sessions/{$session->id}/project", [
+            'custom_files' => $customFiles,
+        ])
+        ->assertOk()
+        ->assertJsonPath('session.storefront_snapshot.custom_files.0.content', '<html><body>Workbench</body></html>');
+
+    $session->refresh();
+    expect($session->storefront_snapshot)->not->toHaveKey('custom_files');
+    expect($session->storefront_snapshot['custom_project']['file_count'])->toBe(1);
+    Storage::disk('local')->assertExists("builder-projects/sessions/{$session->id}/index.html");
+});
+
+it('stores custom files on disk when saving via the snapshot endpoint', function () {
+    Storage::fake('local');
+
+    $user = User::factory()->create();
+
+    $session = StorefrontBuilderSession::create([
+        'user_id' => $user->id,
+        'status' => 'content_generated',
+        'storefront_snapshot' => [
+            'hero' => ['headline' => 'Welcome'],
+            'custom_code' => str_repeat('<html>legacy</html>', 5000),
+        ],
+    ]);
+
+    $customFiles = [
+        ['path' => 'index.html', 'content' => '<html><body>Workbench</body></html>'],
+    ];
+
+    $this->actingAs($user, 'sanctum')
+        ->putJson("/api/storehause/storefront-builder/sessions/{$session->id}/snapshot", [
+            'storefront_snapshot' => [
+                'hero' => ['headline' => 'Welcome'],
+                'custom_files' => $customFiles,
+                'custom_code' => str_repeat('<html>legacy</html>', 5000),
+            ],
+        ])
+        ->assertOk();
+
+    $session->refresh();
+    expect($session->storefront_snapshot)->not->toHaveKey('custom_files');
+    expect($session->storefront_snapshot)->not->toHaveKey('custom_code');
+    expect($session->storefront_snapshot['custom_project']['file_count'])->toBe(1);
+    Storage::disk('local')->assertExists("builder-projects/sessions/{$session->id}/index.html");
+});
+
+it('does not rewrite store draft_json on workbench project autosave', function () {
+    Storage::fake('local');
+
+    $user = User::factory()->create();
+    $merchant = Merchant::create([
+        'owner_user_id' => $user->id,
+        'business_name' => 'Glow Rituals',
+        'slug' => 'glow-rituals-autosave',
+        'contact_name' => $user->name,
+        'email' => $user->email,
+        'industry' => 'beauty_and_skincare',
+        'status' => 'pending',
+        'subscription_plan' => 'starter',
+        'subscription_status' => 'trialing',
+    ]);
+    $store = Store::create([
+        'merchant_id' => $merchant->id,
+        'name' => 'Glow Rituals',
+        'slug' => 'glow-rituals-autosave',
+        'status' => 'draft',
+        'primary_domain' => 'glow-rituals-autosave.example.test',
+        'description' => 'Organic skincare for busy professionals.',
+        'brand_color' => '#0E7C66',
+        'storefront_template_id' => 'cosmetics',
+        'draft_json' => ['hero' => ['headline' => 'Original draft']],
+    ]);
+
+    $session = StorefrontBuilderSession::create([
+        'user_id' => $user->id,
+        'store_id' => $store->id,
+        'status' => 'content_generated',
+        'business_profile' => glowRitualsProfile(),
+        'selected_template_id' => 'cosmetics',
+        'storefront_snapshot' => ['hero' => ['headline' => 'Welcome']],
+    ]);
+
+    $this->actingAs($user, 'sanctum')
+        ->putJson("/api/storehause/storefront-builder/sessions/{$session->id}/project", [
+            'custom_files' => [
+                ['path' => 'index.html', 'content' => '<html><body>Autosaved</body></html>'],
+            ],
+        ])
+        ->assertOk();
+
+    $store->refresh();
+    expect($store->draft_json)->toBe(['hero' => ['headline' => 'Original draft']]);
+});
+
+it('loads workbench project files from disk via the project endpoint', function () {
+    Storage::fake('local');
+
+    $user = User::factory()->create();
+    $session = StorefrontBuilderSession::create([
+        'user_id' => $user->id,
+        'status' => 'content_generated',
+        'storefront_snapshot' => [
+            'hero' => ['headline' => 'Welcome'],
+            'custom_project' => [
+                'storage_key' => "builder-projects/sessions/1",
+                'revision' => 1,
+                'file_count' => 1,
+                'updated_at' => now()->toIso8601String(),
+            ],
+        ],
+    ]);
+
+    Storage::disk('local')->put(
+        "builder-projects/sessions/{$session->id}/manifest.json",
+        json_encode([
+            'revision' => 1,
+            'file_count' => 1,
+            'updated_at' => now()->toIso8601String(),
+            'locked_paths' => [],
+            'files' => [['path' => 'index.html', 'binary' => false]],
+        ]),
+    );
+    Storage::disk('local')->put(
+        "builder-projects/sessions/{$session->id}/index.html",
+        '<html><body>From disk</body></html>',
+    );
+
+    $this->actingAs($user, 'sanctum')
+        ->getJson("/api/storehause/storefront-builder/sessions/{$session->id}/project")
+        ->assertOk()
+        ->assertJsonPath('custom_files.0.content', '<html><body>From disk</body></html>');
 });

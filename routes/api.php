@@ -99,6 +99,9 @@ Route::prefix('storehause')->group(function () {
             Route::post('/sessions', [StorefrontBuilderController::class, 'startSession']);
             Route::get('/sessions/current', [StorefrontBuilderController::class, 'currentSession']);
             Route::post('/sessions/{sessionId}/messages', [StorefrontBuilderController::class, 'sendMessage']);
+            Route::put('/sessions/{sessionId}/snapshot', [StorefrontBuilderController::class, 'saveSnapshot']);
+            Route::put('/sessions/{sessionId}/project', [StorefrontBuilderController::class, 'saveProject']);
+            Route::get('/sessions/{sessionId}/project', [StorefrontBuilderController::class, 'getProject']);
             Route::post('/sessions/{sessionId}/clear', [StorefrontBuilderController::class, 'clearMessages']);
             Route::post('/sessions/{sessionId}/select-template', [StorefrontBuilderController::class, 'selectTemplate']);
             Route::post('/sessions/{sessionId}/generate', [StorefrontBuilderController::class, 'generateDraft']);
