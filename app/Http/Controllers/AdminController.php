@@ -6,6 +6,8 @@ namespace App\Http\Controllers;
 
 use App\Mail\AdminCreated;
 use App\Mail\AdminPasswordReset;
+use App\Mail\AdminPasswordResetCode;
+use App\Mail\AdminVerificationCode;
 use App\Models\User;
 use App\Services\AdminAuditService;
 use Illuminate\Http\JsonResponse;
@@ -84,10 +86,7 @@ class AdminController extends Controller
         $admin->verification_code = Hash::make($verification_code);
         $admin->save();
 
-        Mail::raw("Hello {$admin->name}, your verification code is: {$verification_code}", function ($message) use ($admin) {
-            $message->to($admin->email)
-                ->subject('Bizgrid Admin Verification Code');
-        });
+        Mail::to($admin->email)->send(new AdminVerificationCode($admin, (string) $verification_code));
 
         if (config('app.env') === 'local') {
             Log::info('Admin verification code', ['email' => $admin->email, 'code' => $verification_code]);
@@ -241,9 +240,7 @@ class AdminController extends Controller
         $admin->verification_code = Hash::make($code);
         $admin->save();
 
-        Mail::raw("Hello {$admin->name}, your password reset code is: {$code}", function ($message) use ($admin) {
-            $message->to($admin->email)->subject('Bizgrid Admin Password Reset');
-        });
+        Mail::to($admin->email)->send(new AdminPasswordResetCode($admin, $code));
 
         if (config('app.env') === 'local') {
             Log::info('Admin password reset code', ['email' => $admin->email, 'code' => $code]);

@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Services;
 
 use App\Agents\AgentRegistry;
+use App\Mail\AbandonedRecoveryEmail;
 use App\Models\Store;
 use App\Models\StoreAbandonedCart;
 use App\Models\StoreOrder;
@@ -365,18 +366,17 @@ class AbandonedRecoveryService
             throw new RuntimeException('This customer has no email address on file.');
         }
 
-        $fromEmail = $store->contact_email ?: config('mail.from.address');
-        $fromName = $store->name;
         $emailSubject = $subject ?: $this->defaultSubject($store);
+        $customerName = filled($context['customer_name'] ?? null) ? (string) $context['customer_name'] : null;
+        $recoveryUrl = filled($context['recovery_url'] ?? null) ? (string) $context['recovery_url'] : null;
 
-        Mail::raw($message, function ($mail) use ($email, $fromEmail, $fromName, $emailSubject) {
-            $mail->to($email)
-                ->subject($emailSubject);
-
-            if (is_string($fromEmail) && $fromEmail !== '') {
-                $mail->from($fromEmail, $fromName);
-            }
-        });
+        Mail::to($email)->send(new AbandonedRecoveryEmail(
+            $store,
+            $message,
+            $emailSubject,
+            $recoveryUrl,
+            $customerName,
+        ));
     }
 
     private function defaultSubject(Store $store): string

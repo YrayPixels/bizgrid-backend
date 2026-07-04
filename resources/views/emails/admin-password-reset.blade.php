@@ -1,97 +1,37 @@
-<!DOCTYPE html>
-<html>
+@extends('emails.layouts.bizgrid')
 
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>HeySolana Admin Password Reset</title>
-    <style>
-        body {
-            font-family: Arial, sans-serif;
-            background-color: #f4f4f4;
-            margin: 0;
-            padding: 0;
-        }
+@section('title', 'Your admin password was reset')
+@section('preheader', 'A new temporary password has been issued.')
 
-        .container {
-            max-width: 600px;
-            margin: 20px auto;
-            background: #ffffff;
-            border-radius: 10px;
-            box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
-            text-align: center;
-        }
+@section('content')
+    <p style="margin:0 0 16px 0;">Hi {{ $admin->name ?? 'there' }},</p>
 
-        p {
-            color: #555;
-            font-size: 16px;
-            line-height: 1.5;
-        }
+    <p style="margin:0 0 16px 0;">
+        Your {{ config('storehause.brand_name', 'Bizgrid') }} admin password was reset by a platform administrator.
+    </p>
 
-        .footer {
-            margin-top: 20px;
-            font-size: 14px;
-            color: #777;
-            text-align: center;
-        }
+    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="margin:0 0 20px 0;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;">
+        <tr>
+            <td style="padding:16px 18px;">
+                <div style="font-size:13px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:0.04em;margin-bottom:8px;">New login details</div>
+                <div style="font-size:15px;color:#0f172a;"><strong>Email:</strong> {{ $admin->email }}</div>
+                <div style="font-size:15px;color:#0f172a;margin-top:6px;"><strong>Password:</strong> {{ $password }}</div>
+            </td>
+        </tr>
+    </table>
 
-        .social-links a {
-            margin: 0 10px;
-            text-decoration: none;
-            color: #971BB2;
-            font-weight: bold;
-        }
-    </style>
-</head>
+    @php($adminUrl = rtrim((string) ($brand['admin_app_url'] ?? config('storehause.admin_app_url')), '/'))
+    <table role="presentation" cellspacing="0" cellpadding="0" border="0">
+        <tr>
+            <td style="border-radius:8px;background:{{ $brand['primary_color'] ?? '#0d9488' }};">
+                <a href="{{ $adminUrl }}" style="display:inline-block;padding:12px 20px;font-size:15px;font-weight:700;color:#ffffff;text-decoration:none;">Sign in to admin</a>
+            </td>
+        </tr>
+    </table>
 
-<body>
+    <p style="margin:20px 0 0 0;font-size:14px;color:#64748b;">If you did not expect this reset, contact platform support immediately.</p>
+@endsection
 
-    <div class="container">
-        <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0">
-            <tr>
-                <td align="center" style="padding: 20px 0px 0px 0px;">
-                    <table role="presentation" cellspacing="0" cellpadding="0" border="0">
-                        <tr>
-                            <td style="padding: 4px;">
-                                <img src="https://heysolana.yraylabs.fun/pngs/logo.png" alt="HeySolana Logo" width="40">
-                            </td>
-                            <td>
-                                <h2 style="margin: 0; font-size: 24px; font-family: Arial, sans-serif;">HeySolana</h2>
-                            </td>
-                        </tr>
-                    </table>
-                </td>
-            </tr>
-        </table>
-
-        <div style="text-align: start; padding:0px 20px 0px 20px;">
-            <h4>Hi {{ $admin->name ?? 'there!' }},</h4>
-        </div>
-
-        <div style="text-align: justify; padding:0px 20px 0px 20px;">
-            <p>Your admin password has been reset by a dashboard administrator.</p>
-
-            <p>
-                You can now log in with:
-                <br>
-                Email: {{ $admin->email ?? 'not provided' }}
-                <br>
-                Password: {{ $password ?? 'not provided' }}
-            </p>
-
-            <p>If you did not expect this, please reply to this email immediately.</p>
-        </div>
-
-        <div style=" background:#171717;  color:white; padding:20px; border-radius: 0px 0px 10px 10px;">
-            <p class="footer" style="color: #fff;">Follow us for the latest updates:</p>
-            <div class="social-links">
-                🔗 <a href="https://x.com/useHeysolana">Twitter</a> |
-                🔗 <a href="https://t.me/+mT-FJs0poLc5OTBl">Telegram</a>
-            </div>
-        </div>
-    </div>
-
-</body>
-
-</html>
-
+@section('footer')
+    This message was sent because your {{ config('storehause.brand_name', 'Bizgrid') }} admin password was reset.
+@endsection

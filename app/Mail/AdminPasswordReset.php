@@ -1,7 +1,11 @@
 <?php
 
+declare(strict_types=1);
+
 namespace App\Mail;
 
+use App\Models\User;
+use App\Support\MailBranding;
 use Illuminate\Bus\Queueable;
 use Illuminate\Mail\Mailable;
 use Illuminate\Mail\Mailables\Content;
@@ -12,19 +16,15 @@ class AdminPasswordReset extends Mailable
 {
     use Queueable, SerializesModels;
 
-    public $admin;
-    public $password;
-
-    public function __construct($admin, $password)
-    {
-        $this->admin = $admin;
-        $this->password = $password;
-    }
+    public function __construct(
+        public User $admin,
+        public string $password,
+    ) {}
 
     public function envelope(): Envelope
     {
         return new Envelope(
-            subject: 'Your admin password was reset',
+            subject: 'Your '.config('storehause.brand_name', 'Bizgrid').' admin password was reset',
         );
     }
 
@@ -35,13 +35,16 @@ class AdminPasswordReset extends Mailable
             with: [
                 'admin' => $this->admin,
                 'password' => $this->password,
+                'brand' => MailBranding::platform(),
             ],
         );
     }
 
+    /**
+     * @return array<int, \Illuminate\Mail\Mailables\Attachment>
+     */
     public function attachments(): array
     {
         return [];
     }
 }
-

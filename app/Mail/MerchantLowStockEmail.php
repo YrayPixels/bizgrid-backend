@@ -4,7 +4,8 @@ declare(strict_types=1);
 
 namespace App\Mail;
 
-use App\Models\User;
+use App\Models\Store;
+use App\Models\StoreProduct;
 use App\Support\MailBranding;
 use Illuminate\Bus\Queueable;
 use Illuminate\Mail\Mailable;
@@ -12,30 +13,30 @@ use Illuminate\Mail\Mailables\Content;
 use Illuminate\Mail\Mailables\Envelope;
 use Illuminate\Queue\SerializesModels;
 
-class AdminCreated extends Mailable
+class MerchantLowStockEmail extends Mailable
 {
     use Queueable, SerializesModels;
 
     public function __construct(
-        public User $admin,
-        public string $password,
+        public Store $store,
+        public StoreProduct $product,
     ) {}
 
     public function envelope(): Envelope
     {
         return new Envelope(
-            subject: 'Welcome to '.config('storehause.brand_name', 'Bizgrid').' Admin',
+            subject: 'Low stock: '.$this->product->name.' — '.$this->store->name,
         );
     }
 
     public function content(): Content
     {
         return new Content(
-            view: 'emails.admin-created',
+            view: 'emails.merchant-low-stock',
             with: [
-                'admin' => $this->admin,
-                'password' => $this->password,
                 'brand' => MailBranding::platform(),
+                'store' => $this->store,
+                'product' => $this->product,
             ],
         );
     }

@@ -12,29 +12,29 @@ use Illuminate\Mail\Mailables\Content;
 use Illuminate\Mail\Mailables\Envelope;
 use Illuminate\Queue\SerializesModels;
 
-class AdminCreated extends Mailable
+class AdminVerificationCode extends Mailable
 {
     use Queueable, SerializesModels;
 
     public function __construct(
         public User $admin,
-        public string $password,
+        public string $code,
     ) {}
 
     public function envelope(): Envelope
     {
         return new Envelope(
-            subject: 'Welcome to '.config('storehause.brand_name', 'Bizgrid').' Admin',
+            subject: config('storehause.brand_name', 'Bizgrid').' admin verification code',
         );
     }
 
     public function content(): Content
     {
         return new Content(
-            view: 'emails.admin-created',
+            view: 'emails.admin-verification-code',
             with: [
                 'admin' => $this->admin,
-                'password' => $this->password,
+                'code' => $this->code,
                 'brand' => MailBranding::platform(),
             ],
         );

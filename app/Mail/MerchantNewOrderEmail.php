@@ -4,7 +4,8 @@ declare(strict_types=1);
 
 namespace App\Mail;
 
-use App\Models\User;
+use App\Models\Store;
+use App\Models\StoreOrder;
 use App\Support\MailBranding;
 use Illuminate\Bus\Queueable;
 use Illuminate\Mail\Mailable;
@@ -12,30 +13,32 @@ use Illuminate\Mail\Mailables\Content;
 use Illuminate\Mail\Mailables\Envelope;
 use Illuminate\Queue\SerializesModels;
 
-class AdminCreated extends Mailable
+class MerchantNewOrderEmail extends Mailable
 {
     use Queueable, SerializesModels;
 
     public function __construct(
-        public User $admin,
-        public string $password,
+        public Store $store,
+        public StoreOrder $order,
+        public bool $awaitingPayment,
     ) {}
 
     public function envelope(): Envelope
     {
         return new Envelope(
-            subject: 'Welcome to '.config('storehause.brand_name', 'Bizgrid').' Admin',
+            subject: 'New order '.$this->order->order_number.' — '.$this->store->name,
         );
     }
 
     public function content(): Content
     {
         return new Content(
-            view: 'emails.admin-created',
+            view: 'emails.merchant-new-order',
             with: [
-                'admin' => $this->admin,
-                'password' => $this->password,
                 'brand' => MailBranding::platform(),
+                'store' => $this->store,
+                'order' => $this->order,
+                'awaitingPayment' => $this->awaitingPayment,
             ],
         );
     }
