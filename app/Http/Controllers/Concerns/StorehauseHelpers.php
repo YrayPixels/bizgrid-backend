@@ -73,6 +73,13 @@ trait StorehauseHelpers
             'business_location' => $store->business_location,
             'weekly_orders' => $store->weekly_orders,
             'payment_currencies' => $store->payment_currencies ?? [],
+            'payout_account_name' => $store->payout_account_name,
+            'payout_bank_name' => $store->payout_bank_name,
+            'payout_account_number' => $store->payout_account_number,
+            'payouts_configured' => filled($store->payout_account_name)
+                && filled($store->payout_bank_name)
+                && filled($store->payout_account_number),
+            'checkout_enabled' => filled(config('paystack.public_key')) && filled(config('paystack.secret_key')),
             'staff_count' => $store->staff_count,
             'physical_store_count' => $store->physical_store_count,
             'storefront_template_id' => $store->storefront_template_id ?? 'ai_pick',
@@ -93,12 +100,15 @@ trait StorehauseHelpers
             'delivery_address' => $order->delivery_address,
             'status' => $order->status,
             'payment_status' => $order->payment_status,
+            'paystack_reference' => $order->paystack_reference,
+            'settlement_status' => $order->settlement_status,
             'currency' => $order->currency,
             'subtotal' => (float) $order->subtotal,
             'total_amount' => (float) $order->total_amount,
             'items' => $order->items ?? [],
             'notes' => $order->notes,
             'placed_at' => $order->placed_at?->toIso8601String(),
+            'paid_at' => $order->paid_at?->toIso8601String(),
             'created_at' => $order->created_at?->toIso8601String(),
             'updated_at' => $order->updated_at?->toIso8601String(),
         ];
@@ -107,6 +117,14 @@ trait StorehauseHelpers
     protected function productCount(Store $store): int
     {
         return StoreProduct::where('store_id', $store->id)->count();
+    }
+
+    protected function ensureStoreMerchantActive(Store $store): void
+    {
+        $store->loadMissing('merchant');
+        if ($store->merchant?->status === 'suspended') {
+            abort(403, 'This storefront is temporarily unavailable.');
+        }
     }
 
     protected function findStoreByHost(string $host): ?Store

@@ -25,8 +25,13 @@ class Store extends Model
         'business_location',
         'weekly_orders',
         'payment_currencies',
+        'payout_account_name',
+        'payout_bank_name',
+        'payout_account_number',
         'staff_count',
         'physical_store_count',
+        'whatsapp_auto_reply_enabled',
+        'tiktok_auto_reply_enabled',
         'storefront_template_id',
         'storefront_content',
         'draft_json',
@@ -47,6 +52,8 @@ class Store extends Model
             'draft_json' => 'array',
             'published_json' => 'array',
             'published_at' => 'datetime',
+            'whatsapp_auto_reply_enabled' => 'boolean',
+            'tiktok_auto_reply_enabled' => 'boolean',
         ];
     }
 
@@ -73,5 +80,20 @@ class Store extends Model
     public function categories(): HasMany
     {
         return $this->hasMany(StoreCategory::class);
+    }
+
+    public function socialConnections(): HasMany
+    {
+        return $this->hasMany(StoreSocialConnection::class);
+    }
+
+    public function socialPosts(): HasMany
+    {
+        return $this->hasMany(SocialPost::class);
+    }
+
+    public function customerConversations(): HasMany
+    {
+        return $this->hasMany(CustomerConversation::class);
     }
 }

@@ -3,6 +3,8 @@
 namespace App\Providers;
 
 use App\Agents\AgentRegistry;
+use App\Agents\CustomerCommerceAgent;
+use App\Agents\MarketingAgent;
 use App\Agents\BuilderOrchestratorAgent;
 use App\Agents\ColorSpecialistAgent;
 use App\Agents\ConversationAgent;
@@ -34,6 +36,8 @@ class AgentServiceProvider extends ServiceProvider
             $registry->register('design-director', DesignDirectorAgent::class);
             $registry->register('conversation-agent', ConversationAgent::class);
             $registry->register('builder-orchestrator', BuilderOrchestratorAgent::class);
+            $registry->register('marketing-agent', MarketingAgent::class);
+            $registry->register('customer-commerce-agent', CustomerCommerceAgent::class);
             $registry->register('storefront-writer', StorefrontWriterAgent::class);
             $registry->register('editor-agent', EditorAgent::class);
 

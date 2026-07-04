@@ -13,9 +13,11 @@ class AdminSeeder extends Seeder
         User::updateOrCreate(
             ['email' => 'admin@storehause.local'],
             [
-                'name' => 'StoreHause Admin',
+                'name' => 'Bizgrid Admin',
                 'email_verified_at' => now(),
-                'password' => Hash::make('StoreHause123!'),
+                'password' => Hash::make('Bizgrid123!'),
+                'is_admin' => true,
+                'admin_role' => 'super_admin',
             ],
         );
     }

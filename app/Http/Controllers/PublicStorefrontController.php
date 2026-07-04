@@ -10,6 +10,10 @@ use App\Models\StoreContactInquiry;
 use App\Models\StoreOrder;
 use App\Models\StoreProduct;
 use App\Models\StoreVisit;
+use App\Services\AbandonedRecoveryService;
+use App\Services\MerchantUsageEnforcementService;
+use App\Services\PaystackService;
+use App\Services\PlatformNotificationService;
 use App\Services\StoreCategoryService;
 use App\Services\StorefrontBuilderService;
 use App\Services\StorefrontPublishService;
@@ -29,7 +33,28 @@ class PublicStorefrontController extends Controller
         private readonly StoreProductService $productService,
         private readonly StoreCategoryService $categoryService,
         private readonly StorefrontPublishService $publishService,
+        private readonly MerchantUsageEnforcementService $enforcement,
+        private readonly PlatformNotificationService $notifications,
+        private readonly PaystackService $paystack,
+        private readonly AbandonedRecoveryService $abandonedRecovery,
     ) {}
+
+    public function listPublished(): JsonResponse
+    {
+        $stores = Store::query()
+            ->where('status', 'published')
+            ->whereNotNull('published_json')
+            ->orderByDesc('published_at')
+            ->get(['slug', 'name', 'published_at']);
+
+        return response()->json([
+            'data' => $stores->map(fn (Store $store) => [
+                'slug' => $store->slug,
+                'business_name' => $store->name,
+                'published_at' => $store->published_at?->toIso8601String(),
+            ])->values(),
+        ]);
+    }
 
     public function publicStorefrontByHost(Request $request): JsonResponse
     {
@@ -56,6 +81,8 @@ class PublicStorefrontController extends Controller
             ], 404);
         }
 
+        $this->ensureStoreMerchantActive($store);
+
         return response()->json($this->formatPublicPayload($store));
     }
 
@@ -74,6 +101,8 @@ class PublicStorefrontController extends Controller
                 'message' => 'This storefront has not been published yet.',
             ], 404);
         }
+
+        $this->ensureStoreMerchantActive($store);
 
         return response()->json($this->formatPublicPayload($store));
     }
@@ -107,6 +136,8 @@ class PublicStorefrontController extends Controller
             ], 404);
         }
 
+        $this->ensureStoreMerchantActive($store);
+
         $data = $request->validate([
             'customer.first_name' => 'required|string|max:80',
             'customer.last_name' => 'required|string|max:80',
@@ -114,6 +145,8 @@ class PublicStorefrontController extends Controller
             'customer.phone' => 'required|string|max:40',
             'delivery_address' => 'required|string|max:2000',
             'notes' => 'nullable|string|max:1000',
+            'callback_url' => 'nullable|url|max:2048',
+            'session_token' => 'nullable|string|max:64',
             'items' => 'required|array|min:1|max:100',
             'items.*.product_id' => 'required|string|max:120',
             'items.*.quantity' => 'required|integer|min:1|max:999',
@@ -157,7 +190,14 @@ class PublicStorefrontController extends Controller
             ];
         }
 
-        $order = DB::transaction(function () use ($store, $data, $items, $subtotal, $currency) {
+        $store->loadMissing('merchant');
+        if ($store->merchant) {
+            $this->enforcement->assertCanProcessOrder($store->merchant, $subtotal);
+        }
+
+        $paystackEnabled = $this->paystack->isConfigured();
+
+        $order = DB::transaction(function () use ($store, $data, $items, $subtotal, $currency, $paystackEnabled) {
             $order = StoreOrder::create([
                 'store_id' => $store->id,
                 'order_number' => $this->uniqueOrderNumber(),
@@ -166,7 +206,7 @@ class PublicStorefrontController extends Controller
                 'customer_phone' => $data['customer']['phone'],
                 'delivery_address' => $data['delivery_address'],
                 'status' => 'pending',
-                'payment_status' => 'pending',
+                'payment_status' => $paystackEnabled ? 'awaiting_payment' : 'pending',
                 'currency' => $currency,
                 'subtotal' => $subtotal,
                 'total_amount' => $subtotal,
@@ -177,20 +217,81 @@ class PublicStorefrontController extends Controller
 
             $this->productService->decrementStockForOrderItems($items);
 
-            $store->increment('orders_count');
-            $store->increment('gross_revenue', $subtotal);
+            if (! $paystackEnabled) {
+                $store->increment('orders_count');
+                $store->increment('gross_revenue', $subtotal);
+
+                if ($store->merchant) {
+                    $this->enforcement->recordOrderProcessing($store->merchant, $subtotal);
+                }
+            }
 
             return $order;
         });
 
+        $this->notifications->notify(
+            'order.placed',
+            'New order: '.$order->order_number,
+            $store->name,
+            ['order_id' => $order->id, 'store_id' => $store->id, 'total' => $subtotal],
+        );
+
+        if (filled($data['session_token'] ?? null)) {
+            $this->abandonedRecovery->markCartConverted($store, (string) $data['session_token'], $order);
+        }
+
+        $payload = [
+            'order' => $this->formatOrder($order),
+        ];
+
+        if ($paystackEnabled) {
+            $callbackUrl = $data['callback_url'] ?? $this->defaultCheckoutCallback($store, $order);
+            $payload['payment'] = $this->paystack->initializeOrderPayment($store, $order, $callbackUrl);
+        }
+
+        return response()->json($payload, 201);
+    }
+
+    public function verifyPayment(Request $request, string $slug): JsonResponse
+    {
+        $store = Store::with('merchant')->where('slug', Str::slug($slug))->first();
+
+        if (! $store || ! $this->publishService->isPublished($store)) {
+            return response()->json(['message' => 'Storefront not found.'], 404);
+        }
+
+        $this->ensureStoreMerchantActive($store);
+
+        $data = $request->validate([
+            'reference' => 'required|string|max:120',
+        ]);
+
+        try {
+            $order = $this->paystack->verifyAndMarkPaid($store, $data['reference']);
+        } catch (\Throwable $exception) {
+            return response()->json(['message' => $exception->getMessage()], 422);
+        }
+
         return response()->json([
             'order' => $this->formatOrder($order),
-        ], 201);
+        ]);
+    }
+
+    private function defaultCheckoutCallback(Store $store, StoreOrder $order): string
+    {
+        $base = rtrim((string) config('dodopayments.app_url', 'http://localhost:3000'), '/');
+        $platformDomain = config('storehause.platform_domain', 'yrayhostings.com.ng');
+
+        if (app()->environment('local')) {
+            return "{$base}/s/{$store->slug}/checkout/success?order=".urlencode($order->order_number);
+        }
+
+        return "https://{$store->slug}.{$platformDomain}/checkout/success?order=".urlencode($order->order_number);
     }
 
     public function recordVisit(Request $request, string $slug): JsonResponse
     {
-        $store = Store::where('slug', Str::slug($slug))->first();
+        $store = Store::with('merchant')->where('slug', Str::slug($slug))->first();
 
         if (! $store) {
             return response()->json([
@@ -203,6 +304,8 @@ class PublicStorefrontController extends Controller
                 'message' => 'This storefront has not been published yet.',
             ], 404);
         }
+
+        $this->ensureStoreMerchantActive($store);
 
         $data = $request->validate([
             'session_id' => 'nullable|string|max:120',
@@ -227,7 +330,7 @@ class PublicStorefrontController extends Controller
 
     public function submitContact(Request $request, string $slug): JsonResponse
     {
-        $store = Store::where('slug', Str::slug($slug))->first();
+        $store = Store::with('merchant')->where('slug', Str::slug($slug))->first();
 
         if (! $store) {
             return response()->json([
@@ -240,6 +343,8 @@ class PublicStorefrontController extends Controller
                 'message' => 'This storefront has not been published yet.',
             ], 404);
         }
+
+        $this->ensureStoreMerchantActive($store);
 
         $data = $request->validate([
             'block_id' => 'nullable|string|max:80',
@@ -286,16 +391,64 @@ class PublicStorefrontController extends Controller
         ], 201);
     }
 
+    public function recordAbandonedCart(Request $request, string $slug): JsonResponse
+    {
+        $store = Store::with('merchant')->where('slug', Str::slug($slug))->first();
+
+        if (! $store || ! $this->publishService->isPublished($store)) {
+            return response()->json(['message' => 'Storefront not found.'], 404);
+        }
+
+        $this->ensureStoreMerchantActive($store);
+
+        $data = $request->validate([
+            'session_token' => 'required|string|max:64',
+            'customer_name' => 'nullable|string|max:160',
+            'customer_email' => 'nullable|email|max:255',
+            'customer_phone' => 'nullable|string|max:40',
+            'delivery_address' => 'nullable|string|max:2000',
+            'subtotal' => 'required|numeric|min:0',
+            'currency' => 'nullable|string|max:3',
+            'items' => 'required|array|min:1|max:100',
+            'items.*.product_id' => 'required|string|max:120',
+            'items.*.name' => 'required|string|max:255',
+            'items.*.quantity' => 'required|integer|min:1|max:999',
+            'items.*.unit_price' => 'required|numeric|min:0',
+            'items.*.total' => 'required|numeric|min:0',
+            'items.*.currency' => 'nullable|string|max:3',
+        ]);
+
+        try {
+            $cart = $this->abandonedRecovery->upsertAbandonedCart($store, $data);
+        } catch (\Throwable $e) {
+            return response()->json(['message' => $e->getMessage()], 422);
+        }
+
+        return response()->json([
+            'cart' => [
+                'id' => (string) $cart->id,
+                'session_token' => $cart->session_token,
+                'last_activity_at' => $cart->last_activity_at?->toIso8601String(),
+            ],
+        ], 201);
+    }
+
     private function formatPublicPayload(Store $store): array
     {
         $storefront = $this->publishService->resolvePublished($store)
             ?? $this->builderService->synthesizeStorefront($store);
 
         return [
-            'store' => array_merge($this->formatStore($store), $this->publishService->publishMeta($store)),
+            'store' => array_merge($this->formatStore($store), $this->publishService->publishMeta($store), [
+                'checkout_enabled' => $this->paystack->isConfigured(),
+            ]),
             'storefront' => $this->productService->mergeIntoStorefront($storefront, $store, activeOnly: true),
             'categories' => $this->categoryService->listForStore($store),
             'generation_id' => $store->storefront_generation_id,
+            'checkout' => [
+                'payments_enabled' => $this->paystack->isConfigured(),
+                'paystack_public_key' => $this->paystack->publicKey(),
+            ],
         ];
     }
 

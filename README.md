@@ -1,6 +1,6 @@
-# StoreHause Backend API
+# Bizgrid Backend API
 
-Laravel backend for **StoreHause** — AI-powered storefronts for small businesses.
+Laravel backend for **Bizgrid** — AI-powered storefronts for small businesses.
 
 Product architecture and build backlog: see `../storehause/docs/arch.md`.
 
@@ -34,7 +34,7 @@ php artisan serve
 ## Environment
 
 ```env
-APP_NAME=StoreHause
+APP_NAME=Bizgrid
 DB_DATABASE=storehause
 
 OPENAI_API_KEY=your_openai_api_key_here
@@ -44,7 +44,7 @@ OPENAI_API_KEY=your_openai_api_key_here
 
 All routes are prefixed with `/api`.
 
-### StoreHause (merchants)
+### Bizgrid (merchants)
 
 - `POST /storehause/auth/register` — Register merchant
 - `POST /storehause/auth/login` — Login

@@ -9,6 +9,7 @@ use App\Models\StorefrontBuilderMessage;
 use App\Models\StorefrontBuilderSession;
 use App\Models\StorefrontTemplate;
 use App\Models\User;
+use App\Services\MerchantUsageEnforcementService;
 use App\Services\StorefrontBuilderService;
 use App\Services\StorefrontPublishService;
 use App\Services\StoreProductService;
@@ -27,6 +28,7 @@ class StorefrontBuilderController extends Controller
         private readonly StoreProductService $productService,
         private readonly StorefrontPublishService $publishService,
         private readonly WorkbenchProjectStorage $projectStorage,
+        private readonly MerchantUsageEnforcementService $enforcement,
     ) {}
 
     public function startSession(Request $request): JsonResponse
@@ -75,6 +77,7 @@ class StorefrontBuilderController extends Controller
             'storefront_snapshot' => 'nullable|array',
             'brand_color' => 'nullable|string|regex:/^#[0-9A-Fa-f]{6}$/',
             'color_label' => 'nullable|string|max:120',
+            'logo_url' => 'nullable|url|max:2048',
             'media_updates' => 'nullable|array',
             'apply_stock_images' => 'nullable|boolean',
         ]);
@@ -257,6 +260,7 @@ class StorefrontBuilderController extends Controller
 
         $session = $this->findOwnedSession($request, $sessionId);
         $store = $this->ensureStoreForSession($session, $request->user());
+        $this->enforceAiUsage($store);
         $this->syncStoreFromProfile($store, $session->business_profile ?? []);
         $templateId = $data['selected_template_id'] ?? $session->selected_template_id;
 
@@ -402,6 +406,8 @@ class StorefrontBuilderController extends Controller
                 'message' => 'Generate a website before applying chat edits.',
             ], 422);
         }
+
+        $this->enforceAiUsage($store);
 
         if (! empty($data['storefront'])) {
             $storefront = $data['storefront'];
@@ -1261,6 +1267,27 @@ class StorefrontBuilderController extends Controller
                 return true;
             }
 
+            if (array_key_exists('logo_url', $data)) {
+                $logoUrl = is_string($data['logo_url']) && trim($data['logo_url']) !== ''
+                    ? trim($data['logo_url'])
+                    : null;
+                $store->logo_url = $logoUrl;
+                $store->save();
+
+                $this->appendAssistantMessage(
+                    $session,
+                    $logoUrl
+                        ? 'Done — I saved your logo. It will appear in your site header once your website is built.'
+                        : 'Done — I removed your logo. Your business name will show in the header instead.',
+                    [
+                        'type' => 'logo_applied',
+                        'logo_url' => $logoUrl,
+                    ],
+                );
+
+                return true;
+            }
+
             return false;
         }
 
@@ -1308,8 +1335,20 @@ class StorefrontBuilderController extends Controller
             $summary = 'Done — I added suitable photos to your website. Check the preview on the right.';
         }
 
+        if (array_key_exists('logo_url', $data)) {
+            $logoUrl = is_string($data['logo_url']) && trim($data['logo_url']) !== ''
+                ? trim($data['logo_url'])
+                : null;
+            $store->logo_url = $logoUrl;
+            $store->save();
+            $summary = $logoUrl
+                ? 'Done — I updated your logo. Check the preview on the right.'
+                : 'Done — I removed your logo. Your business name will show in the header instead.';
+            $payloadType = 'logo_applied';
+        }
+
         $changedPaths = array_values(array_unique($changedPaths));
-        if ($changedPaths === [] && empty($data['brand_color'])) {
+        if ($changedPaths === [] && empty($data['brand_color']) && ! array_key_exists('logo_url', $data)) {
             return false;
         }
 
@@ -1327,6 +1366,7 @@ class StorefrontBuilderController extends Controller
                 'type' => $payloadType,
                 'changed_paths' => $changedPaths,
                 'brand_color' => $data['brand_color'] ?? $store->brand_color,
+                ...(array_key_exists('logo_url', $data) ? ['logo_url' => $store->logo_url] : []),
             ],
         );
 
@@ -1474,5 +1514,16 @@ class StorefrontBuilderController extends Controller
         }
 
         return $slug;
+    }
+
+    private function enforceAiUsage(Store $store): void
+    {
+        $store->loadMissing('merchant');
+        if (! $store->merchant) {
+            return;
+        }
+
+        $this->enforcement->assertCanUseAi($store->merchant);
+        $this->enforcement->consumeAiCredit($store->merchant);
     }
 }

@@ -4,13 +4,23 @@ declare(strict_types=1);
 
 namespace App\Http\Controllers;
 
+use App\Models\BillingWebhookEvent;
 use App\Models\Merchant;
+use App\Models\MerchantNote;
+use App\Models\StoreOrder;
+use App\Models\AdminAuditLog;
+use App\Services\AdminAuditService;
+use App\Services\MerchantUsageService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Validator;
 
 class AdminMerchantController extends Controller
 {
+    public function __construct(
+        private readonly AdminAuditService $audit,
+        private readonly MerchantUsageService $usage,
+    ) {}
     public function index(Request $request): JsonResponse
     {
         $query = Merchant::withCount('stores')
@@ -133,6 +143,12 @@ class AdminMerchantController extends Controller
         }
 
         $merchant->save();
+
+        $this->audit->log($request, 'merchant.status_updated', 'merchant', $merchant->id, [
+            'status' => $status,
+            'reason' => $validator->validated()['reason'] ?? null,
+        ]);
+
         $merchant->load(['owner:id,name,email', 'stores']);
         $merchant->loadCount('stores');
         $merchant->loadSum('stores as gross_revenue', 'gross_revenue');
@@ -144,6 +160,136 @@ class AdminMerchantController extends Controller
             'message' => 'Merchant status updated',
             'data' => $this->formatMerchant($merchant, true),
         ]);
+    }
+
+    public function billing(int $id): JsonResponse
+    {
+        $merchant = Merchant::with('owner:id,name,email')->find($id);
+
+        if (! $merchant) {
+            return response()->json(['success' => false, 'message' => 'Merchant not found'], 404);
+        }
+
+        return response()->json([
+            'success' => true,
+            'data' => $this->formatBilling($merchant),
+        ]);
+    }
+
+    public function updateBilling(Request $request, int $id): JsonResponse
+    {
+        $validator = Validator::make($request->all(), [
+            'subscription_plan' => 'sometimes|in:starter,growth,scale',
+            'subscription_status' => 'sometimes|in:trial,active,past_due,cancelled',
+            'sms_purchased_balance' => 'sometimes|integer|min:0',
+            'whatsapp_purchased_balance' => 'sometimes|integer|min:0',
+            'ai_purchased_credits' => 'sometimes|integer|min:0',
+            'grant_monthly_allowances' => 'sometimes|boolean',
+        ]);
+
+        if ($validator->fails()) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Validation failed',
+                'errors' => $validator->errors(),
+            ], 422);
+        }
+
+        $merchant = Merchant::find($id);
+        if (! $merchant) {
+            return response()->json(['success' => false, 'message' => 'Merchant not found'], 404);
+        }
+
+        $data = $validator->validated();
+
+        if (isset($data['subscription_plan'])) {
+            $merchant->subscription_plan = $data['subscription_plan'];
+        }
+        if (isset($data['subscription_status'])) {
+            $merchant->subscription_status = $data['subscription_status'];
+        }
+        if (isset($data['sms_purchased_balance'])) {
+            $merchant->sms_purchased_balance = $data['sms_purchased_balance'];
+        }
+        if (isset($data['whatsapp_purchased_balance'])) {
+            $merchant->whatsapp_purchased_balance = $data['whatsapp_purchased_balance'];
+        }
+        if (isset($data['ai_purchased_credits'])) {
+            $merchant->ai_purchased_credits = $data['ai_purchased_credits'];
+        }
+
+        $merchant->save();
+
+        if (! empty($data['grant_monthly_allowances'])) {
+            $this->usage->grantMonthlyAllowances($merchant);
+        }
+
+        $this->audit->log($request, 'merchant.billing_updated', 'merchant', $merchant->id, $data);
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Billing updated',
+            'data' => $this->formatBilling($merchant->fresh()),
+        ]);
+    }
+
+    public function impersonate(Request $request, int $id): JsonResponse
+    {
+        $merchant = Merchant::with('owner')->find($id);
+
+        if (! $merchant || ! $merchant->owner) {
+            return response()->json(['success' => false, 'message' => 'Merchant or owner not found'], 404);
+        }
+
+        $token = $merchant->owner->createToken('admin-impersonation')->plainTextToken;
+        $appUrl = config('dodopayments.app_url', 'http://localhost:3000');
+
+        $this->audit->log($request, 'merchant.impersonated', 'merchant', $merchant->id, [
+            'owner_user_id' => $merchant->owner_user_id,
+        ]);
+
+        return response()->json([
+            'success' => true,
+            'data' => [
+                'token' => $token,
+                'app_url' => $appUrl,
+                'merchant' => [
+                    'id' => $merchant->id,
+                    'business_name' => $merchant->business_name,
+                ],
+                'user' => [
+                    'id' => $merchant->owner->id,
+                    'name' => $merchant->owner->name,
+                    'email' => $merchant->owner->email,
+                ],
+            ],
+        ]);
+    }
+
+    private function formatBilling(Merchant $merchant): array
+    {
+        $planKey = $merchant->subscription_plan ?: 'starter';
+        $plan = $this->usage->planConfig($planKey);
+
+        return [
+            'subscription_plan' => $merchant->subscription_plan,
+            'subscription_status' => $merchant->subscription_status,
+            'subscription_renews_at' => $merchant->subscription_renews_at?->toIso8601String(),
+            'dodo_customer_id' => $merchant->dodo_customer_id,
+            'dodo_subscription_id' => $merchant->dodo_subscription_id,
+            'plan_name' => $plan['name'] ?? ucfirst($planKey),
+            'plan_price_label' => $plan['price_label'] ?? null,
+            'usage' => $this->usage->formatUsage($merchant),
+            'balances' => [
+                'sms_included_remaining' => (int) $merchant->sms_included_remaining,
+                'sms_purchased_balance' => (int) $merchant->sms_purchased_balance,
+                'whatsapp_included_remaining' => (int) $merchant->whatsapp_included_remaining,
+                'whatsapp_purchased_balance' => (int) $merchant->whatsapp_purchased_balance,
+                'ai_purchased_credits' => (int) $merchant->ai_purchased_credits,
+                'ai_credits_used_today' => (int) $merchant->ai_credits_used_today,
+                'monthly_processed_ngn' => (float) $merchant->monthly_processed_ngn,
+            ],
+        ];
     }
 
     private function formatMerchant(Merchant $merchant, bool $includeStores = false): array
@@ -160,9 +306,13 @@ class AdminMerchantController extends Controller
             'status' => $merchant->status,
             'subscription_plan' => $merchant->subscription_plan,
             'subscription_status' => $merchant->subscription_status,
+            'subscription_renews_at' => $merchant->subscription_renews_at?->toIso8601String(),
+            'dodo_customer_id' => $merchant->dodo_customer_id,
+            'dodo_subscription_id' => $merchant->dodo_subscription_id,
             'activated_at' => $merchant->activated_at?->toIso8601String(),
             'suspended_at' => $merchant->suspended_at?->toIso8601String(),
             'suspension_reason' => $merchant->suspension_reason,
+            'tags' => $merchant->tags ?? [],
             'stores_count' => (int) ($merchant->stores_count ?? 0),
             'products_count' => (int) ($merchant->products_count ?? 0),
             'orders_count' => (int) ($merchant->orders_count ?? 0),
@@ -177,6 +327,7 @@ class AdminMerchantController extends Controller
         ];
 
         if ($includeStores) {
+            $platformDomain = config('storehause.platform_domain', 'yrayhostings.com.ng');
             $data['stores'] = $merchant->relationLoaded('stores')
                 ? $merchant->stores->map(fn ($store) => [
                     'id' => $store->id,
@@ -184,10 +335,12 @@ class AdminMerchantController extends Controller
                     'slug' => $store->slug,
                     'status' => $store->status,
                     'primary_domain' => $store->primary_domain,
+                    'subdomain_host' => "{$store->slug}.{$platformDomain}",
                     'storefront_template_id' => $store->storefront_template_id,
                     'products_count' => (int) $store->products_count,
                     'orders_count' => (int) $store->orders_count,
                     'gross_revenue' => (float) $store->gross_revenue,
+                    'published_at' => $store->published_at?->toIso8601String(),
                     'created_at' => $store->created_at?->toIso8601String(),
                     'updated_at' => $store->updated_at?->toIso8601String(),
                 ])->values()
@@ -195,5 +348,142 @@ class AdminMerchantController extends Controller
         }
 
         return $data;
+    }
+
+    public function notes(int $id): JsonResponse
+    {
+        $merchant = Merchant::find($id);
+        if (! $merchant) {
+            return response()->json(['success' => false, 'message' => 'Merchant not found'], 404);
+        }
+
+        $notes = MerchantNote::with('admin:id,name,email')
+            ->where('merchant_id', $merchant->id)
+            ->orderByDesc('created_at')
+            ->get()
+            ->map(fn ($note) => [
+                'id' => $note->id,
+                'body' => $note->body,
+                'admin' => $note->admin ? ['id' => $note->admin->id, 'name' => $note->admin->name] : null,
+                'created_at' => $note->created_at?->toIso8601String(),
+            ]);
+
+        return response()->json(['success' => true, 'data' => $notes]);
+    }
+
+    public function storeNote(Request $request, int $id): JsonResponse
+    {
+        $data = $request->validate(['body' => 'required|string|max:5000']);
+        $merchant = Merchant::find($id);
+        if (! $merchant) {
+            return response()->json(['success' => false, 'message' => 'Merchant not found'], 404);
+        }
+
+        $note = MerchantNote::create([
+            'merchant_id' => $merchant->id,
+            'admin_user_id' => $request->user()?->id,
+            'body' => $data['body'],
+        ]);
+
+        $this->audit->log($request, 'merchant.note_added', 'merchant', $merchant->id);
+
+        return response()->json([
+            'success' => true,
+            'data' => [
+                'id' => $note->id,
+                'body' => $note->body,
+                'created_at' => $note->created_at?->toIso8601String(),
+            ],
+        ], 201);
+    }
+
+    public function updateTags(Request $request, int $id): JsonResponse
+    {
+        $data = $request->validate([
+            'tags' => 'required|array|max:20',
+            'tags.*' => 'string|max:40',
+        ]);
+
+        $merchant = Merchant::find($id);
+        if (! $merchant) {
+            return response()->json(['success' => false, 'message' => 'Merchant not found'], 404);
+        }
+
+        $merchant->tags = array_values(array_unique($data['tags']));
+        $merchant->save();
+
+        $this->audit->log($request, 'merchant.tags_updated', 'merchant', $merchant->id, ['tags' => $merchant->tags]);
+
+        return response()->json(['success' => true, 'data' => ['tags' => $merchant->tags]]);
+    }
+
+    public function timeline(int $id): JsonResponse
+    {
+        $merchant = Merchant::with('stores')->find($id);
+        if (! $merchant) {
+            return response()->json(['success' => false, 'message' => 'Merchant not found'], 404);
+        }
+
+        $events = collect([
+            ['type' => 'merchant_created', 'label' => 'Merchant signed up', 'at' => $merchant->created_at?->toIso8601String()],
+            $merchant->activated_at ? ['type' => 'activated', 'label' => 'Account activated', 'at' => $merchant->activated_at->toIso8601String()] : null,
+            $merchant->suspended_at ? ['type' => 'suspended', 'label' => 'Account suspended', 'at' => $merchant->suspended_at->toIso8601String()] : null,
+        ])->filter();
+
+        foreach ($merchant->stores as $store) {
+            $events->push(['type' => 'store_created', 'label' => "Store created: {$store->name}", 'at' => $store->created_at?->toIso8601String()]);
+            if ($store->published_at) {
+                $events->push(['type' => 'store_published', 'label' => "Store published: {$store->name}", 'at' => $store->published_at->toIso8601String()]);
+            }
+        }
+
+        $firstOrder = StoreOrder::query()
+            ->whereIn('store_id', $merchant->stores->pluck('id'))
+            ->orderBy('placed_at')
+            ->first();
+
+        if ($firstOrder) {
+            $events->push(['type' => 'first_order', 'label' => "First order: {$firstOrder->order_number}", 'at' => $firstOrder->placed_at?->toIso8601String()]);
+        }
+
+        $auditEvents = AdminAuditLog::query()
+            ->where('target_type', 'merchant')
+            ->where('target_id', $merchant->id)
+            ->orderByDesc('created_at')
+            ->limit(20)
+            ->get()
+            ->map(fn ($log) => [
+                'type' => $log->action,
+                'label' => str_replace('.', ' ', $log->action),
+                'at' => $log->created_at?->toIso8601String(),
+            ]);
+
+        $timeline = $events->merge($auditEvents)->filter(fn ($e) => ! empty($e['at']))
+            ->sortByDesc('at')
+            ->values();
+
+        return response()->json(['success' => true, 'data' => $timeline]);
+    }
+
+    public function billingEvents(int $id): JsonResponse
+    {
+        $merchant = Merchant::find($id);
+        if (! $merchant) {
+            return response()->json(['success' => false, 'message' => 'Merchant not found'], 404);
+        }
+
+        $events = BillingWebhookEvent::query()
+            ->where('merchant_id', $merchant->id)
+            ->orderByDesc('created_at')
+            ->limit(50)
+            ->get()
+            ->map(fn ($e) => [
+                'id' => $e->id,
+                'event_type' => $e->event_type,
+                'status' => $e->status,
+                'created_at' => $e->created_at?->toIso8601String(),
+            ]);
+
+        return response()->json(['success' => true, 'data' => $events]);
     }
 }

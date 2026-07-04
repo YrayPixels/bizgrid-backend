@@ -62,6 +62,25 @@ it('returns 404 for unpublished public storefronts', function () {
         ->assertJsonPath('message', 'This storefront has not been published yet.');
 });
 
+it('lists only published storefronts for sitemap indexing', function () {
+    $user = User::factory()->create();
+    $store = publishTestStorefront($user);
+
+    $this->getJson('/api/storehause/public/storefronts')
+        ->assertOk()
+        ->assertJsonCount(0, 'data');
+
+    $this->actingAs($user, 'sanctum')
+        ->postJson("/api/storehause/stores/{$store->id}/publish")
+        ->assertOk();
+
+    $this->getJson('/api/storehause/public/storefronts')
+        ->assertOk()
+        ->assertJsonCount(1, 'data')
+        ->assertJsonPath('data.0.slug', 'glow-rituals')
+        ->assertJsonPath('data.0.business_name', 'Glow Rituals');
+});
+
 it('publishes a draft storefront and exposes it publicly', function () {
     $user = User::factory()->create();
     $store = publishTestStorefront($user);

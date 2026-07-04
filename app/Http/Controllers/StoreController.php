@@ -8,6 +8,8 @@ use App\Http\Controllers\Concerns\StorehauseHelpers;
 use App\Models\Merchant;
 use App\Models\Store;
 use App\Models\StorefrontTemplate;
+use App\Services\MerchantUsageEnforcementService;
+use App\Services\PlatformNotificationService;
 use App\Services\StorefrontBuilderService;
 use App\Services\StorefrontPublishService;
 use App\Services\StoreProductService;
@@ -25,6 +27,8 @@ class StoreController extends Controller
         private readonly StorefrontBuilderService $builderService,
         private readonly StoreProductService $productService,
         private readonly StorefrontPublishService $publishService,
+        private readonly MerchantUsageEnforcementService $enforcement,
+        private readonly PlatformNotificationService $notifications,
     ) {}
 
     public function createStore(Request $request): JsonResponse
@@ -43,6 +47,11 @@ class StoreController extends Controller
         $existingStore = Store::whereHas('merchant', fn ($query) => $query->where('owner_user_id', $user->id))->first();
 
         if ($existingStore) {
+            $merchant = $existingStore->merchant;
+            if ($merchant) {
+                $this->enforcement->assertCanCreateStore($merchant);
+            }
+
             return response()->json([
                 'message' => 'Store already exists for this account.',
                 'store' => $this->formatStore($existingStore->load('merchant')),
@@ -93,6 +102,13 @@ class StoreController extends Controller
             'storefront_template_id' => $data['storefront_template_id'] ?? 'ai_pick',
         ])->load('merchant');
 
+        $this->notifications->notify(
+            'merchant.signup',
+            'New merchant: '.$merchant->business_name,
+            $merchant->email,
+            ['merchant_id' => $merchant->id],
+        );
+
         return response()->json([
             'store' => $this->formatStore($store),
         ], 201);
@@ -124,6 +140,7 @@ class StoreController extends Controller
             'contact_email' => 'sometimes|nullable|email|max:255',
             'contact_phone' => 'sometimes|nullable|string|max:40',
             'brand_color' => ['sometimes', 'string', 'regex:/^#[0-9A-Fa-f]{6}$/'],
+            'logo_url' => 'nullable|url|max:2048',
         ], $this->businessProfileRules(required: false)));
 
         $store = Store::with('merchant')
@@ -150,6 +167,10 @@ class StoreController extends Controller
 
         if (isset($data['brand_color'])) {
             $store->brand_color = $data['brand_color'];
+        }
+
+        if (array_key_exists('logo_url', $data)) {
+            $store->logo_url = $data['logo_url'];
         }
 
         foreach (['business_location', 'weekly_orders', 'staff_count', 'physical_store_count'] as $field) {
@@ -201,6 +222,12 @@ class StoreController extends Controller
         ]);
 
         $store = $this->findOwnedStore($request, (int) $data['store_id']);
+        $store->loadMissing('merchant');
+        if ($store->merchant && empty($data['storefront'])) {
+            $this->enforcement->assertCanUseAi($store->merchant);
+            $this->enforcement->consumeAiCredit($store->merchant);
+        }
+
         if (isset($data['storefront_template_id'])) {
             $store->storefront_template_id = $data['storefront_template_id'];
         }

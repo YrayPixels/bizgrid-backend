@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Http\Controllers;
 
 use App\Http\Controllers\Concerns\StorehauseHelpers;
+use App\Models\Merchant;
 use App\Models\User;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -52,6 +53,14 @@ class AuthController extends Controller
             ]);
         }
 
+        $merchant = Merchant::where('owner_user_id', $user->id)->first();
+        if ($merchant && $merchant->status === 'suspended') {
+            return response()->json([
+                'message' => 'Your account has been suspended. Please contact support.',
+                'reason' => $merchant->suspension_reason,
+            ], 403);
+        }
+
         $token = $user->createToken('storehause')->plainTextToken;
 
         return response()->json([
@@ -62,6 +71,14 @@ class AuthController extends Controller
 
     public function me(Request $request): JsonResponse
     {
+        $merchant = Merchant::where('owner_user_id', $request->user()->id)->first();
+        if ($merchant && $merchant->status === 'suspended') {
+            return response()->json([
+                'message' => 'Your account has been suspended. Please contact support.',
+                'reason' => $merchant->suspension_reason,
+            ], 403);
+        }
+
         return response()->json([
             'user' => $this->formatUser($request->user()),
         ]);

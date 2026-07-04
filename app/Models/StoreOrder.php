@@ -19,12 +19,15 @@ class StoreOrder extends Model
         'delivery_address',
         'status',
         'payment_status',
+        'paystack_reference',
         'currency',
         'subtotal',
         'total_amount',
         'items',
         'notes',
         'placed_at',
+        'paid_at',
+        'settlement_status',
     ];
 
     protected function casts(): array
@@ -34,6 +37,7 @@ class StoreOrder extends Model
             'total_amount' => 'decimal:2',
             'items' => 'array',
             'placed_at' => 'datetime',
+            'paid_at' => 'datetime',
         ];
     }
 

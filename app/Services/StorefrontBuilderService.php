@@ -162,7 +162,7 @@ class StorefrontBuilderService
                 'privacy_policy' => [
                     'title' => 'Privacy policy',
                     'source' => 'platform_default',
-                    'body' => "This privacy policy explains how {$businessName} and Storehaus collect, use, and protect your personal information when you shop on this storefront.\n\nWe collect information you provide at checkout such as your name, email, phone number, and delivery address. We use this information to process orders, communicate about your purchase, and improve our service.\n\nPayment details are processed securely by our payment partners. We do not store full card numbers on our servers.\n\nYou may contact us to request access to or correction of your personal data.".($contactEmail ? " Email: {$contactEmail}." : ''),
+                    'body' => "This privacy policy explains how {$businessName} and Bizgrid collect, use, and protect your personal information when you shop on this storefront.\n\nWe collect information you provide at checkout such as your name, email, phone number, and delivery address. We use this information to process orders, communicate about your purchase, and improve our service.\n\nPayment details are processed securely by our payment partners. We do not store full card numbers on our servers.\n\nYou may contact us to request access to or correction of your personal data.".($contactEmail ? " Email: {$contactEmail}." : ''),
                 ],
             ],
             'products' => $products,
@@ -1350,7 +1350,7 @@ class StorefrontBuilderService
                 ['label' => 'Soft blush', 'color' => '#E6A79F'],
             ],
             default => [
-                ['label' => 'StoreHause teal', 'color' => '#0E7C66'],
+                ['label' => 'Bizgrid green', 'color' => '#0E7C66'],
                 ['label' => 'Warm terracotta', 'color' => '#C47A2C'],
                 ['label' => 'Deep navy', 'color' => '#1E3A5F'],
             ],
