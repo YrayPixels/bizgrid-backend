@@ -107,4 +107,9 @@ class Store extends Model
     {
         return $this->hasMany(CustomerConversation::class);
     }
+
+    public function domains(): HasMany
+    {
+        return $this->hasMany(StoreDomain::class);
+    }
 }

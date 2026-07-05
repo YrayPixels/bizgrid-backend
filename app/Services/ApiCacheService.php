@@ -61,6 +61,7 @@ class ApiCacheService
         $default = (int) config('api-cache.default_ttl', 60);
 
         return match (true) {
+            str_contains($path, 'stores/me/domains') => $map['store_me'] ?? $default,
             str_contains($path, 'stores/me') && ! str_contains($path, 'payments') => $map['store_me'] ?? $default,
             str_ends_with($path, 'dashboard') => $map['dashboard'] ?? $default,
             str_ends_with($path, 'products') => $map['products'] ?? $default,
@@ -75,6 +76,7 @@ class ApiCacheService
             str_contains($path, 'marketing/abandoned') => $map['marketing_abandoned'] ?? $default,
             str_contains($path, 'marketing/status') => $map['marketing'] ?? $default,
             str_contains($path, 'public/storefronts/by-host'),
+            str_contains($path, 'public/storefronts/resolve-host'),
             str_contains($path, 'public/storefronts/') && ! str_ends_with($path, 'storefronts') => $map['public_storefront'] ?? $default,
             str_ends_with($path, 'public/storefronts') => $map['public_index'] ?? $default,
             str_contains($path, 'admin/analytics/overview') => $map['admin_analytics'] ?? $default,
@@ -137,7 +139,20 @@ class ApiCacheService
             Cache::tags(['public:host:'.strtolower($store->primary_domain)])->flush();
         }
 
+        foreach ($store->domains()->where('status', 'verified')->pluck('hostname') as $hostname) {
+            Cache::tags(['public:host:'.strtolower($hostname)])->flush();
+        }
+
         $this->forgetAdmin();
+    }
+
+    public function forgetPublicHost(string $hostname): void
+    {
+        if (! $this->supportsTags()) {
+            return;
+        }
+
+        Cache::tags(['public:host:'.strtolower($hostname)])->flush();
     }
 
     public function forgetUser(int $userId): void

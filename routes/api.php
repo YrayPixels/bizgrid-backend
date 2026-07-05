@@ -24,6 +24,7 @@ use App\Http\Controllers\PublicStorefrontController;
 use App\Http\Controllers\StoreCategoryController;
 use App\Http\Controllers\PaystackWebhookController;
 use App\Http\Controllers\StoreController;
+use App\Http\Controllers\StoreDomainController;
 use App\Http\Controllers\StorePaymentController;
 use App\Http\Controllers\StoreProductController;
 use App\Http\Controllers\StorefrontBuilderController;
@@ -113,6 +114,7 @@ Route::prefix('storehause')->group(function () {
     Route::middleware('api.cache:public')->group(function () {
         Route::get('/public/storefronts', [PublicStorefrontController::class, 'listPublished']);
         Route::get('/public/storefronts/by-host', [PublicStorefrontController::class, 'publicStorefrontByHost']);
+        Route::get('/public/storefronts/resolve-host', [PublicStorefrontController::class, 'resolveHost']);
         Route::get('/public/storefronts/{slug}', [PublicStorefrontController::class, 'publicStorefront']);
         Route::get('/public/generations/{generationId}', [PublicStorefrontController::class, 'publicGeneration']);
     });
@@ -147,6 +149,11 @@ Route::prefix('storehause')->group(function () {
         Route::post('/stores', [StoreController::class, 'createStore']);
         Route::get('/stores/me', [StoreController::class, 'myStore']);
         Route::patch('/stores/me', [StoreController::class, 'updateMyStore']);
+        Route::get('/stores/me/domains', [StoreDomainController::class, 'index']);
+        Route::post('/stores/me/domains', [StoreDomainController::class, 'store']);
+        Route::post('/stores/me/domains/{domainId}/verify', [StoreDomainController::class, 'verify']);
+        Route::patch('/stores/me/domains/{domainId}/primary', [StoreDomainController::class, 'setPrimary']);
+        Route::delete('/stores/me/domains/{domainId}', [StoreDomainController::class, 'destroy']);
         Route::get('/stores/me/payments', [StorePaymentController::class, 'show']);
         Route::patch('/stores/me/payments', [StorePaymentController::class, 'update']);
         Route::post('/stores/{storeId}/images', [StoreController::class, 'uploadStorefrontImage']);

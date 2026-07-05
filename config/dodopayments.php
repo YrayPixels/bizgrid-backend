@@ -20,6 +20,8 @@ return [
                 'monthly_processing_ngn' => 1_000_000,
                 'max_stores' => 1,
                 'max_customers' => 500,
+                'custom_domains' => false,
+                'max_custom_domains' => 0,
             ],
             'included_monthly' => [
                 'sms_units' => 100,
@@ -43,6 +45,8 @@ return [
                 'monthly_processing_ngn' => 10_000_000,
                 'max_stores' => 3,
                 'max_customers' => 5_000,
+                'custom_domains' => true,
+                'max_custom_domains' => 1,
             ],
             'included_monthly' => [
                 'sms_units' => 500,
@@ -52,6 +56,7 @@ return [
                 'Up to NGN 10M monthly processing',
                 'Up to 3 storefronts',
                 'Up to 5,000 customers',
+                '1 custom domain',
                 '500 SMS + 300 WhatsApp units/month',
                 '5 AI queries per day',
             ],
@@ -66,6 +71,8 @@ return [
                 'monthly_processing_ngn' => 50_000_000,
                 'max_stores' => 10,
                 'max_customers' => null,
+                'custom_domains' => true,
+                'max_custom_domains' => 5,
             ],
             'included_monthly' => [
                 'sms_units' => 2_000,
@@ -75,6 +82,7 @@ return [
                 'Up to NGN 50M monthly processing',
                 'Up to 10 storefronts',
                 'Unlimited customers',
+                'Up to 5 custom domains',
                 '2,000 SMS + 1,500 WhatsApp units/month',
                 '5 AI queries per day',
             ],

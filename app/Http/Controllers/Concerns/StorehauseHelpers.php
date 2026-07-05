@@ -6,6 +6,7 @@ namespace App\Http\Controllers\Concerns;
 
 use App\Models\Merchant;
 use App\Models\Store;
+use App\Models\StoreDomain;
 use App\Models\StoreOrder;
 use App\Models\StoreProduct;
 use App\Models\User;
@@ -153,6 +154,15 @@ trait StorehauseHelpers
             }
 
             return Store::with('merchant')->where('slug', $subdomain)->first();
+        }
+
+        $customDomain = StoreDomain::query()
+            ->where('hostname', $host)
+            ->where('status', 'verified')
+            ->first();
+
+        if ($customDomain) {
+            return Store::with('merchant')->find($customDomain->store_id);
         }
 
         return Store::with('merchant')->where('primary_domain', $host)->first();

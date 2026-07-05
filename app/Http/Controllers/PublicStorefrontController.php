@@ -88,6 +88,33 @@ class PublicStorefrontController extends Controller
         return response()->json($this->formatPublicPayload($store));
     }
 
+    public function resolveHost(Request $request): JsonResponse
+    {
+        $host = strtolower((string) $request->query('host', ''));
+        $host = explode(':', $host)[0];
+
+        if ($host === '') {
+            return response()->json([
+                'message' => 'Host is required.',
+            ], 422);
+        }
+
+        $store = $this->findStoreByHost($host);
+
+        if (! $store || ! $this->publishService->isPublished($store)) {
+            return response()->json([
+                'message' => 'Storefront not found.',
+            ], 404);
+        }
+
+        $this->ensureStoreMerchantActive($store);
+
+        return response()->json([
+            'slug' => $store->slug,
+            'hostname' => $host,
+        ]);
+    }
+
     public function publicStorefront(string $slug): JsonResponse
     {
         $store = Store::with('merchant')->where('slug', Str::slug($slug))->first();
