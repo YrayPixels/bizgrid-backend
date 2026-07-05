@@ -9,6 +9,7 @@ use App\Models\Store;
 use App\Models\StoreOrder;
 use App\Models\StoreProduct;
 use App\Models\User;
+use App\Services\StoreNotificationService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
@@ -86,6 +87,7 @@ trait StorehauseHelpers
             'subdomain' => $store->slug,
             'subdomain_host' => $subdomainHost,
             'primary_domain' => $store->primary_domain ?? $subdomainHost,
+            'notifications' => app(StoreNotificationService::class)->formatNotificationSettings($store),
         ];
     }
 

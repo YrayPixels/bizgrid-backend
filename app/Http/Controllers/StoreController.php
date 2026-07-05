@@ -10,6 +10,7 @@ use App\Models\Store;
 use App\Models\StorefrontTemplate;
 use App\Services\MerchantUsageEnforcementService;
 use App\Services\PlatformNotificationService;
+use App\Services\StoreNotificationService;
 use App\Services\StorefrontBuilderService;
 use App\Services\StorefrontPublishService;
 use App\Services\StoreProductService;
@@ -29,6 +30,7 @@ class StoreController extends Controller
         private readonly StorefrontPublishService $publishService,
         private readonly MerchantUsageEnforcementService $enforcement,
         private readonly PlatformNotificationService $notifications,
+        private readonly StoreNotificationService $storeNotifications,
     ) {}
 
     public function createStore(Request $request): JsonResponse
@@ -141,6 +143,13 @@ class StoreController extends Controller
             'contact_phone' => 'sometimes|nullable|string|max:40',
             'brand_color' => ['sometimes', 'string', 'regex:/^#[0-9A-Fa-f]{6}$/'],
             'logo_url' => 'nullable|url|max:2048',
+            'notify_merchant_new_order' => 'sometimes|boolean',
+            'notify_customer_order_confirmation' => 'sometimes|boolean',
+            'notify_customer_payment_confirmation' => 'sometimes|boolean',
+            'notify_merchant_low_stock' => 'sometimes|boolean',
+            'notification_email' => 'sometimes|nullable|email|max:255',
+            'customer_order_note' => 'sometimes|nullable|string|max:2000',
+            'sms_sender_name' => 'sometimes|nullable|string|max:11',
         ], $this->businessProfileRules(required: false)));
 
         $store = Store::with('merchant')
@@ -181,6 +190,20 @@ class StoreController extends Controller
 
         if (array_key_exists('payment_currencies', $data)) {
             $store->payment_currencies = $data['payment_currencies'];
+        }
+
+        foreach ([
+            'notify_merchant_new_order',
+            'notify_customer_order_confirmation',
+            'notify_customer_payment_confirmation',
+            'notify_merchant_low_stock',
+            'notification_email',
+            'customer_order_note',
+            'sms_sender_name',
+        ] as $field) {
+            if (array_key_exists($field, $data)) {
+                $store->{$field} = $data[$field];
+            }
         }
 
         $store->save();

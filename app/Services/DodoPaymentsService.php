@@ -18,6 +18,7 @@ class DodoPaymentsService
         private readonly DodoWebhookVerifier $webhookVerifier,
         private readonly MerchantUsageService $usage,
         private readonly PlatformNotificationService $notifications,
+        private readonly StoreNotificationService $storeNotifications,
     ) {}
 
     public function isConfigured(): bool
@@ -245,6 +246,13 @@ class DodoPaymentsService
         $merchant->activated_at ??= now();
         $merchant->save();
         $this->usage->grantMonthlyAllowances($merchant);
+
+        $plan = $this->usage->planConfig($planKey);
+        $this->storeNotifications->billingEvent($merchant, 'subscription_active', [
+            'plan' => $planKey,
+            'plan_name' => $plan['name'] ?? ucfirst($planKey),
+            'renews_at' => $this->storeNotifications->formatRenewalDate($merchant->subscription_renews_at),
+        ]);
     }
 
     private function syncAddOnPurchase(array $data): void
@@ -263,6 +271,13 @@ class DodoPaymentsService
         }
 
         $this->usage->applyAddOnPurchase($merchant, $type, $packId);
+
+        $pack = $this->usage->findAddOn($type, $packId);
+        $this->storeNotifications->billingEvent($merchant, 'add_on_purchased', [
+            'add_on_type' => $type,
+            'add_on_pack_id' => $packId,
+            'add_on_label' => is_array($pack) ? ($pack['label'] ?? $packId) : $packId,
+        ]);
     }
 
     private function syncSubscriptionStatus(array $data, string $status): void
@@ -274,6 +289,9 @@ class DodoPaymentsService
 
         $merchant->subscription_status = $status;
         $merchant->save();
+
+        $event = $status === 'on_hold' ? 'subscription_on_hold' : 'subscription_cancelled';
+        $this->storeNotifications->billingEvent($merchant, $event);
     }
 
     private function resolveMerchant(array $data): ?Merchant

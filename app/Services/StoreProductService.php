@@ -141,8 +141,13 @@ class StoreProductService
         ]);
     }
 
-    public function decrementStockForOrderItems(array $items): void
+    /**
+     * @return list<StoreProduct>
+     */
+    public function decrementStockForOrderItems(array $items): array
     {
+        $lowStock = [];
+
         foreach ($items as $line) {
             if (! is_array($line)) {
                 continue;
@@ -155,7 +160,13 @@ class StoreProductService
 
             $product->stock_quantity = max(0, $product->stock_quantity - (int) ($line['quantity'] ?? 0));
             $product->save();
+
+            if ($this->isLowStock($product)) {
+                $lowStock[] = $product->fresh() ?? $product;
+            }
         }
+
+        return $lowStock;
     }
 
     /** @param list<array<string, mixed>> $items

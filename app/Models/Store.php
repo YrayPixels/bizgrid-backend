@@ -32,6 +32,13 @@ class Store extends Model
         'physical_store_count',
         'whatsapp_auto_reply_enabled',
         'tiktok_auto_reply_enabled',
+        'notify_merchant_new_order',
+        'notify_customer_order_confirmation',
+        'notify_customer_payment_confirmation',
+        'notify_merchant_low_stock',
+        'notification_email',
+        'customer_order_note',
+        'sms_sender_name',
         'storefront_template_id',
         'storefront_content',
         'draft_json',
@@ -54,6 +61,10 @@ class Store extends Model
             'published_at' => 'datetime',
             'whatsapp_auto_reply_enabled' => 'boolean',
             'tiktok_auto_reply_enabled' => 'boolean',
+            'notify_merchant_new_order' => 'boolean',
+            'notify_customer_order_confirmation' => 'boolean',
+            'notify_customer_payment_confirmation' => 'boolean',
+            'notify_merchant_low_stock' => 'boolean',
         ];
     }
 

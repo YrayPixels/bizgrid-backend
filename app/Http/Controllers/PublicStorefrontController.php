@@ -14,6 +14,7 @@ use App\Services\AbandonedRecoveryService;
 use App\Services\MerchantUsageEnforcementService;
 use App\Services\PaystackService;
 use App\Services\PlatformNotificationService;
+use App\Services\StoreNotificationService;
 use App\Services\StoreCategoryService;
 use App\Services\StorefrontBuilderService;
 use App\Services\StorefrontPublishService;
@@ -37,6 +38,7 @@ class PublicStorefrontController extends Controller
         private readonly PlatformNotificationService $notifications,
         private readonly PaystackService $paystack,
         private readonly AbandonedRecoveryService $abandonedRecovery,
+        private readonly StoreNotificationService $storeNotifications,
     ) {}
 
     public function listPublished(): JsonResponse
@@ -197,7 +199,9 @@ class PublicStorefrontController extends Controller
 
         $paystackEnabled = $this->paystack->isConfigured();
 
-        $order = DB::transaction(function () use ($store, $data, $items, $subtotal, $currency, $paystackEnabled) {
+        $lowStockProducts = [];
+
+        $order = DB::transaction(function () use ($store, $data, $items, $subtotal, $currency, $paystackEnabled, &$lowStockProducts) {
             $order = StoreOrder::create([
                 'store_id' => $store->id,
                 'order_number' => $this->uniqueOrderNumber(),
@@ -215,7 +219,7 @@ class PublicStorefrontController extends Controller
                 'placed_at' => now(),
             ]);
 
-            $this->productService->decrementStockForOrderItems($items);
+            $lowStockProducts = $this->productService->decrementStockForOrderItems($items);
 
             if (! $paystackEnabled) {
                 $store->increment('orders_count');
@@ -228,6 +232,12 @@ class PublicStorefrontController extends Controller
 
             return $order;
         });
+
+        $this->storeNotifications->orderPlaced($store, $order, $paystackEnabled);
+
+        foreach ($lowStockProducts as $product) {
+            $this->storeNotifications->lowStock($store, $product);
+        }
 
         $this->notifications->notify(
             'order.placed',

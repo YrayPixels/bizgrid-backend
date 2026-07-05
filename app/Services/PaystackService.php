@@ -16,6 +16,7 @@ class PaystackService
 {
     public function __construct(
         private readonly PlatformNotificationService $notifications,
+        private readonly StoreNotificationService $storeNotifications,
     ) {}
 
     public function isConfigured(): bool
@@ -183,6 +184,10 @@ class PaystackService
                 'settlement_status' => 'pending_settlement',
             ],
         );
+
+        if ($order->store) {
+            $this->storeNotifications->orderPaid($order->store, $order);
+        }
     }
 
     private function uniqueReference(StoreOrder $order): string
