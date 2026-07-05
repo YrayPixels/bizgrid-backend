@@ -294,7 +294,7 @@ class PublicStorefrontController extends Controller
     private function defaultCheckoutCallback(Store $store, StoreOrder $order): string
     {
         $base = rtrim((string) config('dodopayments.app_url', 'http://localhost:3000'), '/');
-        $platformDomain = config('storehause.platform_domain', 'yrayhostings.com.ng');
+        $platformDomain = config('storehause.platform_domain', 'bizgrid.shop');
 
         if (app()->environment('local')) {
             return "{$base}/s/{$store->slug}/checkout/success?order=".urlencode($order->order_number);

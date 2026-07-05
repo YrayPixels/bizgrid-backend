@@ -139,7 +139,7 @@ class StorehauseController extends Controller
         $slug = isset($data['slug'])
             ? $this->uniqueStoreSlug($data['slug'], baseSlug: Str::slug($data['slug']))
             : $this->uniqueStoreSlug($data['business_name']);
-        $platformDomain = config('storehause.platform_domain', 'yrayhostings.com.ng');
+        $platformDomain = config('storehause.platform_domain', 'bizgrid.shop');
 
         $store = Store::create([
             'merchant_id' => $merchant->id,
@@ -790,7 +790,7 @@ class StorehauseController extends Controller
     private function formatStore(Store $store): array
     {
         $store->loadMissing('merchant');
-        $platformDomain = config('storehause.platform_domain', 'yrayhostings.com.ng');
+        $platformDomain = config('storehause.platform_domain', 'bizgrid.shop');
         $subdomainHost = "{$store->slug}.{$platformDomain}";
 
         return [
@@ -845,7 +845,7 @@ class StorehauseController extends Controller
 
     private function findStoreByHost(string $host): ?Store
     {
-        $platformDomain = config('storehause.platform_domain', 'yrayhostings.com.ng');
+        $platformDomain = config('storehause.platform_domain', 'bizgrid.shop');
 
         if (str_ends_with($host, '.'.$platformDomain)) {
             $prefix = substr($host, 0, -strlen($platformDomain) - 1);

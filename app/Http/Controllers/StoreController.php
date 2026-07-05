@@ -84,7 +84,7 @@ class StoreController extends Controller
         $slug = isset($data['slug'])
             ? $this->uniqueStoreSlug($data['slug'], baseSlug: Str::slug($data['slug']))
             : $this->uniqueStoreSlug($data['business_name']);
-        $platformDomain = config('storehause.platform_domain', 'yrayhostings.com.ng');
+        $platformDomain = config('storehause.platform_domain', 'bizgrid.shop');
 
         $store = Store::create([
             'merchant_id' => $merchant->id,

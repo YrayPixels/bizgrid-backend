@@ -411,7 +411,7 @@ class AbandonedRecoveryService
 
     private function checkoutRecoveryUrl(Store $store, StoreOrder $order): string
     {
-        $platformDomain = config('storehause.platform_domain', 'yrayhostings.com.ng');
+        $platformDomain = config('storehause.platform_domain', 'bizgrid.shop');
         $base = 'https://'.$store->slug.'.'.$platformDomain;
 
         return $base.'/checkout?recover='.urlencode($order->order_number);
@@ -419,7 +419,7 @@ class AbandonedRecoveryService
 
     private function cartRecoveryUrl(Store $store): string
     {
-        $platformDomain = config('storehause.platform_domain', 'yrayhostings.com.ng');
+        $platformDomain = config('storehause.platform_domain', 'bizgrid.shop');
 
         return 'https://'.$store->slug.'.'.$platformDomain.'/checkout';
     }
@@ -525,7 +525,7 @@ class AbandonedRecoveryService
     private function buildStoreContext(Store $store): array
     {
         $store->loadMissing('merchant');
-        $platformDomain = config('storehause.platform_domain', 'yrayhostings.com.ng');
+        $platformDomain = config('storehause.platform_domain', 'bizgrid.shop');
         $storefrontUrl = 'https://'.$store->slug.'.'.$platformDomain;
 
         return [

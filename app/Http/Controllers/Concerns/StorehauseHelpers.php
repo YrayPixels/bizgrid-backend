@@ -59,7 +59,7 @@ trait StorehauseHelpers
     protected function formatStore(Store $store): array
     {
         $store->loadMissing('merchant');
-        $platformDomain = config('storehause.platform_domain', 'yrayhostings.com.ng');
+        $platformDomain = config('storehause.platform_domain', 'bizgrid.shop');
         $subdomainHost = "{$store->slug}.{$platformDomain}";
 
         return [
@@ -132,7 +132,7 @@ trait StorehauseHelpers
 
     protected function findStoreByHost(string $host): ?Store
     {
-        $platformDomain = config('storehause.platform_domain', 'yrayhostings.com.ng');
+        $platformDomain = config('storehause.platform_domain', 'bizgrid.shop');
 
         if (str_ends_with($host, '.'.$platformDomain)) {
             $prefix = substr($host, 0, -strlen($platformDomain) - 1);

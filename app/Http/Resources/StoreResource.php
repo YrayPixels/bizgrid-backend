@@ -13,7 +13,7 @@ class StoreResource extends JsonResource
     /** @return array<string, mixed> */
     public function toArray(Request $request): array
     {
-        $platformDomain = config('storehause.platform_domain', 'yrayhostings.com.ng');
+        $platformDomain = config('storehause.platform_domain', 'bizgrid.shop');
         $subdomainHost = "{$this->slug}.{$platformDomain}";
 
         return [

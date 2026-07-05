@@ -191,7 +191,7 @@ class InboundMessagingService
     private function buildStoreContext(Store $store): array
     {
         $store->loadMissing('merchant');
-        $platformDomain = config('storehause.platform_domain', 'yrayhostings.com.ng');
+        $platformDomain = config('storehause.platform_domain', 'bizgrid.shop');
         $storefrontUrl = 'https://'.$store->slug.'.'.$platformDomain;
 
         $products = StoreProduct::query()

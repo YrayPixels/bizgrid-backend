@@ -72,7 +72,7 @@ class AdminStoreController extends Controller
 
     private function formatStore(Store $store): array
     {
-        $platformDomain = config('storehause.platform_domain', 'yrayhostings.com.ng');
+        $platformDomain = config('storehause.platform_domain', 'bizgrid.shop');
         $subdomainHost = "{$store->slug}.{$platformDomain}";
 
         return [

@@ -98,7 +98,7 @@ class StoreNotificationService
 
     public function storefrontOrderUrl(Store $store, StoreOrder $order, string $path = 'checkout/success'): string
     {
-        $platformDomain = config('storehause.platform_domain', 'yrayhostings.com.ng');
+        $platformDomain = config('storehause.platform_domain', 'bizgrid.shop');
         $base = 'https://'.$store->slug.'.'.$platformDomain;
 
         if ($path === 'checkout/success') {

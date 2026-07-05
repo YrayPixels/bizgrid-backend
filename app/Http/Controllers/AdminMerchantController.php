@@ -340,7 +340,7 @@ class AdminMerchantController extends Controller
         ];
 
         if ($includeStores) {
-            $platformDomain = config('storehause.platform_domain', 'yrayhostings.com.ng');
+            $platformDomain = config('storehause.platform_domain', 'bizgrid.shop');
             $data['stores'] = $merchant->relationLoaded('stores')
                 ? $merchant->stores->map(fn ($store) => [
                     'id' => $store->id,

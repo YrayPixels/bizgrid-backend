@@ -1115,7 +1115,7 @@ class StorefrontBuilderController extends Controller
         ])->save();
 
         $slug = $this->uniqueStoreSlug($businessName);
-        $platformDomain = config('storehause.platform_domain', 'yrayhostings.com.ng');
+        $platformDomain = config('storehause.platform_domain', 'bizgrid.shop');
 
         return Store::create([
             'merchant_id' => $merchant->id,
@@ -1496,7 +1496,7 @@ class StorefrontBuilderController extends Controller
     private function formatStore(Store $store): array
     {
         $store->loadMissing('merchant');
-        $platformDomain = config('storehause.platform_domain', 'yrayhostings.com.ng');
+        $platformDomain = config('storehause.platform_domain', 'bizgrid.shop');
         $subdomainHost = "{$store->slug}.{$platformDomain}";
 
         return [
