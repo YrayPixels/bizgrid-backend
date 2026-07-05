@@ -57,7 +57,7 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::patch('/admin/profile', [AdminController::class, 'update_profile']);
         Route::post('/revoke-admin-sessions', [AdminController::class, 'revoke_sessions'])->middleware('admin.role:super_admin');
 
-        Route::prefix('admin')->group(function () {
+        Route::prefix('admin')->middleware('api.cache:admin')->group(function () {
             Route::get('/search', [AdminSearchController::class, 'search']);
             Route::get('/health', [AdminHealthController::class, 'status']);
             Route::get('/notifications', [AdminNotificationController::class, 'index']);
@@ -106,17 +106,21 @@ Route::middleware('auth:sanctum')->group(function () {
 Route::prefix('storehause')->group(function () {
     Route::post('/auth/register', [AuthController::class, 'register'])->middleware('throttle:10,1');
     Route::post('/auth/login', [AuthController::class, 'login'])->middleware('throttle:10,1');
-    Route::get('/storefront-templates', [StorefrontTemplateController::class, 'active']);
+    Route::get('/storefront-templates', [StorefrontTemplateController::class, 'active'])
+        ->middleware('api.cache:shared');
     Route::post('/storefront-builder/recommend-templates', [StorefrontTemplateController::class, 'recommend']);
-    Route::get('/public/storefronts', [PublicStorefrontController::class, 'listPublished']);
-    Route::get('/public/storefronts/by-host', [PublicStorefrontController::class, 'publicStorefrontByHost']);
-    Route::get('/public/storefronts/{slug}', [PublicStorefrontController::class, 'publicStorefront']);
+
+    Route::middleware('api.cache:public')->group(function () {
+        Route::get('/public/storefronts', [PublicStorefrontController::class, 'listPublished']);
+        Route::get('/public/storefronts/by-host', [PublicStorefrontController::class, 'publicStorefrontByHost']);
+        Route::get('/public/storefronts/{slug}', [PublicStorefrontController::class, 'publicStorefront']);
+        Route::get('/public/generations/{generationId}', [PublicStorefrontController::class, 'publicGeneration']);
+    });
     Route::post('/public/storefronts/{slug}/orders', [PublicStorefrontController::class, 'placeOrder'])->middleware('throttle:30,1');
     Route::post('/public/storefronts/{slug}/orders/verify', [PublicStorefrontController::class, 'verifyPayment'])->middleware('throttle:60,1');
     Route::post('/public/storefronts/{slug}/abandoned-carts', [PublicStorefrontController::class, 'recordAbandonedCart'])->middleware('throttle:30,1');
     Route::post('/public/storefronts/{slug}/contact', [PublicStorefrontController::class, 'submitContact'])->middleware('throttle:10,1');
     Route::post('/public/storefronts/{slug}/visits', [PublicStorefrontController::class, 'recordVisit'])->middleware('throttle:60,1');
-    Route::get('/public/generations/{generationId}', [PublicStorefrontController::class, 'publicGeneration']);
 
     // AI chat proxy — uses backend API key, no user auth needed
     Route::post('/ai/chat', [AiChatController::class, 'chat'])->middleware('throttle:60,1');
@@ -128,7 +132,7 @@ Route::prefix('storehause')->group(function () {
     Route::match(['GET', 'POST'], '/webhooks/whatsapp', WhatsAppWebhookController::class)->middleware('throttle:120,1');
     Route::post('/webhooks/tiktok', [TikTokWebhookController::class, 'handle'])->middleware('throttle:120,1');
 
-    Route::middleware(['auth:sanctum', 'merchant.active'])->group(function () {
+    Route::middleware(['auth:sanctum', 'merchant.active', 'api.cache:merchant'])->group(function () {
         Route::get('/billing/subscription', [BillingController::class, 'subscription']);
         Route::post('/billing/checkout', [BillingController::class, 'checkout'])->middleware('throttle:20,1');
         Route::post('/billing/topup', [BillingController::class, 'topup'])->middleware('throttle:20,1');

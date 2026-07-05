@@ -4,12 +4,15 @@ namespace App\Http\Controllers;
 
 use App\Models\Store;
 use App\Models\StoreProduct;
+use App\Http\Controllers\Concerns\InvalidatesApiCache;
 use App\Services\StoreProductService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
 class StoreProductController extends Controller
 {
+    use InvalidatesApiCache;
+
     public function __construct(
         private readonly StoreProductService $productService,
     ) {}
@@ -30,6 +33,8 @@ class StoreProductController extends Controller
         $store = $this->ownedStore($request);
         $product = $this->productService->createForStore($store, $data);
 
+        $this->invalidateStoreApiCache($store);
+
         return response()->json([
             'product' => $this->productService->format($product),
         ], 201);
@@ -46,6 +51,8 @@ class StoreProductController extends Controller
 
         $product = $this->productService->updateProduct($product, $data);
 
+        $this->invalidateStoreApiCache($store);
+
         return response()->json([
             'product' => $this->productService->format($product),
         ]);
@@ -61,6 +68,8 @@ class StoreProductController extends Controller
         $product->delete();
         $this->productService->syncCount($store);
 
+        $this->invalidateStoreApiCache($store);
+
         return response()->json([
             'message' => 'Product deleted.',
         ]);
@@ -74,6 +83,8 @@ class StoreProductController extends Controller
             ->findOrFail($productId);
 
         $duplicate = $this->productService->duplicateProduct($product);
+
+        $this->invalidateStoreApiCache($store);
 
         return response()->json([
             'product' => $this->productService->format($duplicate),
@@ -89,6 +100,8 @@ class StoreProductController extends Controller
 
         $store = $this->ownedStore($request);
         $report = $this->productService->importForStore($store, $data['products']);
+
+        $this->invalidateStoreApiCache($store);
 
         return response()->json([
             ...$report,

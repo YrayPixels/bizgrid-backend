@@ -4,12 +4,15 @@ declare(strict_types=1);
 
 namespace App\Http\Controllers;
 
+use App\Http\Controllers\Concerns\InvalidatesApiCache;
 use App\Models\StoreOrder;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
 class AdminOrderController extends Controller
 {
+    use InvalidatesApiCache;
+
     public function index(Request $request): JsonResponse
     {
         $query = StoreOrder::query()
@@ -79,6 +82,12 @@ class AdminOrderController extends Controller
 
         $order->status = $data['status'];
         $order->save();
+
+        $this->invalidateAdminApiCache();
+        $order->load('store');
+        if ($order->store) {
+            $this->invalidateStoreApiCache($order->store);
+        }
 
         return response()->json([
             'success' => true,

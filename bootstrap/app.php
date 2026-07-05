@@ -19,6 +19,7 @@ return Application::configure(basePath: dirname(__DIR__))
             'admin' => \App\Http\Middleware\AdminMiddleware::class,
             'admin.role' => \App\Http\Middleware\AdminRoleMiddleware::class,
             'merchant.active' => \App\Http\Middleware\MerchantActiveMiddleware::class,
+            'api.cache' => \App\Http\Middleware\CacheApiGetResponse::class,
         ]);
     })
     ->withExceptions(function (Exceptions $exceptions) {

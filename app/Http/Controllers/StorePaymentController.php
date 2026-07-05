@@ -45,6 +45,8 @@ class StorePaymentController extends Controller
 
         $store->save();
 
+        $this->invalidateStoreApiCache($store);
+
         return response()->json([
             'payments' => $this->formatPaymentSettings($store->fresh()),
             'message' => 'Payout details saved.',

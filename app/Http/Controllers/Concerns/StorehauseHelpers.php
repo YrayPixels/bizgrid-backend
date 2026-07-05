@@ -16,6 +16,7 @@ use Illuminate\Validation\Rule;
 
 trait StorehauseHelpers
 {
+    use InvalidatesApiCache;
     protected function findOwnedStore(Request $request, int $storeId): Store
     {
         $store = Store::with('merchant')

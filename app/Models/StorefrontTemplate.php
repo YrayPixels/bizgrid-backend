@@ -17,6 +17,7 @@ class StorefrontTemplate extends Model
         'description',
         'best_for',
         'preview',
+        'type',
         'is_active',
         'sort_order',
         'default_palette',
@@ -49,13 +50,30 @@ class StorefrontTemplate extends Model
     /** @return list<string> */
     public static function concreteIds(): array
     {
-        return ['classic', 'editorial', 'bold_grid', 'fashion_lookbook', 'minimalistic', 'beauty', 'cosmetics'];
+        return [
+            'classic',
+            'editorial',
+            'bold_grid',
+            'fashion_lookbook',
+            'minimalistic',
+            'beauty',
+            'cosmetics',
+            'furniture-hardware',
+            'hair-and-fashion',
+        ];
     }
 
     /** @return list<string> */
     public static function defaultActiveConcreteIds(): array
     {
-        return ['fashion_lookbook', 'beauty', 'cosmetics', 'minimalistic'];
+        return [
+            'fashion_lookbook',
+            'beauty',
+            'cosmetics',
+            'minimalistic',
+            'furniture-hardware',
+            'hair-and-fashion',
+        ];
     }
 
     /** @return list<string> */
@@ -92,6 +110,7 @@ class StorefrontTemplate extends Model
             'description' => $this->description,
             'bestFor' => $this->best_for,
             'preview' => $this->preview,
+            'type' => $this->type ?? 'json',
             'is_active' => $this->is_active,
             'sort_order' => $this->sort_order,
             'default_palette' => $this->default_palette,

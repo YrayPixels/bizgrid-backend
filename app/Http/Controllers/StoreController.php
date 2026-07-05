@@ -111,6 +111,9 @@ class StoreController extends Controller
             ['merchant_id' => $merchant->id],
         );
 
+        $this->invalidateUserApiCache($user->id);
+        $this->invalidateStoreApiCache($store);
+
         return response()->json([
             'store' => $this->formatStore($store),
         ], 201);
@@ -208,6 +211,8 @@ class StoreController extends Controller
 
         $store->save();
 
+        $this->invalidateStoreApiCache($store);
+
         return response()->json([
             'store' => array_merge($this->formatStore($store->fresh('merchant')), $this->publishService->publishMeta($store->fresh('merchant'))),
         ]);
@@ -266,6 +271,8 @@ class StoreController extends Controller
         $store->draft_json = $this->productService->extractEmbeddedProducts($store, $storefront);
         $store->storefront_generation_id = $generationId;
         $store->save();
+
+        $this->invalidateStoreApiCache($store);
 
         return response()->json([
             'generation_id' => $generationId,
@@ -343,6 +350,8 @@ class StoreController extends Controller
         unset($data['storefront']['products']);
         $this->publishService->persistDraft($store, $data['storefront']);
 
+        $this->invalidateStoreApiCache($store);
+
         return response()->json([
             'generation_id' => $store->storefront_generation_id,
             'storefront' => $this->productService->mergeIntoStorefront($store->draft_json, $store),
@@ -355,6 +364,8 @@ class StoreController extends Controller
         $store = $this->findOwnedStore($request, $storeId);
         $store = $this->publishService->publish($store);
         $published = $this->publishService->resolvePublished($store);
+
+        $this->invalidateStoreApiCache($store);
 
         return response()->json([
             'store' => array_merge($this->formatStore($store), $this->publishService->publishMeta($store)),

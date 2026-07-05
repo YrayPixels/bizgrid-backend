@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Http\Controllers;
 
+use App\Http\Controllers\Concerns\InvalidatesApiCache;
 use App\Models\StorefrontTemplate;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -11,6 +12,8 @@ use Illuminate\Support\Facades\Validator;
 
 class AdminStorefrontTemplateController extends Controller
 {
+    use InvalidatesApiCache;
+
     public function index(): JsonResponse
     {
         $templates = StorefrontTemplate::query()
@@ -54,6 +57,8 @@ class AdminStorefrontTemplateController extends Controller
 
         $template->fill($validator->validated())->save();
 
+        $this->invalidateTemplateApiCache();
+
         return response()->json([
             'success' => true,
             'message' => 'Template updated',
@@ -85,6 +90,8 @@ class AdminStorefrontTemplateController extends Controller
 
         $template->is_active = (bool) $validator->validated()['is_active'];
         $template->save();
+
+        $this->invalidateTemplateApiCache();
 
         return response()->json([
             'success' => true,

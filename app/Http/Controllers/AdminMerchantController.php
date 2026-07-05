@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Http\Controllers;
 
+use App\Http\Controllers\Concerns\InvalidatesApiCache;
 use App\Models\BillingWebhookEvent;
 use App\Models\Merchant;
 use App\Models\MerchantNote;
@@ -17,6 +18,8 @@ use Illuminate\Support\Facades\Validator;
 
 class AdminMerchantController extends Controller
 {
+    use InvalidatesApiCache;
+
     public function __construct(
         private readonly AdminAuditService $audit,
         private readonly MerchantUsageService $usage,
@@ -149,6 +152,13 @@ class AdminMerchantController extends Controller
             'reason' => $validator->validated()['reason'] ?? null,
         ]);
 
+        $this->invalidateAdminApiCache();
+        $this->invalidateMerchantApiCache($merchant->id);
+        $merchant->load('stores');
+        foreach ($merchant->stores as $store) {
+            $this->invalidateStoreApiCache($store);
+        }
+
         $merchant->load(['owner:id,name,email', 'stores']);
         $merchant->loadCount('stores');
         $merchant->loadSum('stores as gross_revenue', 'gross_revenue');
@@ -225,6 +235,9 @@ class AdminMerchantController extends Controller
         }
 
         $this->audit->log($request, 'merchant.billing_updated', 'merchant', $merchant->id, $data);
+
+        $this->invalidateAdminApiCache();
+        $this->invalidateMerchantApiCache($merchant->id);
 
         return response()->json([
             'success' => true,
@@ -413,6 +426,8 @@ class AdminMerchantController extends Controller
         $merchant->save();
 
         $this->audit->log($request, 'merchant.tags_updated', 'merchant', $merchant->id, ['tags' => $merchant->tags]);
+
+        $this->invalidateAdminApiCache();
 
         return response()->json(['success' => true, 'data' => ['tags' => $merchant->tags]]);
     }

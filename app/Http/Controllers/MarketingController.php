@@ -83,6 +83,8 @@ class MarketingController extends Controller
             return redirect()->away($redirectBase.'?facebook=error&message='.urlencode($e->getMessage()));
         }
 
+        $this->invalidateStoreApiCache($store);
+
         return redirect()->away($redirectBase.'?facebook=connected');
     }
 
@@ -97,6 +99,8 @@ class MarketingController extends Controller
             $store,
             isset($data['connection_id']) ? (int) $data['connection_id'] : null,
         );
+
+        $this->invalidateMarketingApiCache($store);
 
         return response()->json([
             'message' => 'Facebook disconnected.',
@@ -125,6 +129,8 @@ class MarketingController extends Controller
                 'message' => 'Marketing agent is unavailable right now.',
             ], 503);
         }
+
+        $this->invalidateMarketingApiCache($store);
 
         return response()->json([
             'assistant_message' => $result['assistant_message'],
@@ -160,6 +166,8 @@ class MarketingController extends Controller
             return response()->json(['message' => $e->getMessage()], 422);
         }
 
+        $this->invalidateMarketingApiCache($store);
+
         return response()->json([
             'message' => 'WhatsApp connected.',
             ...$this->marketing->marketingStatus($store->fresh()),
@@ -170,6 +178,8 @@ class MarketingController extends Controller
     {
         $store = $this->findOwnedStoreForUser($request);
         $this->whatsapp->disconnect($store->id);
+
+        $this->invalidateMarketingApiCache($store);
 
         return response()->json([
             'message' => 'WhatsApp disconnected.',
@@ -192,6 +202,8 @@ class MarketingController extends Controller
             return response()->json(['message' => $e->getMessage()], 422);
         }
 
+        $this->invalidateMarketingApiCache($store);
+
         return response()->json([
             'message' => 'TikTok Business account connected.',
             ...$this->marketing->marketingStatus($store->fresh()),
@@ -202,6 +214,8 @@ class MarketingController extends Controller
     {
         $store = $this->findOwnedStoreForUser($request);
         $this->tiktok->disconnect($store->id);
+
+        $this->invalidateMarketingApiCache($store);
 
         return response()->json([
             'message' => 'TikTok disconnected.',
@@ -256,6 +270,8 @@ class MarketingController extends Controller
             return redirect()->away($redirectBase.'?tiktok_creator=error&message='.urlencode($e->getMessage()));
         }
 
+        $this->invalidateStoreApiCache($store);
+
         return redirect()->away($redirectBase.'?tiktok_creator=connected');
     }
 
@@ -263,6 +279,8 @@ class MarketingController extends Controller
     {
         $store = $this->findOwnedStoreForUser($request);
         $this->tiktokCreator->disconnect($store->id);
+
+        $this->invalidateMarketingApiCache($store);
 
         return response()->json([
             'message' => 'TikTok creator account disconnected.',
@@ -292,6 +310,8 @@ class MarketingController extends Controller
             ], 422);
         }
 
+        $this->invalidateMarketingApiCache($store);
+
         return response()->json([
             'message' => 'TikTok video is publishing.',
             'post' => $result['post'] ?? null,
@@ -308,6 +328,8 @@ class MarketingController extends Controller
         ]);
 
         $this->marketing->updateMessagingSettings($store, $data);
+
+        $this->invalidateMarketingApiCache($store);
 
         return response()->json([
             'message' => 'Messaging settings updated.',
@@ -378,6 +400,13 @@ class MarketingController extends Controller
             return response()->json(['message' => $e->getMessage()], 422);
         }
 
+        $this->invalidateMarketingApiCache($store);
+
         return response()->json($result);
+    }
+
+    private function invalidateMarketingApiCache(Store $store): void
+    {
+        $this->invalidateStoreApiCache($store);
     }
 }

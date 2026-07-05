@@ -147,6 +147,10 @@ class StorefrontPublishService
             ]);
         }
 
+        if ($this->shouldStripLegacyBoltSeedFiles($store, $draft)) {
+            $draft = $this->stripSessionOnlyKeys($draft);
+        }
+
         $this->reconnectAndSave($store->fill([
             'published_json' => $draft,
             'status' => 'published',
@@ -215,5 +219,13 @@ class StorefrontPublishService
 
         return str_contains($message, '2006')
             || str_contains($message, 'MySQL server has gone away');
+    }
+
+    /** @param  array<string, mixed>  $draft */
+    private function shouldStripLegacyBoltSeedFiles(Store $store, array $draft): bool
+    {
+        $templateId = $draft['template']['id'] ?? $store->storefront_template_id ?? null;
+
+        return in_array($templateId, ['furniture-hardware', 'hair-and-fashion'], true);
     }
 }

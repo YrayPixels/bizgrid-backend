@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Http\Controllers\Concerns\InvalidatesApiCache;
 use App\Models\Store;
 use App\Models\StoreCategory;
 use App\Services\StoreCategoryService;
@@ -10,6 +11,8 @@ use Illuminate\Http\Request;
 
 class StoreCategoryController extends Controller
 {
+    use InvalidatesApiCache;
+
     public function __construct(
         private readonly StoreCategoryService $categoryService,
     ) {}
@@ -29,6 +32,8 @@ class StoreCategoryController extends Controller
         $store = $this->ownedStore($request);
         $category = $this->categoryService->createForStore($store, $data);
 
+        $this->invalidateStoreApiCache($store);
+
         return response()->json([
             'category' => $this->categoryService->format($category->loadCount('products')),
         ], 201);
@@ -44,6 +49,8 @@ class StoreCategoryController extends Controller
 
         $category = $this->categoryService->updateCategory($category, $data);
 
+        $this->invalidateStoreApiCache($store);
+
         return response()->json([
             'category' => $this->categoryService->format($category),
         ]);
@@ -57,6 +64,8 @@ class StoreCategoryController extends Controller
             ->findOrFail($categoryId);
 
         $this->categoryService->deleteCategory($category);
+
+        $this->invalidateStoreApiCache($store);
 
         return response()->json([
             'message' => 'Category deleted.',

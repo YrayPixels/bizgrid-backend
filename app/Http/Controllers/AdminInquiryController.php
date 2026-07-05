@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Http\Controllers;
 
+use App\Http\Controllers\Concerns\InvalidatesApiCache;
 use App\Models\StoreContactInquiry;
 use App\Services\AdminAuditService;
 use Illuminate\Http\JsonResponse;
@@ -11,6 +12,8 @@ use Illuminate\Http\Request;
 
 class AdminInquiryController extends Controller
 {
+    use InvalidatesApiCache;
+
     public function __construct(
         private readonly AdminAuditService $audit,
     ) {}
@@ -66,6 +69,8 @@ class AdminInquiryController extends Controller
         $this->audit->log($request, 'inquiry.status_updated', 'inquiry', $inquiry->id, [
             'status' => $data['status'],
         ]);
+
+        $this->invalidateAdminApiCache();
 
         return response()->json([
             'success' => true,

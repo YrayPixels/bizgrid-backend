@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Http\Controllers;
 
+use App\Http\Controllers\Concerns\InvalidatesApiCache;
 use App\Models\Store;
 use App\Services\AdminAuditService;
 use App\Services\StorefrontPublishService;
@@ -12,6 +13,8 @@ use Illuminate\Http\Request;
 
 class AdminStoreController extends Controller
 {
+    use InvalidatesApiCache;
+
     public function __construct(
         private readonly StorefrontPublishService $publishService,
         private readonly AdminAuditService $audit,
@@ -56,6 +59,9 @@ class AdminStoreController extends Controller
             'to' => $data['status'],
             'merchant_id' => $store->merchant_id,
         ]);
+
+        $this->invalidateAdminApiCache();
+        $this->invalidateStoreApiCache($store);
 
         return response()->json([
             'success' => true,

@@ -120,6 +120,8 @@ class OrderController extends Controller
         $order = StoreOrder::where('store_id', $store->id)->findOrFail($orderId);
         $order->fill($data)->save();
 
+        $this->invalidateStoreApiCache($store);
+
         return response()->json([
             'message' => 'Order updated.',
             'order' => $this->formatOrder($order->fresh()),

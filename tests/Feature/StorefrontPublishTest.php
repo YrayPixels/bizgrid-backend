@@ -223,3 +223,34 @@ it('publishes custom bolt files from the active builder session snapshot', funct
     expect($store->published_json)->toHaveKey('custom_files');
     expect($store->published_json['custom_files'][0]['content'])->toContain('Bolt');
 });
+
+it('does not publish legacy bolt seed files for json furniture templates', function () {
+    $user = User::factory()->create();
+    $store = publishTestStorefront($user);
+    $store->update([
+        'storefront_template_id' => 'furniture-hardware',
+        'draft_json' => [
+            ...$store->draft_json,
+            'template' => ['id' => 'furniture-hardware', 'source' => 'merchant_selected'],
+        ],
+    ]);
+
+    \App\Models\StorefrontBuilderSession::create([
+        'user_id' => $user->id,
+        'store_id' => $store->id,
+        'status' => 'content_generated',
+        'storefront_snapshot' => [
+            ...$store->draft_json,
+            'custom_files' => [['path' => 'pnpm-lock.yaml', 'content' => str_repeat('x', 5000)]],
+            'custom_code' => '<html><body>Bolt</body></html>',
+        ],
+    ]);
+
+    $service = app(\App\Services\StorefrontPublishService::class);
+    $service->publish($store->fresh());
+    $store->refresh();
+
+    expect($store->published_json)->not->toHaveKey('custom_files');
+    expect($store->published_json)->not->toHaveKey('custom_code');
+    expect($store->published_json['template']['id'])->toBe('furniture-hardware');
+});

@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Exceptions\StorefrontAiUnavailableException;
+use App\Http\Controllers\Concerns\InvalidatesApiCache;
 use App\Models\Merchant;
 use App\Models\Store;
 use App\Models\StorefrontBuilderMessage;
@@ -23,6 +24,8 @@ use Symfony\Component\HttpFoundation\StreamedResponse;
 
 class StorefrontBuilderController extends Controller
 {
+    use InvalidatesApiCache;
+
     public function __construct(
         private readonly StorefrontBuilderService $builderService,
         private readonly StoreProductService $productService,
@@ -43,6 +46,8 @@ class StorefrontBuilderController extends Controller
                 ['type' => 'welcome'],
             );
         }
+
+        $this->invalidateBuilderApiCache($session);
 
         return response()->json($this->formatSessionPayload($session->fresh(['messages', 'store.merchant'])));
     }
@@ -86,6 +91,8 @@ class StorefrontBuilderController extends Controller
         $this->appendUserMessage($session, $data['message']);
 
         if ($this->applyVisualBuilderUpdates($session, $data)) {
+            $this->invalidateBuilderApiCache($session);
+
             return response()->json([
                 ...$this->formatSessionPayload($session->fresh(['messages', 'store.merchant'])),
                 'storefront' => $session->store
@@ -106,6 +113,8 @@ class StorefrontBuilderController extends Controller
             }
         }
 
+        $this->invalidateBuilderApiCache($session);
+
         return response()->json($this->formatSessionPayload($session->fresh(['messages', 'store.merchant'])));
     }
 
@@ -118,6 +127,8 @@ class StorefrontBuilderController extends Controller
 
         $session = $this->findOwnedSession($request, $sessionId);
         $this->persistStorefrontSnapshot($session, $request->user(), $data, syncStoreDraft: false);
+
+        $this->invalidateBuilderApiCache($session);
 
         return response()->json($this->formatSessionPayload($session->fresh(['messages', 'store.merchant'])));
     }
@@ -156,6 +167,8 @@ class StorefrontBuilderController extends Controller
         $session->storefront_snapshot = $snapshot;
         $this->publishService->reconnectAndSaveModel($session);
 
+        $this->invalidateBuilderApiCache($session);
+
         return response()->json($this->formatSessionPayload($session->fresh(['messages', 'store.merchant'])));
     }
 
@@ -185,6 +198,8 @@ class StorefrontBuilderController extends Controller
             'Hi! Tell me about your business — what you sell, who it\'s for, and the vibe you want. I\'ll design and build your website.',
             ['type' => 'welcome'],
         );
+
+        $this->invalidateBuilderApiCache($session);
 
         return response()->json($this->formatSessionPayload($session->fresh(['messages', 'store.merchant'])));
     }
@@ -226,6 +241,8 @@ class StorefrontBuilderController extends Controller
 
                 $session = $session->fresh(['messages', 'store.merchant']);
 
+                $this->invalidateBuilderApiCache($session);
+
                 return response()->json([
                     ...$this->formatSessionPayload($session),
                     'storefront' => $session->store
@@ -247,6 +264,8 @@ class StorefrontBuilderController extends Controller
                 'source' => $data['source'] ?? 'merchant_selected',
             ],
         );
+
+        $this->invalidateBuilderApiCache($session);
 
         return response()->json($this->formatSessionPayload($session->fresh(['messages', 'store.merchant'])));
     }
@@ -300,6 +319,8 @@ class StorefrontBuilderController extends Controller
                 'generation_id' => $generationId,
             ],
         );
+
+        $this->invalidateBuilderApiCache($session);
 
         return response()->json([
             ...$this->formatSessionPayload($session->fresh(['messages', 'store.merchant'])),
@@ -377,6 +398,8 @@ class StorefrontBuilderController extends Controller
 
                 SseStream::log($emit, 'builder', 'done', 'Website ready', 'Your storefront is live in preview.');
 
+                $this->invalidateBuilderApiCache($session);
+
                 SseStream::complete($emit, [
                     ...$this->formatSessionPayload($session->fresh(['messages', 'store.merchant'])),
                     'generation_id' => $generationId,
@@ -445,6 +468,8 @@ class StorefrontBuilderController extends Controller
                 'changed_paths' => $changedPaths,
             ],
         );
+
+        $this->invalidateBuilderApiCache($session);
 
         return response()->json([
             ...$this->formatSessionPayload($session->fresh(['messages', 'store.merchant'])),
@@ -1525,5 +1550,14 @@ class StorefrontBuilderController extends Controller
 
         $this->enforcement->assertCanUseAi($store->merchant);
         $this->enforcement->consumeAiCredit($store->merchant);
+    }
+
+    private function invalidateBuilderApiCache(StorefrontBuilderSession $session): void
+    {
+        $this->invalidateUserApiCache((int) $session->user_id);
+
+        if ($session->store) {
+            $this->invalidateStoreApiCache($session->store);
+        }
     }
 }

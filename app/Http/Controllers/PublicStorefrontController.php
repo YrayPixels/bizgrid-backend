@@ -250,6 +250,8 @@ class PublicStorefrontController extends Controller
             $this->abandonedRecovery->markCartConverted($store, (string) $data['session_token'], $order);
         }
 
+        $this->invalidateStoreApiCache($store);
+
         $payload = [
             'order' => $this->formatOrder($order),
         ];
@@ -281,6 +283,8 @@ class PublicStorefrontController extends Controller
         } catch (\Throwable $exception) {
             return response()->json(['message' => $exception->getMessage()], 422);
         }
+
+        $this->invalidateStoreApiCache($store);
 
         return response()->json([
             'order' => $this->formatOrder($order),
@@ -395,6 +399,8 @@ class PublicStorefrontController extends Controller
             'fields' => $fields,
             'status' => 'new',
         ]);
+
+        $this->invalidateAdminApiCache();
 
         return response()->json([
             'message' => 'Message sent.',
