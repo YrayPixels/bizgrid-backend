@@ -8,6 +8,10 @@ return new class extends Migration
 {
     public function up(): void
     {
+        if (Schema::hasTable('admin_audit_logs')) {
+            return;
+        }
+
         Schema::create('admin_audit_logs', function (Blueprint $table) {
             $table->id();
             $table->foreignId('admin_user_id')->nullable()->constrained('users')->nullOnDelete();
