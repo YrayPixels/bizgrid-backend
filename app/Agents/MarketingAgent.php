@@ -25,6 +25,30 @@ class MarketingAgent extends BaseAgent
         return $this->prompts->load($this->name(), $this->promptVersion());
     }
 
+    public function outputSchema(): array
+    {
+        return [
+            'type' => 'object',
+            'properties' => [
+                'assistant_message' => ['type' => 'string'],
+                'tool_calls' => [
+                    'type' => 'array',
+                    'items' => [
+                        'type' => 'object',
+                        'properties' => [
+                            'name' => ['type' => 'string'],
+                            'arguments' => ['type' => 'object'],
+                        ],
+                        'required' => ['name', 'arguments'],
+                        'additionalProperties' => false,
+                    ],
+                ],
+            ],
+            'required' => ['assistant_message', 'tool_calls'],
+            'additionalProperties' => false,
+        ];
+    }
+
     /**
      * @param  array<string, mixed>  $context
      * @return array{assistant_message: string, tool_calls: list<array{name: string, arguments: array<string, mixed>}>}|null
