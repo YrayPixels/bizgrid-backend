@@ -107,6 +107,8 @@ Route::middleware('auth:sanctum')->group(function () {
 Route::prefix('storehause')->group(function () {
     Route::post('/auth/register', [AuthController::class, 'register'])->middleware('throttle:10,1');
     Route::post('/auth/login', [AuthController::class, 'login'])->middleware('throttle:10,1');
+    Route::post('/auth/request-password-reset', [AuthController::class, 'requestPasswordReset'])->middleware('throttle:5,1');
+    Route::post('/auth/reset-password-with-code', [AuthController::class, 'resetPasswordWithCode'])->middleware('throttle:5,1');
     Route::get('/storefront-templates', [StorefrontTemplateController::class, 'active'])
         ->middleware('api.cache:shared');
     Route::post('/storefront-builder/recommend-templates', [StorefrontTemplateController::class, 'recommend']);

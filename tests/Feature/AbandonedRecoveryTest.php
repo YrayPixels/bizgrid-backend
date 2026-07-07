@@ -114,9 +114,19 @@ it('sends a recovery email for an abandoned checkout', function () {
         'currency' => 'NGN',
         'subtotal' => 8000,
         'total_amount' => 8000,
-        'items' => [['product_id' => '3', 'name' => 'Moisturizer', 'quantity' => 1, 'unit_price' => 8000, 'total' => 8000, 'currency' => 'NGN']],
+        'items' => [[
+            'product_id' => '3',
+            'name' => 'Moisturizer',
+            'quantity' => 1,
+            'unit_price' => 8000,
+            'total' => 8000,
+            'currency' => 'NGN',
+            'image_url' => 'https://cdn.test/moisturizer.png',
+        ]],
         'placed_at' => now()->subHour(),
     ]);
+
+    \Illuminate\Support\Facades\Mail::fake();
 
     $response = $this->actingAs($user)->postJson('/api/storehause/marketing/abandoned/send', [
         'source_type' => 'checkout',
@@ -130,6 +140,18 @@ it('sends a recovery email for an abandoned checkout', function () {
         ->assertJsonPath('mode', 'sent');
 
     expect(StoreRecoveryOutreach::where('channel', 'email')->where('status', 'sent')->count())->toBe(1);
+
+    \Illuminate\Support\Facades\Mail::assertSent(\App\Mail\AbandonedRecoveryEmail::class, function (\App\Mail\AbandonedRecoveryEmail $mail) {
+        $html = $mail->render();
+
+        return $mail->hasTo('ngozi@example.com')
+            && str_contains($mail->body, 'Hi Ngozi')
+            && count($mail->items) === 1
+            && $mail->items[0]['name'] === 'Moisturizer'
+            && $mail->items[0]['image_url'] === 'https://cdn.test/moisturizer.png'
+            && str_contains($html, 'https://cdn.test/moisturizer.png')
+            && str_contains($html, 'NGN 8,000');
+    });
 });
 
 it('returns a whatsapp link when whatsapp is not connected', function () {

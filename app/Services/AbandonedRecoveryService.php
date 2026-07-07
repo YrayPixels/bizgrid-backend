@@ -9,6 +9,7 @@ use App\Mail\AbandonedRecoveryEmail;
 use App\Models\Store;
 use App\Models\StoreAbandonedCart;
 use App\Models\StoreOrder;
+use App\Models\StoreProduct;
 use App\Models\StoreRecoveryOutreach;
 use App\Models\StoreSocialConnection;
 use Illuminate\Support\Facades\Mail;
@@ -369,6 +370,8 @@ class AbandonedRecoveryService
         $emailSubject = $subject ?: $this->defaultSubject($store);
         $customerName = filled($context['customer_name'] ?? null) ? (string) $context['customer_name'] : null;
         $recoveryUrl = filled($context['recovery_url'] ?? null) ? (string) $context['recovery_url'] : null;
+        $currency = (string) ($context['currency'] ?? 'NGN');
+        $items = $this->enrichRecoveryItems($store, is_array($context['items'] ?? null) ? $context['items'] : [], $currency);
 
         Mail::to($email)->send(new AbandonedRecoveryEmail(
             $store,
@@ -376,7 +379,56 @@ class AbandonedRecoveryService
             $emailSubject,
             $recoveryUrl,
             $customerName,
+            $items,
+            $currency,
+            (float) ($context['total_amount'] ?? 0),
         ));
+    }
+
+    /**
+     * @param  list<array<string, mixed>>  $items
+     * @return list<array<string, mixed>>
+     */
+    private function enrichRecoveryItems(Store $store, array $items, string $currency): array
+    {
+        $productIds = collect($items)
+            ->pluck('product_id')
+            ->filter()
+            ->map(fn ($id) => (string) $id)
+            ->unique()
+            ->values()
+            ->all();
+
+        $products = $productIds === []
+            ? collect()
+            : StoreProduct::query()
+                ->where('store_id', $store->id)
+                ->whereIn('id', $productIds)
+                ->get()
+                ->keyBy('id');
+
+        return collect($items)
+            ->map(function (array $item) use ($products, $currency): array {
+                $productId = (string) ($item['product_id'] ?? '');
+                $product = $products->get($productId);
+                $quantity = (int) ($item['quantity'] ?? 1);
+                $unitPrice = (float) ($item['unit_price'] ?? $product?->price ?? 0);
+                $itemCurrency = strtoupper((string) ($item['currency'] ?? $product?->currency ?? $currency));
+
+                return [
+                    'product_id' => $productId !== '' ? $productId : null,
+                    'name' => (string) ($item['name'] ?? $product?->name ?? 'Item'),
+                    'quantity' => $quantity,
+                    'unit_price' => $unitPrice,
+                    'total' => (float) ($item['total'] ?? ($unitPrice * $quantity)),
+                    'currency' => $itemCurrency,
+                    'image_url' => filled($item['image_url'] ?? null)
+                        ? (string) $item['image_url']
+                        : ($product?->image_url),
+                ];
+            })
+            ->values()
+            ->all();
     }
 
     private function defaultSubject(Store $store): string

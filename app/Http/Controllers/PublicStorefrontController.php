@@ -216,6 +216,7 @@ class PublicStorefrontController extends Controller
                 'unit_price' => $unitPrice,
                 'total' => $lineTotal,
                 'currency' => $currency,
+                'image_url' => $product->image_url,
             ];
         }
 
@@ -459,6 +460,7 @@ class PublicStorefrontController extends Controller
             'items.*.unit_price' => 'required|numeric|min:0',
             'items.*.total' => 'required|numeric|min:0',
             'items.*.currency' => 'nullable|string|max:3',
+            'items.*.image_url' => 'nullable|string|max:2048',
         ]);
 
         try {

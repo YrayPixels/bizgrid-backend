@@ -15,6 +15,10 @@ return Application::configure(basePath: dirname(__DIR__))
         \App\Providers\AgentServiceProvider::class,
     ])
     ->withMiddleware(function (Middleware $middleware) {
+        // Ensure SPA clients (e.g. admin on :5173) can call API routes.
+        // Uses config/cors.php settings.
+        $middleware->append(\Illuminate\Http\Middleware\HandleCors::class);
+
         $middleware->alias([
             'admin' => \App\Http\Middleware\AdminMiddleware::class,
             'admin.role' => \App\Http\Middleware\AdminRoleMiddleware::class,

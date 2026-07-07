@@ -9,6 +9,12 @@
 @section('content')
     <div style="margin:0 0 20px 0;white-space:pre-wrap;">{!! nl2br(e($body)) !!}</div>
 
+    @include('emails.partials.recovery-items', [
+        'items' => $items ?? [],
+        'currency' => $currency ?? 'NGN',
+        'totalAmount' => $totalAmount ?? 0,
+    ])
+
     @if (filled($recoveryUrl))
         <table role="presentation" cellspacing="0" cellpadding="0" border="0" style="margin:0 0 8px 0;">
             <tr>

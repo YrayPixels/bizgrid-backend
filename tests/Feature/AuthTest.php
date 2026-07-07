@@ -1,11 +1,22 @@
 <?php
 
+use App\Mail\MerchantWelcomeEmail;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Mail;
+use Laravel\Sanctum\PersonalAccessToken;
 
 uses(RefreshDatabase::class);
 
+beforeEach(function () {
+    config([
+        'storehause.welcome_cc_email' => 'hello@bizgrid.test',
+    ]);
+});
+
 it('registers a new merchant account', function () {
+    Mail::fake();
+
     $response = $this->postJson('/api/storehause/auth/register', [
         'name' => 'Test Merchant',
         'email' => 'merchant@example.com',
@@ -19,6 +30,11 @@ it('registers a new merchant account', function () {
 
     expect($response->json('token'))->toBeString()->not->toBeEmpty();
     expect(User::where('email', 'merchant@example.com')->exists())->toBeTrue();
+
+    Mail::assertSent(MerchantWelcomeEmail::class, function (MerchantWelcomeEmail $mail) {
+        return $mail->hasTo('merchant@example.com')
+            && $mail->hasCc('hello@bizgrid.test');
+    });
 });
 
 it('does not auto-verify email on registration', function () {
@@ -66,6 +82,40 @@ it('logs in with valid credentials', function () {
     expect($response->json('token'))->toBeString()->not->toBeEmpty();
 });
 
+it('supports remember me by issuing longer-lived token', function () {
+    User::factory()->create([
+        'email' => 'merchant@example.com',
+        'password' => 'secret12345',
+    ]);
+
+    $rememberResponse = $this->postJson('/api/storehause/auth/login', [
+        'email' => 'merchant@example.com',
+        'password' => 'secret12345',
+        'remember' => true,
+    ])->assertOk();
+
+    $shortResponse = $this->postJson('/api/storehause/auth/login', [
+        'email' => 'merchant@example.com',
+        'password' => 'secret12345',
+        'remember' => false,
+    ])->assertOk();
+
+    $rememberToken = (string) $rememberResponse->json('token');
+    $shortToken = (string) $shortResponse->json('token');
+
+    [$rememberId] = explode('|', $rememberToken, 2);
+    [$shortId] = explode('|', $shortToken, 2);
+
+    $rememberRow = PersonalAccessToken::find((int) $rememberId);
+    $shortRow = PersonalAccessToken::find((int) $shortId);
+
+    expect($rememberRow?->expires_at)->not->toBeNull();
+    expect($shortRow?->expires_at)->not->toBeNull();
+
+    expect($rememberRow->expires_at->greaterThan(now()->addDays(7)))->toBeTrue();
+    expect($shortRow->expires_at->lessThan(now()->addDays(7)))->toBeTrue();
+});
+
 it('rejects login with wrong password', function () {
     User::factory()->create([
         'email' => 'merchant@example.com',
@@ -83,6 +133,58 @@ it('rejects login with unknown email', function () {
         'email' => 'nobody@example.com',
         'password' => 'secret12345',
     ])->assertStatus(422);
+});
+
+it('sends merchant password reset code without leaking account existence', function () {
+    Mail::fake();
+
+    User::factory()->create([
+        'email' => 'merchant@example.com',
+        'password' => 'secret12345',
+    ]);
+
+    $this->postJson('/api/storehause/auth/request-password-reset', [
+        'email' => 'merchant@example.com',
+    ])->assertOk()->assertJsonPath('message', 'If that account exists, a reset code was sent.');
+
+    $this->postJson('/api/storehause/auth/request-password-reset', [
+        'email' => 'missing@example.com',
+    ])->assertOk()->assertJsonPath('message', 'If that account exists, a reset code was sent.');
+
+    Mail::assertSent(\App\Mail\MerchantPasswordResetCodeEmail::class, fn ($m) => $m->hasTo('merchant@example.com'));
+});
+
+it('resets merchant password with code and revokes old sessions', function () {
+    Mail::fake();
+
+    $user = User::factory()->create([
+        'email' => 'merchant@example.com',
+        'password' => 'secret12345',
+    ]);
+
+    // Create an existing session token that should be revoked on reset.
+    $existing = $user->createToken('storehause');
+    $existing->accessToken->expires_at = now()->addDays(30);
+    $existing->accessToken->save();
+    expect($user->tokens()->count())->toBeGreaterThan(0);
+
+    // Seed a known reset code hash.
+    $user->verification_code = bcrypt('123456');
+    $user->save();
+
+    $this->postJson('/api/storehause/auth/reset-password-with-code', [
+        'email' => 'merchant@example.com',
+        'code' => '123456',
+        'password' => 'newsecret12345',
+    ])->assertOk()->assertJsonPath('message', 'Password updated. You can sign in now.');
+
+    $user->refresh();
+    expect($user->tokens()->count())->toBe(0);
+
+    $this->postJson('/api/storehause/auth/login', [
+        'email' => 'merchant@example.com',
+        'password' => 'newsecret12345',
+    ])->assertOk();
 });
 
 it('returns current user via me endpoint', function () {

@@ -5,6 +5,8 @@ use App\Mail\AdminCreated;
 use App\Mail\AdminPasswordReset;
 use App\Mail\AdminPasswordResetCode;
 use App\Mail\AdminVerificationCode;
+use App\Mail\MerchantPasswordResetCodeEmail;
+use App\Mail\MerchantWelcomeEmail;
 use App\Models\Merchant;
 use App\Models\Store;
 use App\Models\User;
@@ -20,6 +22,39 @@ beforeEach(function () {
         'storehause.mail_primary_color' => '#0d9488',
         'mail.from.address' => 'hello@bizgrid.test',
     ]);
+});
+
+it('renders bizgrid branded merchant welcome email', function () {
+    $user = User::factory()->make([
+        'name' => 'Ada Okafor',
+        'email' => 'ada@bizgrid.test',
+    ]);
+
+    $html = (new MerchantWelcomeEmail($user))->render();
+
+    expect($html)
+        ->toContain('Bizgrid')
+        ->toContain('Ada Okafor')
+        ->toContain('ada@bizgrid.test')
+        ->toContain('Set up your store')
+        ->toContain('/admin/onboarding')
+        ->not->toContain('HeySolana');
+});
+
+it('renders bizgrid branded merchant password reset code email', function () {
+    $user = User::factory()->make([
+        'name' => 'Ada Okafor',
+        'email' => 'ada@bizgrid.test',
+    ]);
+
+    $html = (new MerchantPasswordResetCodeEmail($user, '123456'))->render();
+
+    expect($html)
+        ->toContain('Bizgrid')
+        ->toContain('Reset your password')
+        ->toContain('123456')
+        ->toContain('ada@bizgrid.test')
+        ->not->toContain('HeySolana');
 });
 
 it('renders bizgrid branded admin created email', function () {
@@ -79,6 +114,18 @@ it('renders store branded abandoned recovery email', function () {
         'Complete your order',
         'https://glow.test/checkout',
         'Ngozi Eze',
+        [
+            [
+                'name' => 'Oversized Hoodie',
+                'quantity' => 1,
+                'unit_price' => 28500,
+                'total' => 28500,
+                'currency' => 'NGN',
+                'image_url' => 'https://cdn.test/hoodie.png',
+            ],
+        ],
+        'NGN',
+        28500,
     ))->render();
 
     expect($html)
@@ -86,6 +133,9 @@ it('renders store branded abandoned recovery email', function () {
         ->toContain('Your order is waiting.')
         ->toContain('https://glow.test/checkout')
         ->toContain('Complete your order')
+        ->toContain('Oversized Hoodie')
+        ->toContain('https://cdn.test/hoodie.png')
+        ->toContain('NGN 28,500')
         ->not->toContain('HeySolana');
 });
 
@@ -140,7 +190,15 @@ it('sends templated abandoned recovery mail', function () {
         'currency' => 'NGN',
         'subtotal' => 8000,
         'total_amount' => 8000,
-        'items' => [],
+        'items' => [[
+            'product_id' => '3',
+            'name' => 'Moisturizer',
+            'quantity' => 1,
+            'unit_price' => 8000,
+            'total' => 8000,
+            'currency' => 'NGN',
+            'image_url' => 'https://cdn.test/moisturizer.png',
+        ]],
         'placed_at' => now()->subHour(),
     ]);
 
@@ -153,7 +211,12 @@ it('sends templated abandoned recovery mail', function () {
     ])->assertOk();
 
     Mail::assertSent(AbandonedRecoveryEmail::class, function (AbandonedRecoveryEmail $mail) {
+        $html = $mail->render();
+
         return $mail->hasTo('ngozi@example.com')
-            && str_contains($mail->body, 'Hi Ngozi');
+            && str_contains($mail->body, 'Hi Ngozi')
+            && count($mail->items) === 1
+            && str_contains($html, 'Moisturizer')
+            && str_contains($html, 'https://cdn.test/moisturizer.png');
     });
 });

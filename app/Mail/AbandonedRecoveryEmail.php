@@ -17,12 +17,18 @@ class AbandonedRecoveryEmail extends Mailable
 {
     use Queueable, SerializesModels;
 
+    /**
+     * @param  list<array<string, mixed>>  $items
+     */
     public function __construct(
         public Store $store,
         public string $body,
         public string $subjectLine,
         public ?string $recoveryUrl = null,
         public ?string $customerName = null,
+        public array $items = [],
+        public string $currency = 'NGN',
+        public float $totalAmount = 0,
     ) {}
 
     public function envelope(): Envelope
@@ -47,6 +53,9 @@ class AbandonedRecoveryEmail extends Mailable
                 'subjectLine' => $this->subjectLine,
                 'recoveryUrl' => $this->recoveryUrl,
                 'customerName' => $this->customerName,
+                'items' => $this->items,
+                'currency' => $this->currency,
+                'totalAmount' => $this->totalAmount,
                 'brand' => MailBranding::store($this->store),
             ],
         );
