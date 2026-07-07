@@ -3,7 +3,8 @@ const { execSync, spawnSync } = require('child_process');
 function getLocalIP() {
   const output = execSync('ifconfig').toString();
   const regex = /inet (?!127)(\d+\.\d+\.\d+\.\d+)/g;
-  let match, ip;
+  let match;
+  let ip;
   while ((match = regex.exec(output)) !== null) {
     ip = match[1];
     break;
@@ -37,27 +38,33 @@ function findAvailablePort(startPort = 8000, maxAttempts = 10) {
 }
 
 function clearCache() {
-  execSync(`php artisan config:clear`);
-  execSync(`php artisan cache:clear`);
-  execSync(`php artisan route:clear`);
-  execSync(`php artisan view:clear`);
+  execSync('php artisan config:clear');
+  execSync('php artisan cache:clear');
+  execSync('php artisan route:clear');
+  execSync('php artisan view:clear');
   console.log('Cache cleared');
 }
 
-function startServer(ip, port) {
-  console.log(`🚀 Starting Laravel server at http://${ip}:${port}`);
-  execSync(`php artisan serve --host=${ip} --port=${port}`, { stdio: 'inherit' });
+function startServer(host, port) {
+  console.log(`🚀 Starting Laravel server at http://${host === '0.0.0.0' ? 'localhost' : host}:${port}`);
+  if (host === '0.0.0.0') {
+    const lanIp = getLocalIP();
+    if (lanIp) {
+      console.log(`   LAN access: http://${lanIp}:${port} (Google OAuth requires localhost)`);
+    }
+  }
+  execSync(`php artisan serve --host=${host} --port=${port}`, { stdio: 'inherit' });
 }
 
 try {
-  const ip = getLocalIP();
-  if (!ip) throw new Error('Could not determine local IP address');
+  // Google OAuth only accepts localhost or public domains — not LAN IPs like 192.168.x.x
+  const host = process.env.SERVE_HOST || '127.0.0.1';
 
   const port = findAvailablePort(8000, 10);
   if (!port) throw new Error('Could not find an open port after 10 attempts');
 
-  clearCache()
-  startServer(ip, port);
+  clearCache();
+  startServer(host, port);
 } catch (err) {
   console.error(`❌ ${err.message}`);
   process.exit(1);

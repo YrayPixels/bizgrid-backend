@@ -9,16 +9,23 @@ use App\Mail\MerchantPasswordResetCodeEmail;
 use App\Mail\MerchantWelcomeEmail;
 use App\Models\Merchant;
 use App\Models\User;
+use App\Services\GoogleOAuthService;
 use Illuminate\Http\JsonResponse;
+use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Mail;
+use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
 
 class AuthController extends Controller
 {
     use StorehauseHelpers;
+
+    public function __construct(
+        private readonly GoogleOAuthService $googleOAuth,
+    ) {}
 
     public function register(Request $request): JsonResponse
     {
@@ -65,7 +72,7 @@ class AuthController extends Controller
 
         $user = User::where('email', strtolower($data['email']))->first();
 
-        if (! $user || ! Hash::check($data['password'], $user->password)) {
+        if (! $user || ! filled($user->password) || ! Hash::check($data['password'], $user->password)) {
             throw ValidationException::withMessages([
                 'email' => ['These credentials do not match our records.'],
             ]);
@@ -80,17 +87,111 @@ class AuthController extends Controller
         }
 
         $remember = (bool) ($data['remember'] ?? false);
-        $tokenResult = $user->createToken('storehause');
-        $tokenResult->accessToken->expires_at = $remember
-            ? now()->addDays(30)
-            : now()->addDays(1);
-        $tokenResult->accessToken->save();
-        $token = $tokenResult->plainTextToken;
+        $token = $this->issueMerchantToken($user, $remember ? 30 : 1);
 
         return response()->json([
             'token' => $token,
             'user' => $this->formatUser($user),
         ]);
+    }
+
+    public function redirectToGoogle(): RedirectResponse
+    {
+        if (! $this->googleOAuth->isConfigured()) {
+            abort(503, 'Google sign-in is not configured.');
+        }
+
+        return $this->googleOAuth->redirect('merchant');
+    }
+
+    public function handleGoogleCallback(Request $request, AdminController $adminController): RedirectResponse
+    {
+        $state = (string) $request->query('state', '');
+        $intent = $this->googleOAuth->consumeIntent($state) ?? 'merchant';
+
+        if ($intent === 'admin') {
+            return $adminController->completeGoogleSignIn($request, $this->googleOAuth);
+        }
+
+        return $this->completeMerchantGoogleSignIn($request);
+    }
+
+    private function completeMerchantGoogleSignIn(Request $request): RedirectResponse
+    {
+        $frontendBase = rtrim((string) config('storehause.app_url', 'http://localhost:3000'), '/');
+        $redirectWithError = fn (string $message): RedirectResponse => redirect()->away(
+            $frontendBase.'/login?auth_error='.urlencode($message)
+        );
+
+        if ($request->filled('error')) {
+            return $redirectWithError(
+                (string) $request->query('error_description', 'Google sign-in was cancelled.')
+            );
+        }
+
+        if (! $this->googleOAuth->isConfigured()) {
+            return $redirectWithError('Google sign-in is not configured.');
+        }
+
+        try {
+            $googleUser = $this->googleOAuth->fetchUser((string) $request->query('state', ''));
+        } catch (\Throwable $e) {
+            Log::warning('Google OAuth callback failed', ['error' => $e->getMessage()]);
+
+            return $redirectWithError('Could not complete Google sign-in. Please try again.');
+        }
+
+        $email = strtolower((string) ($googleUser->getEmail() ?? ''));
+        if ($email === '') {
+            return $redirectWithError('Your Google account does not have an email address we can use.');
+        }
+
+        $googleId = (string) $googleUser->getId();
+        $user = User::where('google_id', $googleId)->first();
+
+        if (! $user) {
+            $user = User::where('email', $email)->first();
+
+            if ($user) {
+                if (filled($user->google_id) && $user->google_id !== $googleId) {
+                    return $redirectWithError('This email is already linked to a different Google account.');
+                }
+
+                $user->google_id = $googleId;
+                if (! $user->email_verified_at) {
+                    $user->email_verified_at = now();
+                }
+                $user->save();
+            } else {
+                $user = User::create([
+                    'name' => filled($googleUser->getName())
+                        ? $googleUser->getName()
+                        : Str::before($email, '@'),
+                    'email' => $email,
+                    'google_id' => $googleId,
+                    'email_verified_at' => now(),
+                ]);
+
+                try {
+                    Mail::to($user->email)->send(new MerchantWelcomeEmail($user));
+                } catch (\Throwable $e) {
+                    Log::warning('Failed to send merchant welcome email after Google sign-in', [
+                        'user_id' => $user->id,
+                        'email' => $user->email,
+                        'error' => $e->getMessage(),
+                    ]);
+                }
+            }
+        }
+
+        $merchant = Merchant::where('owner_user_id', $user->id)->first();
+        if ($merchant && $merchant->status === 'suspended') {
+            return $redirectWithError('Your account has been suspended. Please contact support.');
+        }
+
+        $token = $this->issueMerchantToken($user, 30);
+
+        return redirect()->away($frontendBase.'/login?auth_token='.urlencode($token));
     }
 
     public function requestPasswordReset(Request $request): JsonResponse
@@ -175,5 +276,14 @@ class AuthController extends Controller
         return response()->json([
             'message' => 'Signed out.',
         ]);
+    }
+
+    private function issueMerchantToken(User $user, int $days): string
+    {
+        $tokenResult = $user->createToken('storehause');
+        $tokenResult->accessToken->expires_at = now()->addDays($days);
+        $tokenResult->accessToken->save();
+
+        return $tokenResult->plainTextToken;
     }
 }

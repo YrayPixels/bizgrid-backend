@@ -10,7 +10,9 @@ use App\Mail\AdminPasswordResetCode;
 use App\Mail\AdminVerificationCode;
 use App\Models\User;
 use App\Services\AdminAuditService;
+use App\Services\GoogleOAuthService;
 use Illuminate\Http\JsonResponse;
+use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Log;
@@ -22,6 +24,7 @@ class AdminController extends Controller
 {
     public function __construct(
         private readonly AdminAuditService $audit,
+        private readonly GoogleOAuthService $googleOAuth,
     ) {}
 
     public function create_admin(Request $request): JsonResponse
@@ -128,6 +131,79 @@ class AdminController extends Controller
         } catch (\Exception $e) {
             return response()->json(['message' => 'Admin verification failed', 'error' => $e->getMessage()], 500);
         }
+    }
+
+    public function redirectToGoogle(): RedirectResponse
+    {
+        if (! $this->googleOAuth->isConfigured()) {
+            abort(503, 'Google sign-in is not configured.');
+        }
+
+        return $this->googleOAuth->redirect('admin');
+    }
+
+    public function completeGoogleSignIn(Request $request, GoogleOAuthService $googleOAuth): RedirectResponse
+    {
+        $frontendBase = rtrim((string) config('storehause.admin_app_url', 'http://localhost:5173'), '/');
+        $redirectWithError = fn (string $message): RedirectResponse => redirect()->away(
+            $frontendBase.'/?auth_error='.urlencode($message)
+        );
+
+        if ($request->filled('error')) {
+            return $redirectWithError(
+                (string) $request->query('error_description', 'Google sign-in was cancelled.')
+            );
+        }
+
+        if (! $googleOAuth->isConfigured()) {
+            return $redirectWithError('Google sign-in is not configured.');
+        }
+
+        try {
+            $googleUser = $googleOAuth->fetchUser((string) $request->query('state', ''));
+        } catch (\Throwable $e) {
+            Log::warning('Admin Google OAuth callback failed', ['error' => $e->getMessage()]);
+
+            return $redirectWithError('Could not complete Google sign-in. Please try again.');
+        }
+
+        $email = strtolower((string) ($googleUser->getEmail() ?? ''));
+        if ($email === '') {
+            return $redirectWithError('Your Google account does not have an email address we can use.');
+        }
+
+        $googleId = (string) $googleUser->getId();
+        $admin = User::where('google_id', $googleId)->first();
+
+        if (! $admin) {
+            $admin = User::where('email', $email)->first();
+        }
+
+        if (! $admin || ! $admin->is_admin) {
+            return $redirectWithError('No admin account is linked to this Google email.');
+        }
+
+        if (filled($admin->google_id) && $admin->google_id !== $googleId) {
+            return $redirectWithError('This admin email is already linked to a different Google account.');
+        }
+
+        if (! filled($admin->google_id)) {
+            $admin->google_id = $googleId;
+        }
+
+        if (! $admin->email_verified_at) {
+            $admin->email_verified_at = now();
+        }
+
+        $token = $admin->createToken('admin-token')->plainTextToken;
+        $admin->token = $token;
+        $admin->save();
+
+        $this->audit->log($request, 'admin.google_sign_in', 'user', $admin->id, [
+            'email' => $admin->email,
+        ]);
+
+        return redirect()->away($frontendBase.'/?auth_token='.urlencode($token));
     }
 
     public function delete_admin(Request $request): JsonResponse

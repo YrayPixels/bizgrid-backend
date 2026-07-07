@@ -1,35 +1,35 @@
 <?php
 
-use App\Http\Controllers\AdminController;
 use App\Http\Controllers\AdminAnalyticsController;
-use App\Http\Controllers\AdminExportController;
-use App\Http\Controllers\AdminHealthController;
-use App\Http\Controllers\AdminNotificationController;
 use App\Http\Controllers\AdminAuditController;
 use App\Http\Controllers\AdminBuilderController;
+use App\Http\Controllers\AdminController;
+use App\Http\Controllers\AdminExportController;
+use App\Http\Controllers\AdminHealthController;
 use App\Http\Controllers\AdminInquiryController;
+use App\Http\Controllers\AdminMerchantController;
+use App\Http\Controllers\AdminNotificationController;
 use App\Http\Controllers\AdminOrderController;
 use App\Http\Controllers\AdminSearchController;
 use App\Http\Controllers\AdminStoreController;
-use App\Http\Controllers\BillingController;
-use App\Http\Controllers\AdminMerchantController;
 use App\Http\Controllers\AdminStorefrontTemplateController;
 use App\Http\Controllers\AiChatController;
 use App\Http\Controllers\AuthController;
-use App\Http\Controllers\StorefrontCodeController;
-use App\Http\Controllers\VisionController;
+use App\Http\Controllers\BillingController;
 use App\Http\Controllers\MarketingController;
 use App\Http\Controllers\OrderController;
+use App\Http\Controllers\PaystackWebhookController;
 use App\Http\Controllers\PublicStorefrontController;
 use App\Http\Controllers\StoreCategoryController;
-use App\Http\Controllers\PaystackWebhookController;
 use App\Http\Controllers\StoreController;
 use App\Http\Controllers\StoreDomainController;
+use App\Http\Controllers\StorefrontBuilderController;
+use App\Http\Controllers\StorefrontCodeController;
+use App\Http\Controllers\StorefrontTemplateController;
 use App\Http\Controllers\StorePaymentController;
 use App\Http\Controllers\StoreProductController;
-use App\Http\Controllers\StorefrontBuilderController;
-use App\Http\Controllers\StorefrontTemplateController;
 use App\Http\Controllers\TikTokWebhookController;
+use App\Http\Controllers\VisionController;
 use App\Http\Controllers\WhatsAppWebhookController;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
@@ -41,6 +41,7 @@ Route::get('/test-api', fn () => response()->json([
 
 Route::post('/login-admin', [AdminController::class, 'login_admin'])->middleware('throttle:5,1');
 Route::post('/verify-admin', [AdminController::class, 'verify_admin'])->middleware('throttle:5,1');
+Route::get('/admin/auth/google', [AdminController::class, 'redirectToGoogle'])->middleware('throttle:10,1');
 Route::post('/request-admin-password-reset', [AdminController::class, 'request_password_reset'])->middleware('throttle:5,1');
 Route::post('/reset-admin-password-with-code', [AdminController::class, 'reset_password_with_code'])->middleware('throttle:5,1');
 
@@ -107,6 +108,8 @@ Route::middleware('auth:sanctum')->group(function () {
 Route::prefix('storehause')->group(function () {
     Route::post('/auth/register', [AuthController::class, 'register'])->middleware('throttle:10,1');
     Route::post('/auth/login', [AuthController::class, 'login'])->middleware('throttle:10,1');
+    Route::get('/auth/google', [AuthController::class, 'redirectToGoogle'])->middleware('throttle:10,1');
+    Route::get('/auth/google/callback', [AuthController::class, 'handleGoogleCallback'])->middleware('throttle:10,1');
     Route::post('/auth/request-password-reset', [AuthController::class, 'requestPasswordReset'])->middleware('throttle:5,1');
     Route::post('/auth/reset-password-with-code', [AuthController::class, 'resetPasswordWithCode'])->middleware('throttle:5,1');
     Route::get('/storefront-templates', [StorefrontTemplateController::class, 'active'])
