@@ -1,6 +1,8 @@
 <?php
 
+use App\Http\Controllers\AdminAiSettingsController;
 use App\Http\Controllers\AdminAnalyticsController;
+use App\Http\Controllers\AiConfigController;
 use App\Http\Controllers\AdminAuditController;
 use App\Http\Controllers\AdminBuilderController;
 use App\Http\Controllers\AdminController;
@@ -98,6 +100,9 @@ Route::middleware('auth:sanctum')->group(function () {
 
             Route::get('/audit-logs', [AdminAuditController::class, 'index']);
 
+            Route::get('/ai-settings', [AdminAiSettingsController::class, 'show']);
+            Route::patch('/ai-settings', [AdminAiSettingsController::class, 'update']);
+
             Route::get('/storefront-templates', [AdminStorefrontTemplateController::class, 'index']);
             Route::patch('/storefront-templates/{id}', [AdminStorefrontTemplateController::class, 'update']);
             Route::patch('/storefront-templates/{id}/status', [AdminStorefrontTemplateController::class, 'updateStatus']);
@@ -130,7 +135,9 @@ Route::prefix('storehause')->group(function () {
     Route::post('/public/storefronts/{slug}/visits', [PublicStorefrontController::class, 'recordVisit'])->middleware('throttle:60,1');
 
     // AI chat proxy — uses backend API key, no user auth needed
+    Route::get('/ai/config', [AiConfigController::class, 'show']);
     Route::post('/ai/chat', [AiChatController::class, 'chat'])->middleware('throttle:60,1');
+    Route::post('/ai/chat/stream', [AiChatController::class, 'chatStream'])->middleware('throttle:60,1');
     Route::post('/ai/vision/product', [VisionController::class, 'analyzeProduct'])->middleware('throttle:30,1');
     Route::post('/billing/webhook', [BillingController::class, 'webhook'])->middleware('throttle:120,1');
     Route::post('/paystack/webhook', [PaystackWebhookController::class, 'handle'])->middleware('throttle:120,1');

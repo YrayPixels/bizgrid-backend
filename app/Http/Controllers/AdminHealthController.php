@@ -8,6 +8,7 @@ use App\Models\BillingWebhookEvent;
 use App\Models\Merchant;
 use App\Models\PlatformNotification;
 use App\Models\StoreOrder;
+use App\Services\PlatformAiConfigService;
 use App\Services\PlatformNotificationService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Facades\DB;
@@ -17,6 +18,7 @@ class AdminHealthController extends Controller
 {
     public function __construct(
         private readonly PlatformNotificationService $notifications,
+        private readonly PlatformAiConfigService $aiConfig,
     ) {}
 
     public function status(): JsonResponse
@@ -48,6 +50,7 @@ class AdminHealthController extends Controller
                     'last_webhook_at' => $lastWebhook?->created_at?->toIso8601String(),
                     'last_webhook_type' => $lastWebhook?->event_type,
                 ],
+                'ai' => $this->aiConfig->publicConfig(),
                 'notifications_unread' => $this->notifications->unreadCount(),
             ],
         ]);

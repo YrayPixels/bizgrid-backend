@@ -3,8 +3,9 @@
 namespace App\Agents;
 
 use App\Models\Store;
+use App\Services\AiChatClient;
+use App\Services\PlatformAiConfigService;
 use App\Services\PromptService;
-use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 
@@ -12,6 +13,8 @@ class StorefrontCodeAgent
 {
     public function __construct(
         private readonly PromptService $prompts,
+        private readonly PlatformAiConfigService $aiConfig,
+        private readonly AiChatClient $aiChat,
     ) {}
 
     public function name(): string
@@ -27,12 +30,11 @@ class StorefrontCodeAgent
      */
     public function generate(Store $store, array $context = []): ?array
     {
-        $apiKey = config('openai.api_key');
-        $model = config('openai.chat_model', 'gpt-4o-mini');
-
-        if (! $apiKey) {
+        if (! $this->aiConfig->available()) {
             return ['error' => 'AI service not configured.'];
         }
+
+        $model = $this->aiConfig->chatModel();
 
         $store->loadMissing('merchant');
         $products = $context['products'] ?? [];
@@ -42,18 +44,15 @@ class StorefrontCodeAgent
         $userPrompt = $this->buildUserPrompt($store, $products, $context);
 
         try {
-            $response = Http::withToken($apiKey)
-                ->acceptJson()
-                ->timeout(120)
-                ->post('https://api.openai.com/v1/chat/completions', [
-                    'model' => $model,
-                    'temperature' => 0.7,
-                    'max_tokens' => 16000,
-                    'messages' => [
-                        ['role' => 'system', 'content' => $systemPrompt],
-                        ['role' => 'user', 'content' => $userPrompt],
-                    ],
-                ]);
+            $response = $this->aiChat->chatCompletions([
+                'model' => $model,
+                'temperature' => 0.7,
+                'max_tokens' => 16000,
+                'messages' => [
+                    ['role' => 'system', 'content' => $systemPrompt],
+                    ['role' => 'user', 'content' => $userPrompt],
+                ],
+            ]);
 
             if (! $response->successful()) {
                 $msg = $response->json('error.message') ?? 'Code generation failed';

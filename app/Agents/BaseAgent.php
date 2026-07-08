@@ -3,13 +3,24 @@
 namespace App\Agents;
 
 use App\Agents\Contracts\AgentInterface;
-use Illuminate\Support\Facades\Http;
+use App\Services\AiChatClient;
+use App\Services\PlatformAiConfigService;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 
 abstract class BaseAgent implements AgentInterface
 {
     protected string $promptVersion = 'v1';
+
+    protected function aiConfig(): PlatformAiConfigService
+    {
+        return app(PlatformAiConfigService::class);
+    }
+
+    protected function aiChat(): AiChatClient
+    {
+        return app(AiChatClient::class);
+    }
 
     public function promptVersion(): string
     {
@@ -30,25 +41,22 @@ abstract class BaseAgent implements AgentInterface
         }
 
         $temp = $temperature ?? $this->temperature();
-        $model = config('openai.chat_model', 'gpt-4o-mini');
+        $model = $this->aiConfig()->chatModel();
 
         try {
-            $response = Http::withToken((string) config('openai.api_key'))
-                ->acceptJson()
-                ->timeout(60)
-                ->post('https://api.openai.com/v1/chat/completions', [
-                    'model' => $model,
-                    'temperature' => $temp,
-                    'messages' => $messages,
-                    'response_format' => [
-                        'type' => 'json_schema',
-                        'json_schema' => [
-                            'name' => $this->name(),
-                            'strict' => true,
-                            'schema' => $jsonSchema,
-                        ],
+            $response = $this->aiChat()->chatCompletions([
+                'model' => $model,
+                'temperature' => $temp,
+                'messages' => $messages,
+                'response_format' => [
+                    'type' => 'json_schema',
+                    'json_schema' => [
+                        'name' => $this->name(),
+                        'strict' => true,
+                        'schema' => $jsonSchema,
                     ],
-                ]);
+                ],
+            ]);
 
             $this->logCall($response, $model, $temp);
 
@@ -90,19 +98,16 @@ abstract class BaseAgent implements AgentInterface
         }
 
         $temp = $temperature ?? $this->temperature();
-        $model = config('openai.chat_model', 'gpt-4o-mini');
+        $model = $this->aiConfig()->chatModel();
 
         try {
-            $response = Http::withToken((string) config('openai.api_key'))
-                ->acceptJson()
-                ->timeout(60)
-                ->post('https://api.openai.com/v1/chat/completions', [
-                    'model' => $model,
-                    'temperature' => $temp,
-                    'messages' => $messages,
-                    'tools' => $tools,
-                    'tool_choice' => 'auto',
-                ]);
+            $response = $this->aiChat()->chatCompletions([
+                'model' => $model,
+                'temperature' => $temp,
+                'messages' => $messages,
+                'tools' => $tools,
+                'tool_choice' => 'auto',
+            ]);
 
             $this->logCall($response, $model, $temp);
 
@@ -146,18 +151,15 @@ abstract class BaseAgent implements AgentInterface
         }
 
         $temp = $temperature ?? $this->temperature();
-        $model = config('openai.chat_model', 'gpt-4o-mini');
+        $model = $this->aiConfig()->chatModel();
 
         try {
-            $response = Http::withToken((string) config('openai.api_key'))
-                ->acceptJson()
-                ->timeout(60)
-                ->post('https://api.openai.com/v1/chat/completions', [
-                    'model' => $model,
-                    'temperature' => $temp,
-                    'response_format' => ['type' => 'json_object'],
-                    'messages' => $messages,
-                ]);
+            $response = $this->aiChat()->chatCompletions([
+                'model' => $model,
+                'temperature' => $temp,
+                'response_format' => ['type' => 'json_object'],
+                'messages' => $messages,
+            ]);
 
             $this->logCall($response, $model, $temp);
 
@@ -190,7 +192,7 @@ abstract class BaseAgent implements AgentInterface
      */
     public function available(): bool
     {
-        return filled(config('openai.api_key'));
+        return $this->aiConfig()->available();
     }
 
     /**

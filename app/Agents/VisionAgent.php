@@ -2,12 +2,18 @@
 
 namespace App\Agents;
 
+use App\Services\AiChatClient;
+use App\Services\PlatformAiConfigService;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 
 class VisionAgent
 {
+    public function __construct(
+        private readonly PlatformAiConfigService $aiConfig,
+        private readonly AiChatClient $aiChat,
+    ) {}
     /**
      * Analyze a product image using a vision-capable model.
      *
@@ -16,14 +22,13 @@ class VisionAgent
      */
     public function analyzeProductImage(string $imageUrl, array $context = []): ?array
     {
-        $apiKey = config('openai.api_key');
-        $model = config('openai.vision_model', 'gpt-4o');
-
-        if (! $apiKey) {
+        if (! $this->aiConfig->visionAvailable()) {
             Log::warning('VisionAgent: OpenAI API key not configured.');
 
             return ['error' => 'Vision model not configured.'];
         }
+
+        $model = $this->aiConfig->visionModel();
 
         // Resolve the image URL: for HTTP URLs, download and convert to base64
         // so OpenAI can access it regardless of CDN restrictions.
@@ -58,27 +63,24 @@ class VisionAgent
         }
 
         try {
-            $response = Http::withToken($apiKey)
-                ->acceptJson()
-                ->timeout(60)
-                ->post('https://api.openai.com/v1/chat/completions', [
-                    'model' => $model,
-                    'temperature' => 0.3,
-                    'max_tokens' => 500,
-                    'messages' => [
-                        [
-                            'role' => 'system',
-                            'content' => $systemPrompt,
-                        ],
-                        [
-                            'role' => 'user',
-                            'content' => [
-                                ['type' => 'text', 'text' => $userContent],
-                                ['type' => 'image_url', 'image_url' => ['url' => $visionUrl]],
-                            ],
+            $response = $this->aiChat->chatCompletions([
+                'model' => $model,
+                'temperature' => 0.3,
+                'max_tokens' => 500,
+                'messages' => [
+                    [
+                        'role' => 'system',
+                        'content' => $systemPrompt,
+                    ],
+                    [
+                        'role' => 'user',
+                        'content' => [
+                            ['type' => 'text', 'text' => $userContent],
+                            ['type' => 'image_url', 'image_url' => ['url' => $visionUrl]],
                         ],
                     ],
-                ]);
+                ],
+            ], 'openai');
 
             if (! $response->successful()) {
                 $msg = $response->json('error.message') ?? 'Vision model unavailable';

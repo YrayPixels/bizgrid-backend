@@ -2,31 +2,34 @@
 
 namespace App\Http\Controllers;
 
+use App\Services\AiChatClient;
+use App\Services\PlatformAiConfigService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
+use Symfony\Component\HttpFoundation\StreamedResponse;
 
 class AiChatController extends Controller
 {
+    public function __construct(
+        private readonly PlatformAiConfigService $aiConfig,
+        private readonly AiChatClient $aiChat,
+    ) {}
+
     /**
-     * Proxy OpenAI chat completions through the backend.
+     * Proxy chat completions through the backend using the configured provider.
      * Passes the request body through transparently — no validation
      * that could mangle complex nested tool calls or message structures.
      */
     public function chat(Request $request): JsonResponse
     {
-        $apiKey = config('openai.api_key');
-
-        if (! $apiKey) {
+        if (! $this->aiConfig->available()) {
             return response()->json([
-                'error' => 'OpenAI API key is not configured.',
+                'error' => 'AI API key is not configured.',
             ], 503);
         }
 
-        // Forward the raw body directly — PHP's json_decode/json_encode
-        // round-trip turns empty objects {} into arrays [], which OpenAI rejects.
         $rawBody = (string) $request->getContent();
 
         if ($rawBody === '') {
@@ -42,42 +45,83 @@ class AiChatController extends Controller
             ], 422);
         }
 
-        $model = $body['model'] ?? config('openai.chat_model', 'gpt-4o-mini');
+        $model = $body['model'] ?? $this->aiConfig->chatModel();
 
         try {
-            $response = Http::withToken($apiKey)
-                ->withBody($rawBody, 'application/json')
-                ->timeout(120)
-                ->post('https://api.openai.com/v1/chat/completions');
+            $response = $this->aiChat->chatCompletionsRaw($rawBody);
 
             if (! $response->successful()) {
-                $openAiError = $response->json('error.message')
-                    ?? $response->body();
+                $providerError = $this->aiChat->errorMessage($response);
 
                 Log::warning('AI chat proxy failed', [
+                    'provider' => $this->aiConfig->provider(),
                     'model' => $model,
                     'status' => $response->status(),
-                    'openai_error' => Str::limit((string) $openAiError, 1000),
+                    'ai_error' => Str::limit($providerError, 1000),
                 ]);
 
                 return response()->json([
                     'error' => 'AI service returned an error.',
-                    'detail' => Str::limit((string) $openAiError, 500),
+                    'detail' => $this->aiChat->limitError($providerError),
                     'status' => $response->status(),
                 ], 502);
             }
 
-            $usage = $response->json('usage');
-            Log::info('AI chat call', [
-                'model' => $model,
-                'prompt_tokens' => $usage['prompt_tokens'] ?? null,
-                'completion_tokens' => $usage['completion_tokens'] ?? null,
-                'total_tokens' => $usage['total_tokens'] ?? null,
-            ]);
+            $this->aiChat->logUsage($response, 'AI chat call', $model);
 
             return response()->json($response->json());
         } catch (\Throwable $e) {
             Log::warning('AI chat proxy exception', ['message' => $e->getMessage()]);
+
+            return response()->json([
+                'error' => 'Failed to reach AI service.',
+            ], 502);
+        }
+    }
+
+    public function chatStream(Request $request): JsonResponse|StreamedResponse
+    {
+        if (! $this->aiConfig->available()) {
+            return response()->json([
+                'error' => 'AI API key is not configured. Add keys in the platform admin AI settings page.',
+            ], 503);
+        }
+
+        $body = $request->validate([
+            'messages' => ['required', 'array', 'min:1'],
+            'model' => ['nullable', 'string'],
+            'temperature' => ['nullable', 'numeric'],
+        ]);
+
+        try {
+            $response = $this->aiChat->streamChatCompletions($body);
+
+            if (! $response->successful()) {
+                return response()->json([
+                    'error' => 'AI service returned an error.',
+                    'detail' => $this->aiChat->limitError($this->aiChat->errorMessage($response)),
+                    'status' => $response->status(),
+                ], 502);
+            }
+
+            $stream = $response->toPsrResponse()->getBody();
+
+            return response()->stream(function () use ($stream): void {
+                while (! $stream->eof()) {
+                    echo $stream->read(8192);
+                    if (function_exists('ob_flush')) {
+                        @ob_flush();
+                    }
+                    flush();
+                }
+            }, 200, [
+                'Content-Type' => 'text/event-stream; charset=UTF-8',
+                'Cache-Control' => 'no-cache, no-transform',
+                'Connection' => 'keep-alive',
+                'X-Accel-Buffering' => 'no',
+            ]);
+        } catch (\Throwable $e) {
+            Log::warning('AI chat stream exception', ['message' => $e->getMessage()]);
 
             return response()->json([
                 'error' => 'Failed to reach AI service.',
