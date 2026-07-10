@@ -39,12 +39,20 @@ class StorefrontPublishService
     /** @return array<string, mixed>|null */
     public function resolveFullDraft(Store $store): ?array
     {
+        $sessionSnapshot = $this->findActiveSessionSnapshot($store);
         $draft = $this->resolveDraft($store);
+
+        // Workbench saves often keep the project on the builder session only
+        // (saveSnapshot/saveProject do not always sync stores.draft_json).
         if (! is_array($draft) || $draft === []) {
-            return $draft;
+            if (! is_array($sessionSnapshot) || $sessionSnapshot === []) {
+                return null;
+            }
+
+            return $sessionSnapshot;
         }
 
-        return $this->mergeSessionOnlyKeys($draft, $this->findActiveSessionSnapshot($store));
+        return $this->mergeSessionOnlyKeys($draft, $sessionSnapshot);
     }
 
     public function assignDraft(Store $store, array $storefront): void
@@ -154,11 +162,14 @@ class StorefrontPublishService
         // Stripping Bolt seed files can leave an empty payload when the draft was
         // only custom_files/custom_code. Never mark the store live in that state —
         // public routes require a non-empty published_json.
-        if ($draft === []) {
+        if ($draft === [] || ! $this->hasPublishableStorefront($draft)) {
             throw ValidationException::withMessages([
-                'storefront' => 'Create a storefront draft before publishing.',
+                'storefront' => 'Publish requires a template storefront draft (hero, pages, or SEO). Code workbench files alone are not live on your subdomain yet.',
             ]);
         }
+
+        // Keep stores.draft_json aligned when publish pulled content from the session.
+        $this->assignDraft($store, $draft);
 
         $this->reconnectAndSave($store->fill([
             'published_json' => $draft,
@@ -235,6 +246,37 @@ class StorefrontPublishService
     {
         $templateId = $draft['template']['id'] ?? $store->storefront_template_id ?? null;
 
-        return in_array($templateId, ['furniture-hardware', 'hair-and-fashion'], true);
+        if (! in_array($templateId, ['furniture-hardware', 'hair-and-fashion'], true)) {
+            return false;
+        }
+
+        // Only strip leftover Bolt seed files when the JSON storefront can render alone.
+        // Workbench-only drafts must keep custom_files/custom_code to publish.
+        return $this->hasRenderableJsonStorefront($this->stripSessionOnlyKeys($draft));
+    }
+
+    /**
+     * Public storefront runtime renders JSON templates (hero/pages/etc).
+     * Bolt custom_files alone are not enough for a live Bizgrid subdomain page yet.
+     *
+     * @param  array<string, mixed>  $draft
+     */
+    private function hasPublishableStorefront(array $draft): bool
+    {
+        return $this->hasRenderableJsonStorefront($draft);
+    }
+
+    /**
+     * @param  array<string, mixed>  $draft
+     */
+    private function hasRenderableJsonStorefront(array $draft): bool
+    {
+        foreach (['hero', 'about', 'pages', 'value_props', 'products', 'seo'] as $key) {
+            if (! empty($draft[$key])) {
+                return true;
+            }
+        }
+
+        return false;
     }
 }

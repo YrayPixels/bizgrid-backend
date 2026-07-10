@@ -277,6 +277,44 @@ it('rejects publish when stripping bolt seed files would leave an empty storefro
     expect($service->isPublished($store))->toBeFalse();
 });
 
+it('publishes JSON storefront content that only exists on the builder session', function () {
+    $user = User::factory()->create();
+    $store = publishTestStorefront($user);
+    $store->update([
+        'draft_json' => null,
+        'storefront_content' => null,
+    ]);
+
+    \App\Models\StorefrontBuilderSession::create([
+        'user_id' => $user->id,
+        'store_id' => $store->id,
+        'status' => 'content_generated',
+        'storefront_snapshot' => [
+            'hero' => [
+                'headline' => 'Session headline',
+                'subheadline' => 'From the builder session',
+                'cta_label' => 'Shop',
+            ],
+            'seo' => [
+                'title' => 'Session store',
+                'description' => 'Published from session snapshot',
+            ],
+        ],
+    ]);
+
+    $service = app(\App\Services\StorefrontPublishService::class);
+    $service->publish($store->fresh());
+    $store->refresh();
+
+    expect($store->status)->toBe('published');
+    expect($store->published_json['hero']['headline'])->toBe('Session headline');
+    expect($service->isPublished($store))->toBeTrue();
+
+    $this->getJson('/api/storehause/public/storefronts/glow-rituals')
+        ->assertOk()
+        ->assertJsonPath('storefront.hero.headline', 'Session headline');
+});
+
 it('excludes stores with empty published_json from the public index', function () {
     $user = User::factory()->create();
     $store = publishTestStorefront($user);
