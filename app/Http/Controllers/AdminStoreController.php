@@ -46,13 +46,27 @@ class AdminStoreController extends Controller
         }
 
         $previousStatus = $store->status;
-        $store->status = $data['status'];
 
-        if ($data['status'] === 'published' && ! $store->published_at) {
-            $store->published_at = now();
+        if ($data['status'] === 'published' && ! $this->publishService->isPublished($store)) {
+            // Flipping status alone is not enough — public routes require non-empty published_json.
+            try {
+                $store = $this->publishService->publish($store);
+            } catch (\Illuminate\Validation\ValidationException $exception) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Cannot publish: storefront has no draft content yet.',
+                    'errors' => $exception->errors(),
+                ], 422);
+            }
+        } else {
+            $store->status = $data['status'];
+
+            if ($data['status'] === 'published' && ! $store->published_at) {
+                $store->published_at = now();
+            }
+
+            $store->save();
         }
-
-        $store->save();
 
         $this->audit->log($request, 'store.status_updated', 'store', $store->id, [
             'from' => $previousStatus,

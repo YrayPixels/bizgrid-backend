@@ -254,3 +254,43 @@ it('does not publish legacy bolt seed files for json furniture templates', funct
     expect($store->published_json)->not->toHaveKey('custom_code');
     expect($store->published_json['template']['id'])->toBe('furniture-hardware');
 });
+
+it('rejects publish when stripping bolt seed files would leave an empty storefront', function () {
+    $user = User::factory()->create();
+    $store = publishTestStorefront($user);
+    $store->update([
+        'storefront_template_id' => 'hair-and-fashion',
+        // Only session-only keys — after legacy Bolt strip, nothing remains.
+        'draft_json' => [
+            'custom_files' => [['path' => 'index.html', 'content' => '<html></html>']],
+            'custom_code' => '<html></html>',
+        ],
+    ]);
+
+    $service = app(\App\Services\StorefrontPublishService::class);
+
+    expect(fn () => $service->publish($store->fresh()))
+        ->toThrow(\Illuminate\Validation\ValidationException::class);
+
+    $store->refresh();
+    expect($store->status)->toBe('draft');
+    expect($service->isPublished($store))->toBeFalse();
+});
+
+it('excludes stores with empty published_json from the public index', function () {
+    $user = User::factory()->create();
+    $store = publishTestStorefront($user);
+    $store->update([
+        'status' => 'published',
+        'published_at' => now(),
+        'published_json' => [],
+    ]);
+
+    $this->getJson('/api/storehause/public/storefronts')
+        ->assertOk()
+        ->assertJsonCount(0, 'data');
+
+    $this->getJson('/api/storehause/public/storefronts/glow-rituals')
+        ->assertNotFound()
+        ->assertJsonPath('message', 'This storefront has not been published yet.');
+});

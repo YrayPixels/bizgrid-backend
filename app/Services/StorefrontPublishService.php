@@ -151,6 +151,15 @@ class StorefrontPublishService
             $draft = $this->stripSessionOnlyKeys($draft);
         }
 
+        // Stripping Bolt seed files can leave an empty payload when the draft was
+        // only custom_files/custom_code. Never mark the store live in that state —
+        // public routes require a non-empty published_json.
+        if ($draft === []) {
+            throw ValidationException::withMessages([
+                'storefront' => 'Create a storefront draft before publishing.',
+            ]);
+        }
+
         $this->reconnectAndSave($store->fill([
             'published_json' => $draft,
             'status' => 'published',

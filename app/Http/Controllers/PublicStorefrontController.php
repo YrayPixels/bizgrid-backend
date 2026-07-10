@@ -47,14 +47,17 @@ class PublicStorefrontController extends Controller
             ->where('status', 'published')
             ->whereNotNull('published_json')
             ->orderByDesc('published_at')
-            ->get(['slug', 'name', 'published_at']);
+            ->get(['slug', 'name', 'published_at', 'status', 'published_json']);
 
         return response()->json([
-            'data' => $stores->map(fn (Store $store) => [
-                'slug' => $store->slug,
-                'business_name' => $store->name,
-                'published_at' => $store->published_at?->toIso8601String(),
-            ])->values(),
+            'data' => $stores
+                ->filter(fn (Store $store) => $this->publishService->isPublished($store))
+                ->map(fn (Store $store) => [
+                    'slug' => $store->slug,
+                    'business_name' => $store->name,
+                    'published_at' => $store->published_at?->toIso8601String(),
+                ])
+                ->values(),
         ]);
     }
 
