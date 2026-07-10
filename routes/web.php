@@ -17,8 +17,12 @@ Route::get('/maintenance/migrate', function () {
         abort(403, 'Unauthorized');
     }
     Artisan::call('migrate', ['--force' => true]);
+    Artisan::call('db:seed', [
+        '--class' => 'Database\\Seeders\\StorefrontTemplateSeeder',
+        '--force' => true,
+    ]);
 
-    return response()->json(['message' => 'Migrations run successfully']);
+    return response()->json(['message' => 'Migrations and storefront templates seeded successfully']);
 });
 
 Route::get('/debug-env', function () {

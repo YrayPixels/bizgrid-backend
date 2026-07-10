@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use Database\Seeders\StorefrontTemplateSeeder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Facades\Schema;
 
@@ -45,6 +46,22 @@ class StorefrontTemplate extends Model
             'required_content_slots' => 'array',
             'optional_content_slots' => 'array',
         ];
+    }
+
+    /**
+     * Ensure platform templates exist. Safe to call repeatedly — only seeds when empty.
+     */
+    public static function ensureSeeded(): void
+    {
+        if (! Schema::hasTable('storefront_templates')) {
+            return;
+        }
+
+        if (self::query()->exists()) {
+            return;
+        }
+
+        (new StorefrontTemplateSeeder)->run();
     }
 
     /** @return list<string> */

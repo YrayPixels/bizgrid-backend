@@ -11,6 +11,8 @@ class StorefrontTemplateController extends Controller
 {
     public function active(): JsonResponse
     {
+        StorefrontTemplate::ensureSeeded();
+
         $templates = StorefrontTemplate::query()
             ->where('is_active', true)
             ->whereIn('id', StorefrontTemplate::defaultActiveConcreteIds())

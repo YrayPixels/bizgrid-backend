@@ -16,6 +16,8 @@ class AdminStorefrontTemplateController extends Controller
 
     public function index(): JsonResponse
     {
+        StorefrontTemplate::ensureSeeded();
+
         $templates = StorefrontTemplate::query()
             ->orderBy('sort_order')
             ->get()
