@@ -36,7 +36,8 @@ class AiChatClient
 
         return Http::withToken($apiKey)
             ->acceptJson()
-            ->timeout(120)
+            ->connectTimeout(20)
+            ->timeout(180)
             ->post($this->config->baseUrl($provider).'/chat/completions', $payload);
     }
 
@@ -52,10 +53,20 @@ class AiChatClient
             throw new \RuntimeException('AI API key is not configured.');
         }
 
+        $payload = json_decode($rawBody, true);
+        if (! is_array($payload)) {
+            throw new \InvalidArgumentException('Chat body must be valid JSON.');
+        }
+
+        if (! isset($payload['model']) || ! is_string($payload['model']) || $payload['model'] === '') {
+            $payload['model'] = $this->config->chatModel($provider);
+        }
+
         return Http::withToken($apiKey)
-            ->withBody($rawBody, 'application/json')
-            ->timeout(120)
-            ->post($this->config->baseUrl($provider).'/chat/completions');
+            ->acceptJson()
+            ->connectTimeout(20)
+            ->timeout(180)
+            ->post($this->config->baseUrl($provider).'/chat/completions', $payload);
     }
 
     /**
@@ -106,7 +117,8 @@ class AiChatClient
         return Http::withToken($apiKey)
             ->withOptions(['stream' => true])
             ->acceptJson()
-            ->timeout(120)
+            ->connectTimeout(20)
+            ->timeout(180)
             ->post($this->config->baseUrl($provider).'/chat/completions', $payload);
     }
 }

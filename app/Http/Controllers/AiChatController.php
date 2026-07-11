@@ -24,6 +24,12 @@ class AiChatController extends Controller
      */
     public function chat(Request $request): JsonResponse
     {
+        // Provider calls (esp. thinking models) regularly exceed PHP's default 30s.
+        if (function_exists('set_time_limit')) {
+            @set_time_limit(180);
+        }
+        @ini_set('max_execution_time', '180');
+
         if (! $this->aiConfig->available()) {
             return response()->json([
                 'error' => 'AI API key is not configured.',
@@ -81,6 +87,11 @@ class AiChatController extends Controller
 
     public function chatStream(Request $request): JsonResponse|StreamedResponse
     {
+        if (function_exists('set_time_limit')) {
+            @set_time_limit(180);
+        }
+        @ini_set('max_execution_time', '180');
+
         if (! $this->aiConfig->available()) {
             return response()->json([
                 'error' => 'AI API key is not configured. Add keys in the platform admin AI settings page.',
