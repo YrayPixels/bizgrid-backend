@@ -84,6 +84,40 @@ class StorefrontWriterAgent extends BaseAgent
     }
 
     /**
+     * Keep stats_row block props aligned with top-level home_stats after generation.
+     *
+     * @param  array<string, mixed>  $storefront
+     * @return array<string, mixed>
+     */
+    private function syncHomeStatsIntoBlocks(array $storefront): array
+    {
+        $homeStats = $storefront['home_stats'] ?? null;
+        if (! is_array($homeStats) || $homeStats === []) {
+            return $storefront;
+        }
+
+        $blocks = data_get($storefront, 'pages.home.blocks');
+        if (! is_array($blocks)) {
+            return $storefront;
+        }
+
+        foreach ($blocks as $index => $block) {
+            if (! is_array($block) || ($block['type'] ?? null) !== 'stats_row') {
+                continue;
+            }
+
+            $blocks[$index]['props'] = array_merge(
+                is_array($block['props'] ?? null) ? $block['props'] : [],
+                ['items' => array_values($homeStats)],
+            );
+        }
+
+        data_set($storefront, 'pages.home.blocks', $blocks);
+
+        return $storefront;
+    }
+
+    /**
      * @param  array<string, mixed>  $baseStorefront
      * @param  array<string, mixed>  $candidate
      * @return array<string, mixed>
@@ -94,6 +128,11 @@ class StorefrontWriterAgent extends BaseAgent
             'hero',
             'about',
             'value_props',
+            'navigation',
+            'home_stats',
+            'home_testimonials_title',
+            'home_testimonials_intro',
+            'home_testimonials',
             'pages',
             'products',
             'seo',
@@ -107,6 +146,6 @@ class StorefrontWriterAgent extends BaseAgent
             'last_generated_at' => now()->toIso8601String(),
         ]);
 
-        return $storefront;
+        return $this->syncHomeStatsIntoBlocks($storefront);
     }
 }

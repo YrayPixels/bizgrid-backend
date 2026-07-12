@@ -40,6 +40,8 @@ class StorefrontPathEditor
 
     public static function isEditablePath(string $path): bool
     {
+        $path = self::normalizeEditablePath($path);
+
         if (in_array($path, self::BASE_PATHS, true)) {
             return true;
         }
@@ -117,6 +119,8 @@ class StorefrontPathEditor
      */
     public static function apply(array &$storefront, string $path, string $value): bool
     {
+        $path = self::normalizeEditablePath($path);
+
         if (! self::isEditablePath($path)) {
             return false;
         }
@@ -402,7 +406,7 @@ class StorefrontPathEditor
 
         foreach ($updates as $path => $value) {
             if (is_string($path) && is_string($value) && trim($value) !== '') {
-                $flat[$path] = trim($value);
+                $flat[self::normalizeEditablePath($path)] = trim($value);
 
                 continue;
             }
@@ -410,6 +414,8 @@ class StorefrontPathEditor
             if (! is_string($path) || ! is_array($value)) {
                 continue;
             }
+
+            $path = self::normalizeEditablePath($path);
 
             if (in_array($path, ['hero', 'about', 'seo'], true)) {
                 foreach ($value as $field => $fieldValue) {
@@ -441,6 +447,24 @@ class StorefrontPathEditor
                         }
                     }
                 }
+
+                continue;
+            }
+
+            if ($path === 'home_stats' && array_is_list($value)) {
+                foreach ($value as $index => $item) {
+                    if (! is_array($item)) {
+                        continue;
+                    }
+
+                    foreach (['value', 'label'] as $field) {
+                        if (isset($item[$field]) && is_string($item[$field]) && trim($item[$field]) !== '') {
+                            $flat["home_stats.{$index}.{$field}"] = trim($item[$field]);
+                        }
+                    }
+                }
+
+                continue;
             }
 
             if ($path === 'home_testimonials' && array_is_list($value)) {
@@ -459,6 +483,18 @@ class StorefrontPathEditor
         }
 
         return $flat;
+    }
+
+    /**
+     * Convert prompt-style bracket indexes (home_stats[0].value) to dotted paths.
+     */
+    public static function normalizeEditablePath(string $path): string
+    {
+        return (string) preg_replace_callback(
+            '/\[(\d+)\]/',
+            static fn (array $matches): string => '.'.$matches[1],
+            $path,
+        );
     }
 
     /**

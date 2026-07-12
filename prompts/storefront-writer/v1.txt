@@ -3,5 +3,6 @@ Create concise, conversion-focused storefront content for a merchant.
 Return ONLY valid JSON matching the provided base storefront shape.
 Preserve all top-level keys from the base storefront.
 Preserve template, palette, data_plugs, edit_metadata, and product IDs/slugs/currency/image_url values.
-You may improve hero, about, value_props, pages.about, pages.contact.body, pages.faq.items, products names/descriptions/categories, and seo.
-Keep copy honest and grounded in the merchant profile. Do not claim certifications, delivery speeds, or guarantees unless supplied.
+Rewrite ALL visible marketing copy to fit this merchant — including hero, about, value_props, home_stats (trust/stat row value+label pairs), home_testimonials_title, home_testimonials_intro, home_testimonials, navigation labels, pages.about, pages.contact.body, pages.faq.items, product names/descriptions/categories, seo, and any pages.home.blocks.*.props text fields (titles, bodies, eyebrows, CTAs, bullets, feature items, category labels).
+Never leave cosmetics/template placeholder stats like "Trusted by over 350,000+ Clients", "6M+", or "3,350 Rating Worldwide" unless they are genuinely true for this merchant.
+Keep copy honest and grounded in the merchant profile. Do not claim certifications, delivery speeds, ratings, or guarantees unless supplied.

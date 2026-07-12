@@ -118,11 +118,14 @@ class StorefrontBuilderService
             'value_props' => $valueProps,
             'navigation' => $this->defaultNavigation($templateId),
             'home_stats' => $isCosmetics
-                ? [
-                    ['value' => 'Trusted by over 350,000+ Clients', 'label' => 'worldwide since 2008'],
-                    ['value' => '6M+', 'label' => 'Worldwide Product sale per year'],
-                    ['value' => '4.6', 'label' => '3,350 Rating Worldwide'],
-                ]
+                ? $this->defaultHomeStats($businessName, $industry)
+                : [],
+            'home_testimonials_title' => $isCosmetics ? 'Testimonials' : null,
+            'home_testimonials_intro' => $isCosmetics
+                ? "Real feedback from people who shop {$businessName} for everyday {$industryLabel}."
+                : null,
+            'home_testimonials' => $isCosmetics
+                ? $this->defaultHomeTestimonials($businessName, $industry)
                 : [],
             'pages' => [
                 'about' => [
@@ -178,6 +181,10 @@ class StorefrontBuilderService
                     'about.title',
                     'about.body',
                     'value_props',
+                    'home_stats',
+                    'home_testimonials_title',
+                    'home_testimonials_intro',
+                    'home_testimonials',
                     'pages',
                     'seo.title',
                     'seo.description',
@@ -603,6 +610,64 @@ class StorefrontBuilderService
             ['label' => 'About', 'href' => '/about'],
             ['label' => 'Contact', 'href' => '/contact'],
             ['label' => 'FAQ', 'href' => '/faq'],
+        ];
+    }
+
+    /**
+     * Honest default trust/stat copy — never invent fake client counts or ratings.
+     *
+     * @return list<array{value: string, label: string}>
+     */
+    private function defaultHomeStats(string $businessName, string $industry): array
+    {
+        if ($industry === 'beauty_and_skincare') {
+            return [
+                ['value' => "Crafted for {$businessName} customers", 'label' => 'calm routines, clean formulas'],
+                ['value' => 'Everyday glow', 'label' => 'simple steps that layer easily'],
+                ['value' => 'Gentle care', 'label' => 'formulas chosen for comfort'],
+            ];
+        }
+
+        if ($industry === 'fashion_and_apparel') {
+            return [
+                ['value' => "Styled by {$businessName}", 'label' => 'looks made to wear on repeat'],
+                ['value' => 'Season-ready', 'label' => 'fresh edits for everyday dressing'],
+                ['value' => 'Easy fit', 'label' => 'pieces chosen for comfort and movement'],
+            ];
+        }
+
+        return [
+            ['value' => "Welcome to {$businessName}", 'label' => 'thoughtful products, clear shopping'],
+            ['value' => 'Made with care', 'label' => 'checked before they reach you'],
+            ['value' => 'Human support', 'label' => 'real help when you need it'],
+        ];
+    }
+
+    /**
+     * @return list<array{quote: string, author: string}>
+     */
+    private function defaultHomeTestimonials(string $businessName, string $industry): array
+    {
+        if ($industry === 'beauty_and_skincare') {
+            return [
+                ['quote' => "My routine feels simpler with {$businessName}. Soft finish, no fuss.", 'author' => 'Ada'],
+                ['quote' => 'Clean textures and clear product pages made shopping easy.', 'author' => 'Tomi'],
+                ['quote' => 'A calm everyday set I actually stick with.', 'author' => 'Chioma'],
+            ];
+        }
+
+        if ($industry === 'fashion_and_apparel') {
+            return [
+                ['quote' => "{$businessName} pieces layer easily and feel made for real days.", 'author' => 'Maya'],
+                ['quote' => 'Clear sizing and a lookbook that helps me decide fast.', 'author' => 'Jordan'],
+                ['quote' => 'Simple staples I reach for every week.', 'author' => 'Amara'],
+            ];
+        }
+
+        return [
+            ['quote' => "{$businessName} made shopping feel personal and straightforward.", 'author' => 'Sam'],
+            ['quote' => 'Clear product details and helpful support when I needed it.', 'author' => 'Riley'],
+            ['quote' => 'Quality I trust and an easy checkout experience.', 'author' => 'Alex'],
         ];
     }
 

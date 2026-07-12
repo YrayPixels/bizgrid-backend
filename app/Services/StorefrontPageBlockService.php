@@ -307,6 +307,16 @@ class StorefrontPageBlockService
     }
 
     /**
+     * @param  array<string, mixed>  $storefront
+     * @param  list<string>  $changedPaths
+     * @return array<string, mixed>
+     */
+    public function maybeSyncHomeBlocksFromLegacyPaths(array $storefront, array $changedPaths): array
+    {
+        return $this->blockService->maybeSyncHomeBlocksFromLegacyPaths($storefront, $changedPaths);
+    }
+
+    /**
      * @param  list<string>  $changedBlockIds
      * @param  list<array<string, mixed>>  $operations
      * @return array{storefront: array<string, mixed>, changed_paths: list<string>, assistant_message: string}

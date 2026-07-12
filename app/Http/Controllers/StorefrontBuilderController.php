@@ -11,6 +11,7 @@ use App\Models\StorefrontBuilderSession;
 use App\Models\StorefrontTemplate;
 use App\Models\User;
 use App\Services\MerchantUsageEnforcementService;
+use App\Services\StorefrontBlockService;
 use App\Services\StorefrontBuilderService;
 use App\Services\StorefrontPublishService;
 use App\Services\StoreProductService;
@@ -30,6 +31,7 @@ class StorefrontBuilderController extends Controller
         private readonly StorefrontBuilderService $builderService,
         private readonly StoreProductService $productService,
         private readonly StorefrontPublishService $publishService,
+        private readonly StorefrontBlockService $blockService,
         private readonly WorkbenchProjectStorage $projectStorage,
         private readonly MerchantUsageEnforcementService $enforcement,
     ) {}
@@ -259,6 +261,7 @@ class StorefrontBuilderController extends Controller
                 $data['template_id'],
                 $session->store?->brand_color,
             );
+            $snapshot = $this->blockService->ensureAllPageBlocksOnStorefront($snapshot);
             $session->storefront_snapshot = $snapshot;
             $session->status = 'content_generated';
             $session->save();

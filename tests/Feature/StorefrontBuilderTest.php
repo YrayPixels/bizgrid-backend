@@ -338,6 +338,140 @@ it('rebuilds the draft when the merchant asks to build for cosmetics', function 
     expect($lastAssistant['content'])->toContain('refreshed');
 });
 
+it('switches a fashion draft to beauty and syncs snapshot template id', function () {
+    mockStorefrontAiAgent(function ($mock) {
+        $mock->shouldReceive('synthesizeStorefront')
+            ->zeroOrMoreTimes()
+            ->andReturnUsing(fn ($store, array $baseStorefront) => $baseStorefront);
+    });
+
+    $user = User::factory()->create();
+    $merchant = Merchant::create([
+        'owner_user_id' => $user->id,
+        'business_name' => 'Atelier Lane',
+        'slug' => 'atelier-lane',
+        'contact_name' => $user->name,
+        'email' => $user->email,
+        'industry' => 'fashion_and_apparel',
+        'status' => 'pending',
+        'subscription_plan' => 'starter',
+        'subscription_status' => 'trialing',
+    ]);
+    $store = Store::create([
+        'merchant_id' => $merchant->id,
+        'name' => 'Atelier Lane',
+        'slug' => 'atelier-lane',
+        'status' => 'draft',
+        'primary_domain' => 'atelier-lane.example.test',
+        'description' => 'Modern apparel for everyday wear.',
+        'brand_color' => '#1A1A1A',
+        'storefront_template_id' => 'fashion_lookbook',
+    ]);
+
+    $session = builderSessionWithDraft($user, $store, [
+        'selected_template_id' => 'fashion_lookbook',
+    ]);
+
+    expect(data_get($session->storefront_snapshot, 'template.id'))->toBe('fashion_lookbook');
+
+    $response = $this->actingAs($user, 'sanctum')
+        ->postJson("/api/storehause/storefront-builder/sessions/{$session->id}/select-template", [
+            'template_id' => 'beauty',
+            'source' => 'merchant_selected',
+        ]);
+
+    $response->assertOk()
+        ->assertJsonPath('session.selected_template_id', 'beauty')
+        ->assertJsonPath('session.store.storefront_template_id', 'beauty')
+        ->assertJsonPath('storefront.template.id', 'beauty');
+
+    $session->refresh();
+    $store->refresh();
+    expect($session->selected_template_id)->toBe('beauty');
+    expect($store->storefront_template_id)->toBe('beauty');
+    expect(data_get($session->storefront_snapshot, 'template.id'))->toBe('beauty');
+});
+
+it('rebuilds cosmetics home blocks when snapshot template id changes', function () {
+    $fashionBlocks = [
+        ['id' => 'hero-main', 'type' => 'hero', 'props' => ['headline' => 'Fashion']],
+        ['id' => 'category-showcase', 'type' => 'category_showcase', 'props' => []],
+        ['id' => 'featured-products', 'type' => 'product_grid', 'props' => ['title' => 'Featured', 'limit' => 4]],
+    ];
+
+    $storefront = [
+        'template' => ['id' => 'cosmetics', 'source' => 'merchant_selected'],
+        'hero' => ['headline' => 'Glow', 'subheadline' => 'Care', 'cta_label' => 'Shop'],
+        'about' => ['title' => 'About', 'body' => 'Body'],
+        'pages' => [
+            'home' => ['blocks' => $fashionBlocks],
+            'faq' => ['title' => 'FAQ', 'items' => []],
+        ],
+    ];
+
+    $blocks = app(StorefrontBlockService::class)->resolveHomeBlocks($storefront);
+
+    expect(collect($blocks)->pluck('id')->all())->toContain('serum-promo');
+    expect(collect($blocks)->pluck('id')->all())->not->toContain('category-showcase');
+});
+
+it('syncs the active builder session when the website draft is saved', function () {
+    $user = User::factory()->create();
+    $merchant = Merchant::create([
+        'owner_user_id' => $user->id,
+        'business_name' => 'Abi Houses',
+        'slug' => 'abi-houses',
+        'contact_name' => $user->name,
+        'email' => $user->email,
+        'industry' => 'beauty_and_skincare',
+        'status' => 'pending',
+        'subscription_plan' => 'starter',
+        'subscription_status' => 'trialing',
+    ]);
+    $store = Store::create([
+        'merchant_id' => $merchant->id,
+        'name' => 'Abi Houses',
+        'slug' => 'abi-houses',
+        'status' => 'draft',
+        'primary_domain' => 'abi-houses.example.test',
+        'description' => 'Skincare and beauty products.',
+        'brand_color' => '#6F2F2B',
+        'storefront_template_id' => 'fashion_lookbook',
+    ]);
+
+    $session = builderSessionWithDraft($user, $store, [
+        'selected_template_id' => 'fashion_lookbook',
+    ]);
+
+    expect(data_get($session->storefront_snapshot, 'template.id'))->toBe('fashion_lookbook');
+
+    $beautyDraft = [
+        'template' => ['id' => 'beauty', 'source' => 'merchant_selected'],
+        'palette' => ['primary' => '#6F2F2B', 'accent' => '#E8A0A0'],
+        'hero' => [
+            'headline' => 'Discover Your Beauty Essence with Abi Houses',
+            'subheadline' => 'Explore our curated collection.',
+            'cta_label' => 'Shop now',
+        ],
+        'about' => ['title' => 'About', 'body' => 'Beauty body'],
+        'value_props' => [
+            ['title' => 'Care', 'body' => 'Gentle formulas'],
+        ],
+        'seo' => ['title' => 'Abi Houses', 'description' => 'Beauty store'],
+        'pages' => ['home' => ['blocks' => []], 'faq' => ['title' => 'FAQ', 'items' => []]],
+    ];
+
+    $store->storefront_template_id = 'beauty';
+    app(App\Services\StorefrontPublishService::class)->persistDraft($store, $beautyDraft);
+
+    $session->refresh();
+    expect($session->selected_template_id)->toBe('beauty');
+    expect(data_get($session->storefront_snapshot, 'template.id'))->toBe('beauty');
+    expect(data_get($session->storefront_snapshot, 'hero.headline'))->toBe(
+        'Discover Your Beauty Essence with Abi Houses',
+    );
+});
+
 it('guides merchants to the products page when they want to add a product', function () {
     $mock = Mockery::mock(App\Services\StorefrontAiAgentService::class);
     $mock->shouldReceive('available')->andReturn(false);

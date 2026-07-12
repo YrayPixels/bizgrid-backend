@@ -64,6 +64,34 @@ class StorefrontPublishService
     {
         $this->assignDraft($store, $storefront);
         $this->reconnectAndSave($store);
+        $this->syncActiveBuilderSessions($store, $storefront);
+    }
+
+    /**
+     * Keep the active builder preview in sync when the website editor (or any
+     * other surface) saves the shared store draft — otherwise the builder can
+     * keep a stale Fashion snapshot while Website shows Beauty.
+     *
+     * @param  array<string, mixed>  $storefront
+     */
+    public function syncActiveBuilderSessions(Store $store, array $storefront): void
+    {
+        $templateId = $store->storefront_template_id;
+        $sessions = StorefrontBuilderSession::query()
+            ->where('store_id', $store->id)
+            ->whereNotIn('status', ['published'])
+            ->get();
+
+        foreach ($sessions as $session) {
+            $snapshot = $this->compactSessionSnapshot(
+                $this->mergeSessionOnlyKeys($storefront, is_array($session->storefront_snapshot) ? $session->storefront_snapshot : null),
+            );
+            $session->storefront_snapshot = $snapshot;
+            if (is_string($templateId) && $templateId !== '' && $templateId !== 'ai_pick') {
+                $session->selected_template_id = $templateId;
+            }
+            $this->reconnectAndSaveModel($session);
+        }
     }
 
     /**

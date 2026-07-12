@@ -149,6 +149,8 @@ class EditorAgent extends BaseAgent
             return null;
         }
 
+        $storefront = $this->pageBlockService->maybeSyncHomeBlocksFromLegacyPaths($storefront, $changedPaths);
+
         $storefront['edit_metadata'] = array_merge($metadata, [
             'user_edited_paths' => array_values(array_unique($userEditedPaths)),
             'ai_generated_paths' => $aiGeneratedPaths,

@@ -541,17 +541,37 @@ class StorefrontBlockService
     }
 
     /**
-     * @param  array<string, mixed>  $storefront
-     * @return list<array<string, mixed>>
+     * @param  list<array<string, mixed>>  $blocks
      */
-    private function migrateHomeBlocks(array $storefront): array
+    private function homeBlocksMatchTemplate(array $blocks, string $templateId): bool
     {
-        $existing = data_get($storefront, 'pages.home.blocks');
-        if (is_array($existing) && $existing !== []) {
-            return $this->ensureCategoryShowcaseBlock($existing, $storefront);
+        $hasCosmeticsRecipe = collect($blocks)->contains(fn (array $block): bool => ($block['id'] ?? null) === 'serum-promo');
+        $hasFurnitureRecipe = collect($blocks)->contains(fn (array $block): bool => ($block['id'] ?? null) === 'collections');
+        $hasHairRecipe = collect($blocks)->contains(fn (array $block): bool => ($block['id'] ?? null) === 'choose-style');
+
+        if ($templateId === 'cosmetics') {
+            return $hasCosmeticsRecipe;
         }
 
+        if ($templateId === 'furniture-hardware') {
+            return $hasFurnitureRecipe;
+        }
+
+        if ($templateId === 'hair-and-fashion') {
+            return $hasHairRecipe;
+        }
+
+        return ! $hasCosmeticsRecipe && ! $hasFurnitureRecipe && ! $hasHairRecipe;
+    }
+
+    private function migrateHomeBlocks(array $storefront): array
+    {
         $templateId = (string) data_get($storefront, 'template.id', 'classic');
+        $existing = data_get($storefront, 'pages.home.blocks');
+
+        if (is_array($existing) && $existing !== [] && $this->homeBlocksMatchTemplate($existing, $templateId)) {
+            return $this->ensureCategoryShowcaseBlock($existing, $storefront);
+        }
 
         return $this->buildDefaultHomeBlocks($storefront, $templateId);
     }
@@ -680,11 +700,7 @@ class StorefrontBlockService
     {
         $stats = is_array($storefront['home_stats'] ?? null) && ($storefront['home_stats'] ?? []) !== []
             ? $storefront['home_stats']
-            : [
-                ['value' => 'Trusted by over 350,000+ Clients', 'label' => 'worldwide since 2008'],
-                ['value' => '6M+', 'label' => 'Worldwide Product sale per year'],
-                ['value' => '4.6', 'label' => '3,350 Rating Worldwide'],
-            ];
+            : $this->defaultHomeStats($storefront);
 
         $valueProps = is_array($storefront['value_props'] ?? null) && ($storefront['value_props'] ?? []) !== []
             ? $storefront['value_props']
@@ -1010,11 +1026,7 @@ class StorefrontBlockService
             'stats_row' => [
                 'items' => is_array($storefront['home_stats'] ?? null) && ($storefront['home_stats'] ?? []) !== []
                     ? $storefront['home_stats']
-                    : [
-                        ['value' => 'Trusted by over 350,000+ Clients', 'label' => 'worldwide since 2008'],
-                        ['value' => '6M+', 'label' => 'Worldwide Product sale per year'],
-                        ['value' => '4.6', 'label' => '3,350 Rating Worldwide'],
-                    ],
+                    : $this->defaultHomeStats($storefront),
             ],
             'rich_text' => [
                 'title' => (string) data_get($storefront, 'about.title', ''),
@@ -1482,6 +1494,30 @@ class StorefrontBlockService
             'fields' => $fields,
             'submit_label' => 'Send message',
             'success_message' => "Thanks — we'll reply soon.",
+        ];
+    }
+
+    /**
+     * Honest default trust/stat copy — never invent fake client counts or ratings.
+     *
+     * @param  array<string, mixed>  $storefront
+     * @return list<array{value: string, label: string}>
+     */
+    private function defaultHomeStats(array $storefront): array
+    {
+        $businessName = trim((string) (
+            data_get($storefront, 'about.title')
+            ?: data_get($storefront, 'hero.headline')
+            ?: data_get($storefront, 'seo.title')
+            ?: 'our store'
+        ));
+        $businessName = preg_replace('/^(About|Discover the nature with)\s+/i', '', $businessName) ?: 'our store';
+        $businessName = trim((string) preg_replace('/\s*\|\s*.*$/', '', $businessName));
+
+        return [
+            ['value' => "Crafted for {$businessName} customers", 'label' => 'calm routines, clean formulas'],
+            ['value' => 'Everyday glow', 'label' => 'simple steps that layer easily'],
+            ['value' => 'Gentle care', 'label' => 'formulas chosen for comfort'],
         ];
     }
 
