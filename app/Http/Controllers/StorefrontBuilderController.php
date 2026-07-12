@@ -250,6 +250,43 @@ class StorefrontBuilderController extends Controller
                         : $session->storefront_snapshot,
                 ]);
             }
+
+            // Regenerate failed — still point the snapshot at the selected template so preview switches.
+            $snapshot = is_array($session->storefront_snapshot) ? $session->storefront_snapshot : [];
+            data_set($snapshot, 'template.id', $data['template_id']);
+            data_set($snapshot, 'template.source', $data['source'] ?? 'merchant_selected');
+            $snapshot['palette'] = $this->builderService->defaultStorefrontPalette(
+                $data['template_id'],
+                $session->store?->brand_color,
+            );
+            $session->storefront_snapshot = $snapshot;
+            $session->status = 'content_generated';
+            $session->save();
+
+            if ($session->store) {
+                $this->publishService->persistDraft($session->store, $snapshot);
+            }
+
+            $this->appendAssistantMessage(
+                $session,
+                'Got it — I switched the design. Check the preview on the right, then tell me what to refine.',
+                [
+                    'type' => 'design_selected',
+                    'template_id' => $data['template_id'],
+                    'source' => $data['source'] ?? 'merchant_selected',
+                ],
+            );
+
+            $this->invalidateBuilderApiCache($session);
+
+            $session = $session->fresh(['messages', 'store.merchant']);
+
+            return response()->json([
+                ...$this->formatSessionPayload($session),
+                'storefront' => $session->store
+                    ? $this->productService->mergeIntoStorefront($session->storefront_snapshot ?? [], $session->store)
+                    : $session->storefront_snapshot,
+            ]);
         }
 
         $session->status = 'template_recommendation';

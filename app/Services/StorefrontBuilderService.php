@@ -193,6 +193,17 @@ class StorefrontBuilderService
             try {
                 $enhanced = $this->aiAgent->synthesizeStorefront($store, $storefront);
                 if (is_array($enhanced)) {
+                    // AI enhancement must not change the merchant-selected template.
+                    data_set($enhanced, 'template.id', $templateId);
+                    data_set(
+                        $enhanced,
+                        'template.source',
+                        ($store->storefront_template_id ?? 'ai_pick') === 'ai_pick' ? 'ai_selected' : 'merchant_selected',
+                    );
+                    if (empty($enhanced['palette']) || ! is_array($enhanced['palette'])) {
+                        $enhanced['palette'] = $this->defaultStorefrontPalette($templateId, $store->brand_color ?? null);
+                    }
+
                     return $this->blockService->ensureAllPageBlocksOnStorefront($enhanced);
                 }
             } catch (\Throwable) {
