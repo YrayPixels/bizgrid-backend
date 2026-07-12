@@ -90,6 +90,10 @@ trait StorehauseHelpers
             'subdomain_host' => $subdomainHost,
             'primary_domain' => $store->primary_domain ?? $subdomainHost,
             'notifications' => app(StoreNotificationService::class)->formatNotificationSettings($store),
+            'store_perks' => array_values(array_filter(array_map(
+                fn ($perk) => is_string($perk) ? trim($perk) : '',
+                is_array($store->store_perks) ? $store->store_perks : [],
+            ))),
         ];
     }
 
@@ -108,6 +112,8 @@ trait StorehauseHelpers
             'settlement_status' => $order->settlement_status,
             'currency' => $order->currency,
             'subtotal' => (float) $order->subtotal,
+            'discount_amount' => (float) ($order->discount_amount ?? 0),
+            'discount_label' => $order->discount_label,
             'total_amount' => (float) $order->total_amount,
             'items' => $order->items ?? [],
             'notes' => $order->notes,

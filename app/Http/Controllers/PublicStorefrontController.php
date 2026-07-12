@@ -9,6 +9,7 @@ use App\Models\Store;
 use App\Models\StoreContactInquiry;
 use App\Models\StoreOrder;
 use App\Models\StoreProduct;
+use App\Models\StoreProductReview;
 use App\Models\StoreVisit;
 use App\Services\AbandonedRecoveryService;
 use App\Services\MerchantUsageEnforcementService;
@@ -16,6 +17,7 @@ use App\Services\PaystackService;
 use App\Services\PlatformNotificationService;
 use App\Services\StoreNotificationService;
 use App\Services\StoreCategoryService;
+use App\Services\StoreDiscountService;
 use App\Services\StorefrontBuilderService;
 use App\Services\StorefrontPublishService;
 use App\Services\StoreProductService;
@@ -33,6 +35,7 @@ class PublicStorefrontController extends Controller
         private readonly StorefrontBuilderService $builderService,
         private readonly StoreProductService $productService,
         private readonly StoreCategoryService $categoryService,
+        private readonly StoreDiscountService $discountService,
         private readonly StorefrontPublishService $publishService,
         private readonly MerchantUsageEnforcementService $enforcement,
         private readonly PlatformNotificationService $notifications,
@@ -182,6 +185,8 @@ class PublicStorefrontController extends Controller
             'items' => 'required|array|min:1|max:100',
             'items.*.product_id' => 'required|string|max:120',
             'items.*.quantity' => 'required|integer|min:1|max:999',
+            'items.*.selected_options' => 'nullable|array',
+            'items.*.selected_options.*' => 'string|max:80',
         ]);
 
         $products = StoreProduct::query()
@@ -189,6 +194,7 @@ class PublicStorefrontController extends Controller
             ->where('status', 'active')
             ->get()
             ->keyBy(fn (StoreProduct $product) => $product->id);
+        $activeDiscounts = $this->discountService->activeModelsForStore($store);
         $currency = 'NGN';
         $items = [];
         $subtotal = 0;
@@ -208,7 +214,17 @@ class PublicStorefrontController extends Controller
                 ], 422);
             }
 
-            $unitPrice = (float) $product->price;
+            $selectedOptions = $this->normalizeSelectedOptions(
+                is_array($product->variants) ? $product->variants : [],
+                is_array($line['selected_options'] ?? null) ? $line['selected_options'] : [],
+            );
+
+            if ($selectedOptions instanceof JsonResponse) {
+                return $selectedOptions;
+            }
+
+            $priced = $this->discountService->resolveUnitPrice($product, $activeDiscounts);
+            $unitPrice = (float) $priced['unit_price'];
             $lineTotal = $unitPrice * $quantity;
             $currency = (string) ($product->currency ?: $currency);
             $subtotal += $lineTotal;
@@ -217,22 +233,40 @@ class PublicStorefrontController extends Controller
                 'name' => $product->name,
                 'quantity' => $quantity,
                 'unit_price' => $unitPrice,
+                'compare_at_price' => $priced['compare_at_price'],
+                'discount_label' => $priced['discount_label'],
                 'total' => $lineTotal,
                 'currency' => $currency,
                 'image_url' => $product->image_url,
+                'selected_options' => $selectedOptions,
             ];
         }
 
+        $cartDiscount = $this->discountService->resolveCartDiscount($subtotal, $activeDiscounts);
+        $discountAmount = (float) $cartDiscount['amount'];
+        $totalAmount = max(0, round($subtotal - $discountAmount, 2));
+
         $store->loadMissing('merchant');
         if ($store->merchant) {
-            $this->enforcement->assertCanProcessOrder($store->merchant, $subtotal);
+            $this->enforcement->assertCanProcessOrder($store->merchant, $totalAmount);
         }
 
         $paystackEnabled = $this->paystack->isConfigured();
 
         $lowStockProducts = [];
 
-        $order = DB::transaction(function () use ($store, $data, $items, $subtotal, $currency, $paystackEnabled, &$lowStockProducts) {
+        $order = DB::transaction(function () use (
+            $store,
+            $data,
+            $items,
+            $subtotal,
+            $discountAmount,
+            $cartDiscount,
+            $totalAmount,
+            $currency,
+            $paystackEnabled,
+            &$lowStockProducts
+        ) {
             $order = StoreOrder::create([
                 'store_id' => $store->id,
                 'order_number' => $this->uniqueOrderNumber(),
@@ -244,7 +278,9 @@ class PublicStorefrontController extends Controller
                 'payment_status' => $paystackEnabled ? 'awaiting_payment' : 'pending',
                 'currency' => $currency,
                 'subtotal' => $subtotal,
-                'total_amount' => $subtotal,
+                'discount_amount' => $discountAmount,
+                'discount_label' => $cartDiscount['label'],
+                'total_amount' => $totalAmount,
                 'items' => $items,
                 'notes' => $data['notes'] ?? null,
                 'placed_at' => now(),
@@ -254,10 +290,10 @@ class PublicStorefrontController extends Controller
 
             if (! $paystackEnabled) {
                 $store->increment('orders_count');
-                $store->increment('gross_revenue', $subtotal);
+                $store->increment('gross_revenue', $totalAmount);
 
                 if ($store->merchant) {
-                    $this->enforcement->recordOrderProcessing($store->merchant, $subtotal);
+                    $this->enforcement->recordOrderProcessing($store->merchant, $totalAmount);
                 }
             }
 
@@ -274,7 +310,7 @@ class PublicStorefrontController extends Controller
             'order.placed',
             'New order: '.$order->order_number,
             $store->name,
-            ['order_id' => $order->id, 'store_id' => $store->id, 'total' => $subtotal],
+            ['order_id' => $order->id, 'store_id' => $store->id, 'total' => $totalAmount],
         );
 
         if (filled($data['session_token'] ?? null)) {
@@ -438,6 +474,84 @@ class PublicStorefrontController extends Controller
         ], 201);
     }
 
+    public function listProductReviews(string $slug, string $productId): JsonResponse
+    {
+        $store = Store::query()->where('slug', Str::slug($slug))->first();
+
+        if (! $store || ! $this->publishService->isPublished($store)) {
+            return response()->json(['message' => 'Storefront not found.'], 404);
+        }
+
+        $product = StoreProduct::query()
+            ->where('store_id', $store->id)
+            ->where('id', $productId)
+            ->where('status', 'active')
+            ->first();
+
+        if (! $product) {
+            return response()->json(['message' => 'Product not found.'], 404);
+        }
+
+        $reviews = StoreProductReview::query()
+            ->where('store_id', $store->id)
+            ->where('product_id', $product->id)
+            ->where('status', 'approved')
+            ->orderByDesc('created_at')
+            ->limit(50)
+            ->get();
+
+        $average = $reviews->avg('rating');
+
+        return response()->json([
+            'average_rating' => $reviews->isEmpty() ? 0 : round((float) $average, 1),
+            'review_count' => $reviews->count(),
+            'reviews' => $reviews->map(fn (StoreProductReview $review) => $this->formatProductReview($review))->values(),
+        ]);
+    }
+
+    public function submitProductReview(Request $request, string $slug, string $productId): JsonResponse
+    {
+        $store = Store::with('merchant')->where('slug', Str::slug($slug))->first();
+
+        if (! $store || ! $this->publishService->isPublished($store)) {
+            return response()->json(['message' => 'Storefront not found.'], 404);
+        }
+
+        $this->ensureStoreMerchantActive($store);
+
+        $product = StoreProduct::query()
+            ->where('store_id', $store->id)
+            ->where('id', $productId)
+            ->where('status', 'active')
+            ->first();
+
+        if (! $product) {
+            return response()->json(['message' => 'Product not found.'], 404);
+        }
+
+        $data = $request->validate([
+            'author_name' => 'required|string|max:80',
+            'author_email' => 'nullable|email|max:255',
+            'rating' => 'required|integer|min:1|max:5',
+            'body' => 'required|string|max:2000',
+        ]);
+
+        $review = StoreProductReview::create([
+            'store_id' => $store->id,
+            'product_id' => $product->id,
+            'author_name' => trim($data['author_name']),
+            'author_email' => isset($data['author_email']) ? strtolower(trim((string) $data['author_email'])) : null,
+            'rating' => (int) $data['rating'],
+            'body' => trim($data['body']),
+            'status' => 'approved',
+        ]);
+
+        return response()->json([
+            'message' => 'Review submitted.',
+            'review' => $this->formatProductReview($review),
+        ], 201);
+    }
+
     public function recordAbandonedCart(Request $request, string $slug): JsonResponse
     {
         $store = Store::with('merchant')->where('slug', Str::slug($slug))->first();
@@ -481,17 +595,87 @@ class PublicStorefrontController extends Controller
         ], 201);
     }
 
+    /**
+     * @param  list<array{name?: mixed, options?: mixed}>  $variantGroups
+     * @param  array<string, mixed>  $selected
+     * @return array<string, string>|JsonResponse
+     */
+    private function normalizeSelectedOptions(array $variantGroups, array $selected): array|JsonResponse
+    {
+        $normalized = [];
+
+        foreach ($variantGroups as $group) {
+            $name = trim((string) ($group['name'] ?? ''));
+            $options = is_array($group['options'] ?? null)
+                ? array_values(array_filter(array_map(
+                    fn ($option) => trim((string) $option),
+                    $group['options'],
+                ), fn (string $option) => $option !== ''))
+                : [];
+
+            if ($name === '' || $options === []) {
+                continue;
+            }
+
+            $value = trim((string) ($selected[$name] ?? ''));
+            if ($value === '' || ! in_array($value, $options, true)) {
+                return response()->json([
+                    'message' => "Please select a valid {$name} option.",
+                ], 422);
+            }
+
+            $normalized[$name] = $value;
+        }
+
+        return $normalized;
+    }
+
+    private function formatProductReview(StoreProductReview $review): array
+    {
+        return [
+            'id' => $review->id,
+            'author_name' => $review->author_name,
+            'rating' => (int) $review->rating,
+            'body' => $review->body,
+            'created_at' => optional($review->created_at)?->toIso8601String(),
+        ];
+    }
+
     private function formatPublicPayload(Store $store): array
     {
         $storefront = $this->publishService->resolvePublished($store)
             ?? $this->builderService->synthesizeStorefront($store);
 
+        $storefront = $this->productService->mergeIntoStorefront($storefront, $store, activeOnly: true);
+        $activeDiscounts = $this->discountService->activeModelsForStore($store);
+        $products = is_array($storefront['products'] ?? null) ? $storefront['products'] : [];
+        $productModels = StoreProduct::query()
+            ->where('store_id', $store->id)
+            ->where('status', 'active')
+            ->get()
+            ->keyBy(fn (StoreProduct $product) => (string) $product->id);
+
+        $storefront['products'] = array_map(function (array $product) use ($productModels, $activeDiscounts) {
+            $model = $productModels->get((string) ($product['id'] ?? ''));
+            if (! $model) {
+                return $product;
+            }
+            $priced = $this->discountService->resolveUnitPrice($model, $activeDiscounts);
+            $product['sale_price'] = $model->sale_price !== null ? (float) $model->sale_price : null;
+            $product['effective_price'] = $priced['unit_price'];
+            $product['compare_at_price'] = $priced['compare_at_price'];
+            $product['discount_label'] = $priced['discount_label'];
+
+            return $product;
+        }, $products);
+
         return [
             'store' => array_merge($this->formatStore($store), $this->publishService->publishMeta($store), [
                 'checkout_enabled' => $this->paystack->isConfigured(),
             ]),
-            'storefront' => $this->productService->mergeIntoStorefront($storefront, $store, activeOnly: true),
+            'storefront' => $storefront,
             'categories' => $this->categoryService->listForStore($store),
+            'discounts' => $this->discountService->listActiveForStorefront($store),
             'generation_id' => $store->storefront_generation_id,
             'checkout' => [
                 'payments_enabled' => $this->paystack->isConfigured(),
@@ -505,10 +689,34 @@ class PublicStorefrontController extends Controller
         $storefront = $this->publishService->resolveDraft($store)
             ?? $this->builderService->synthesizeStorefront($store);
 
+        $storefront = $this->productService->mergeIntoStorefront($storefront, $store, activeOnly: true);
+        $activeDiscounts = $this->discountService->activeModelsForStore($store);
+        $products = is_array($storefront['products'] ?? null) ? $storefront['products'] : [];
+        $productModels = StoreProduct::query()
+            ->where('store_id', $store->id)
+            ->where('status', 'active')
+            ->get()
+            ->keyBy(fn (StoreProduct $product) => (string) $product->id);
+
+        $storefront['products'] = array_map(function (array $product) use ($productModels, $activeDiscounts) {
+            $model = $productModels->get((string) ($product['id'] ?? ''));
+            if (! $model) {
+                return $product;
+            }
+            $priced = $this->discountService->resolveUnitPrice($model, $activeDiscounts);
+            $product['sale_price'] = $model->sale_price !== null ? (float) $model->sale_price : null;
+            $product['effective_price'] = $priced['unit_price'];
+            $product['compare_at_price'] = $priced['compare_at_price'];
+            $product['discount_label'] = $priced['discount_label'];
+
+            return $product;
+        }, $products);
+
         return [
             'store' => array_merge($this->formatStore($store), $this->publishService->publishMeta($store)),
-            'storefront' => $this->productService->mergeIntoStorefront($storefront, $store, activeOnly: true),
+            'storefront' => $storefront,
             'categories' => $this->categoryService->listForStore($store),
+            'discounts' => $this->discountService->listActiveForStorefront($store),
             'generation_id' => $store->storefront_generation_id,
         ];
     }

@@ -153,6 +153,8 @@ class StoreController extends Controller
             'notification_email' => 'sometimes|nullable|email|max:255',
             'customer_order_note' => 'sometimes|nullable|string|max:2000',
             'sms_sender_name' => 'sometimes|nullable|string|max:11',
+            'store_perks' => 'sometimes|nullable|array|max:12',
+            'store_perks.*' => 'string|max:160',
         ], $this->businessProfileRules(required: false)));
 
         $store = Store::with('merchant')
@@ -203,6 +205,7 @@ class StoreController extends Controller
             'notification_email',
             'customer_order_note',
             'sms_sender_name',
+            'store_perks',
         ] as $field) {
             if (array_key_exists($field, $data)) {
                 $store->{$field} = $data[$field];
@@ -309,6 +312,12 @@ class StoreController extends Controller
             'storefront.palette.text' => ['nullable', 'string', 'regex:/^#[0-9A-Fa-f]{6}$/'],
             'storefront.palette.muted' => ['nullable', 'string', 'regex:/^#[0-9A-Fa-f]{6}$/'],
             'storefront.palette.border' => ['nullable', 'string', 'regex:/^#[0-9A-Fa-f]{6}$/'],
+            'storefront.display_font' => 'nullable|string|max:80',
+            'storefront.theme_overrides' => 'nullable|array',
+            'storefront.theme_overrides.button_style' => 'nullable|string|in:rounded,square,pill',
+            'storefront.theme_overrides.button_radius' => 'nullable|string|in:none,md,full',
+            'storefront.theme_overrides.density' => 'nullable|string|in:compact,default,airy',
+            'storefront.theme_overrides.body_font' => 'nullable|string|in:clean-sans,modern-sans,elegant-serif',
             'storefront.data_plugs' => 'nullable|array',
             'storefront.data_plugs.home_products_source' => 'nullable|string|in:merchant_products,theme_products',
             'storefront.media' => 'nullable|array',

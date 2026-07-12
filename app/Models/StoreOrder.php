@@ -22,6 +22,8 @@ class StoreOrder extends Model
         'paystack_reference',
         'currency',
         'subtotal',
+        'discount_amount',
+        'discount_label',
         'total_amount',
         'items',
         'notes',
@@ -34,6 +36,7 @@ class StoreOrder extends Model
     {
         return [
             'subtotal' => 'decimal:2',
+            'discount_amount' => 'decimal:2',
             'total_amount' => 'decimal:2',
             'items' => 'array',
             'placed_at' => 'datetime',

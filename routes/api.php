@@ -30,6 +30,7 @@ use App\Http\Controllers\StorefrontCodeController;
 use App\Http\Controllers\StorefrontTemplateController;
 use App\Http\Controllers\StorePaymentController;
 use App\Http\Controllers\StoreProductController;
+use App\Http\Controllers\StoreDiscountController;
 use App\Http\Controllers\TikTokWebhookController;
 use App\Http\Controllers\VisionController;
 use App\Http\Controllers\WhatsAppWebhookController;
@@ -132,6 +133,8 @@ Route::prefix('storehause')->group(function () {
     Route::post('/public/storefronts/{slug}/orders/verify', [PublicStorefrontController::class, 'verifyPayment'])->middleware('throttle:60,1');
     Route::post('/public/storefronts/{slug}/abandoned-carts', [PublicStorefrontController::class, 'recordAbandonedCart'])->middleware('throttle:30,1');
     Route::post('/public/storefronts/{slug}/contact', [PublicStorefrontController::class, 'submitContact'])->middleware('throttle:10,1');
+    Route::get('/public/storefronts/{slug}/products/{productId}/reviews', [PublicStorefrontController::class, 'listProductReviews'])->middleware('throttle:60,1');
+    Route::post('/public/storefronts/{slug}/products/{productId}/reviews', [PublicStorefrontController::class, 'submitProductReview'])->middleware('throttle:10,1');
     Route::post('/public/storefronts/{slug}/visits', [PublicStorefrontController::class, 'recordVisit'])->middleware('throttle:60,1');
 
     // AI chat proxy — uses backend API key, no user auth needed
@@ -180,6 +183,11 @@ Route::prefix('storehause')->group(function () {
         Route::post('/products/{productId}/duplicate', [StoreProductController::class, 'duplicate']);
         Route::patch('/products/{productId}', [StoreProductController::class, 'update']);
         Route::delete('/products/{productId}', [StoreProductController::class, 'destroy']);
+
+        Route::get('/discounts', [StoreDiscountController::class, 'index']);
+        Route::post('/discounts', [StoreDiscountController::class, 'store']);
+        Route::patch('/discounts/{discountId}', [StoreDiscountController::class, 'update']);
+        Route::delete('/discounts/{discountId}', [StoreDiscountController::class, 'destroy']);
 
         Route::get('/categories', [StoreCategoryController::class, 'index']);
         Route::post('/categories', [StoreCategoryController::class, 'store']);

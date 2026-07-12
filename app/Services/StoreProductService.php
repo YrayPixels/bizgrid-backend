@@ -130,6 +130,7 @@ class StoreProductService
             'slug' => $this->uniqueSlug($store, $baseSlug, ''),
             'description' => $product->description,
             'price' => (float) $product->price,
+            'sale_price' => $product->sale_price !== null ? (float) $product->sale_price : null,
             'currency' => $product->currency,
             'image_url' => $product->image_url,
             'sku' => $product->sku,
@@ -270,12 +271,16 @@ class StoreProductService
     /** @return array<string, mixed> */
     public function format(StoreProduct $product): array
     {
+        $salePrice = $product->sale_price !== null ? (float) $product->sale_price : null;
+        $price = (float) $product->price;
+
         return [
             'id' => $product->id,
             'slug' => $product->slug,
             'name' => $product->name,
             'description' => $product->description,
-            'price' => (float) $product->price,
+            'price' => $price,
+            'sale_price' => $salePrice,
             'currency' => $product->currency,
             'image_url' => $product->image_url,
             'sku' => $product->sku,
@@ -326,6 +331,9 @@ class StoreProductService
             'name' => $name,
             'description' => (string) ($data['description'] ?? ''),
             'price' => (float) ($data['price'] ?? 0),
+            'sale_price' => array_key_exists('sale_price', $data) && $data['sale_price'] !== null && $data['sale_price'] !== ''
+                ? (float) $data['sale_price']
+                : null,
             'currency' => strtoupper((string) ($data['currency'] ?? 'NGN')),
             'image_url' => $data['image_url'] ?? null,
             'sku' => $data['sku'] ?? null,

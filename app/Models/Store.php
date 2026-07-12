@@ -39,6 +39,7 @@ class Store extends Model
         'notification_email',
         'customer_order_note',
         'sms_sender_name',
+        'store_perks',
         'storefront_template_id',
         'storefront_content',
         'draft_json',
@@ -65,6 +66,7 @@ class Store extends Model
             'notify_customer_order_confirmation' => 'boolean',
             'notify_customer_payment_confirmation' => 'boolean',
             'notify_merchant_low_stock' => 'boolean',
+            'store_perks' => 'array',
         ];
     }
 
