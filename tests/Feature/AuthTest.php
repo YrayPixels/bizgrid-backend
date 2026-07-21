@@ -38,6 +38,8 @@ it('registers a new merchant account', function () {
 });
 
 it('does not auto-verify email on registration', function () {
+    Mail::fake();
+
     $this->postJson('/api/storehause/auth/register', [
         'name' => 'Test Merchant',
         'email' => 'merchant@example.com',
@@ -46,6 +48,31 @@ it('does not auto-verify email on registration', function () {
 
     $user = User::where('email', 'merchant@example.com')->first();
     expect($user->email_verified_at)->toBeNull();
+    Mail::assertSent(\App\Mail\MerchantEmailVerificationCodeEmail::class);
+});
+
+it('verifies merchant email with a code', function () {
+    Mail::fake();
+
+    $register = $this->postJson('/api/storehause/auth/register', [
+        'name' => 'Test Merchant',
+        'email' => 'merchant@example.com',
+        'password' => 'secret12345',
+    ])->assertStatus(201);
+
+    $token = (string) $register->json('token');
+    $user = User::where('email', 'merchant@example.com')->firstOrFail();
+    $user->verification_code = bcrypt('654321');
+    $user->verification_code_expires_at = now()->addMinutes(15);
+    $user->save();
+
+    $this->withToken($token)
+        ->postJson('/api/storehause/auth/verify-email', ['code' => '654321'])
+        ->assertOk()
+        ->assertJsonPath('message', 'Email verified.')
+        ->assertJsonPath('user.email', 'merchant@example.com');
+
+    expect($user->fresh()->email_verified_at)->not->toBeNull();
 });
 
 it('rejects registration with duplicate email', function () {
@@ -170,6 +197,7 @@ it('resets merchant password with code and revokes old sessions', function () {
 
     // Seed a known reset code hash.
     $user->verification_code = bcrypt('123456');
+    $user->verification_code_expires_at = now()->addMinutes(15);
     $user->save();
 
     $this->postJson('/api/storehause/auth/reset-password-with-code', [
@@ -194,7 +222,8 @@ it('returns current user via me endpoint', function () {
         ->getJson('/api/storehause/auth/me')
         ->assertOk()
         ->assertJsonPath('user.id', (string) $user->id)
-        ->assertJsonPath('user.email', $user->email);
+        ->assertJsonPath('user.email', $user->email)
+        ->assertJsonStructure(['user' => ['email_verified_at']]);
 });
 
 it('logs out successfully', function () {
