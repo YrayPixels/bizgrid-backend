@@ -1141,7 +1141,7 @@ class StorefrontBuilderController extends Controller
                 'contact_name' => $user->name,
                 'email' => $user->email,
                 'industry' => $industry,
-                'status' => 'pending',
+                'status' => 'active',
                 'subscription_plan' => 'starter',
                 'subscription_status' => 'trialing',
             ],
@@ -1153,6 +1153,11 @@ class StorefrontBuilderController extends Controller
             'email' => $user->email,
             'industry' => $industry,
         ])->save();
+
+        if ($merchant->status === 'pending') {
+            $merchant->status = 'active';
+            $merchant->save();
+        }
 
         $slug = $this->uniqueStoreSlug($businessName);
         $platformDomain = config('storehause.platform_domain', 'bizgrid.shop');
@@ -1166,6 +1171,12 @@ class StorefrontBuilderController extends Controller
             'description' => (string) ($profile['description'] ?? ''),
             'brand_color' => $brandColor,
             'logo_url' => null,
+            'contact_email' => $user->email,
+            'business_location' => $profile['business_location'] ?? null,
+            'weekly_orders' => $profile['weekly_orders'] ?? null,
+            'payment_currencies' => $profile['payment_currencies'] ?? [],
+            'staff_count' => $profile['staff_count'] ?? null,
+            'physical_store_count' => $profile['physical_store_count'] ?? null,
             'storefront_template_id' => 'ai_pick',
         ])->load('merchant');
     }
@@ -1201,6 +1212,11 @@ class StorefrontBuilderController extends Controller
             'name' => $profile['business_name'] ?? $store->name,
             'description' => $profile['description'] ?? $store->description,
             'brand_color' => $profile['brand_color'] ?? $store->brand_color,
+            'business_location' => $profile['business_location'] ?? $store->business_location,
+            'weekly_orders' => $profile['weekly_orders'] ?? $store->weekly_orders,
+            'payment_currencies' => $profile['payment_currencies'] ?? $store->payment_currencies,
+            'staff_count' => $profile['staff_count'] ?? $store->staff_count,
+            'physical_store_count' => $profile['physical_store_count'] ?? $store->physical_store_count,
         ])->save();
 
         $store->merchant?->fill([
