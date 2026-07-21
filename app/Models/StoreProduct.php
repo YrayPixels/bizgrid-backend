@@ -25,7 +25,9 @@ class StoreProduct extends Model
         'sale_price',
         'currency',
         'image_url',
+        'images',
         'sku',
+        'brand',
         'category',
         'category_id',
         'stock_quantity',
@@ -44,6 +46,7 @@ class StoreProduct extends Model
             'stock_quantity' => 'integer',
             'variants' => 'array',
             'perks' => 'array',
+            'images' => 'array',
             'sort_order' => 'integer',
         ];
     }
