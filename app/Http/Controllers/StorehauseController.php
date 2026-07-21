@@ -123,7 +123,7 @@ class StorehauseController extends Controller
                 'contact_name' => $user->name,
                 'email' => $user->email,
                 'industry' => $data['industry'],
-                'status' => 'pending',
+                'status' => 'active',
                 'subscription_plan' => 'starter',
                 'subscription_status' => 'trialing',
             ],
@@ -135,6 +135,11 @@ class StorehauseController extends Controller
             'email' => $user->email,
             'industry' => $data['industry'],
         ])->save();
+
+        if ($merchant->status === 'pending') {
+            $merchant->status = 'active';
+            $merchant->save();
+        }
 
         $slug = isset($data['slug'])
             ? $this->uniqueStoreSlug($data['slug'], baseSlug: Str::slug($data['slug']))
