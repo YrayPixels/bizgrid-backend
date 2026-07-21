@@ -210,6 +210,11 @@ class ApiCacheService
             return null;
         }
 
+        // Auth identity must stay fresh — never serve a stale email_verified_at.
+        if (str_contains($path, '/auth/me') || str_ends_with($path, '/auth/me')) {
+            return null;
+        }
+
         return "api:merchant:{$userId}:{$path}{$queryHash}";
     }
 

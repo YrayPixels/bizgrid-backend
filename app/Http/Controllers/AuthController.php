@@ -277,6 +277,8 @@ class AuthController extends Controller
         $user = $request->user();
 
         if ($user->email_verified_at) {
+            $this->invalidateUserApiCache((int) $user->id);
+
             return response()->json([
                 'message' => 'Email already verified.',
                 'user' => $this->formatUser($user),
@@ -297,6 +299,8 @@ class AuthController extends Controller
         $user->verification_code_expires_at = null;
         $user->save();
 
+        $this->invalidateUserApiCache((int) $user->id);
+
         return response()->json([
             'message' => 'Email verified.',
             'user' => $this->formatUser($user->fresh()),
@@ -308,6 +312,8 @@ class AuthController extends Controller
         $user = $request->user();
 
         if ($user->email_verified_at) {
+            $this->invalidateUserApiCache((int) $user->id);
+
             return response()->json([
                 'message' => 'Email already verified.',
                 'user' => $this->formatUser($user),
