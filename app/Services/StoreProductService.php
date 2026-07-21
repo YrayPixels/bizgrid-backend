@@ -112,7 +112,28 @@ class StoreProductService
     /** @param array<string, mixed> $data */
     public function updateProduct(StoreProduct $product, array $data): StoreProduct
     {
-        $product->fill($this->normalizedAttributes($product->store, $data));
+        // Merge with existing attrs so partial patches (e.g. status-only archive) don't wipe fields.
+        $merged = array_merge([
+            'name' => $product->name,
+            'slug' => $product->slug,
+            'description' => $product->description,
+            'price' => (float) $product->price,
+            'sale_price' => $product->sale_price !== null ? (float) $product->sale_price : null,
+            'currency' => $product->currency,
+            'image_url' => $product->image_url,
+            'images' => $product->images,
+            'sku' => $product->sku,
+            'brand' => $product->brand,
+            'category' => $product->category,
+            'category_id' => $product->category_id,
+            'stock_quantity' => $product->stock_quantity,
+            'status' => $product->status,
+            'variants' => $product->variants,
+            'perks' => $product->perks,
+            'sort_order' => $product->sort_order,
+        ], $data);
+
+        $product->fill($this->normalizedAttributes($product->store, $merged));
         $product->save();
         $this->syncCount($product->store);
 
@@ -133,7 +154,9 @@ class StoreProductService
             'sale_price' => $product->sale_price !== null ? (float) $product->sale_price : null,
             'currency' => $product->currency,
             'image_url' => $product->image_url,
+            'images' => $product->images,
             'sku' => $product->sku,
+            'brand' => $product->brand,
             'category_id' => $product->category_id,
             'stock_quantity' => $product->stock_quantity,
             'status' => 'draft',
@@ -283,7 +306,9 @@ class StoreProductService
             'sale_price' => $salePrice,
             'currency' => $product->currency,
             'image_url' => $product->image_url,
+            'images' => $this->formatImages($product),
             'sku' => $product->sku,
+            'brand' => $product->brand,
             'category' => $product->categoryRelation?->name ?? $product->category,
             'category_id' => $product->category_id,
             'stock_quantity' => $product->stock_quantity,
@@ -325,6 +350,7 @@ class StoreProductService
         $categoryFields = $this->shouldResolveCategory($data)
             ? $this->categoryService->resolveProductCategory($store, $data)
             : [];
+        $imageFields = $this->normalizeImageFields($data);
 
         return [
             'slug' => $slugInput !== '' ? $slugInput : 'product',
@@ -335,8 +361,13 @@ class StoreProductService
                 ? (float) $data['sale_price']
                 : null,
             'currency' => strtoupper((string) ($data['currency'] ?? 'NGN')),
-            'image_url' => $data['image_url'] ?? null,
-            'sku' => $data['sku'] ?? null,
+            ...$imageFields,
+            'sku' => isset($data['sku']) && trim((string) $data['sku']) !== ''
+                ? trim((string) $data['sku'])
+                : null,
+            'brand' => isset($data['brand']) && trim((string) $data['brand']) !== ''
+                ? trim((string) $data['brand'])
+                : null,
             ...$categoryFields,
             'stock_quantity' => array_key_exists('stock_quantity', $data) && $data['stock_quantity'] !== null
                 ? (int) $data['stock_quantity']
@@ -350,6 +381,81 @@ class StoreProductService
             'perks' => $data['perks'] ?? null,
             'sort_order' => isset($data['sort_order']) ? (int) $data['sort_order'] : 0,
         ];
+    }
+
+    /**
+     * Keep cover `image_url` in sync with gallery `images` (cover = first image).
+     *
+     * @param  array<string, mixed>  $data
+     * @return array{image_url: ?string, images: ?list<string>}
+     */
+    private function normalizeImageFields(array $data): array
+    {
+        $images = [];
+
+        if (array_key_exists('images', $data) && is_array($data['images'])) {
+            foreach ($data['images'] as $url) {
+                $trimmed = trim((string) $url);
+                if ($trimmed === '' || in_array($trimmed, $images, true)) {
+                    continue;
+                }
+                $images[] = $trimmed;
+                if (count($images) >= 12) {
+                    break;
+                }
+            }
+        }
+
+        $cover = array_key_exists('image_url', $data)
+            ? trim((string) ($data['image_url'] ?? ''))
+            : '';
+        $cover = $cover !== '' ? $cover : null;
+
+        if ($images === [] && $cover !== null) {
+            $images = [$cover];
+        }
+
+        if ($cover === null && $images !== []) {
+            $cover = $images[0];
+        }
+
+        if ($cover !== null && $images !== []) {
+            $images = array_values(array_unique(array_merge(
+                [$cover],
+                array_values(array_filter($images, fn (string $url) => $url !== $cover)),
+            )));
+        }
+
+        return [
+            'image_url' => $cover,
+            'images' => $images !== [] ? $images : null,
+        ];
+    }
+
+    /** @return list<string> */
+    private function formatImages(StoreProduct $product): array
+    {
+        $images = is_array($product->images) ? $product->images : [];
+        $normalized = [];
+
+        foreach ($images as $url) {
+            $trimmed = trim((string) $url);
+            if ($trimmed === '' || in_array($trimmed, $normalized, true)) {
+                continue;
+            }
+            $normalized[] = $trimmed;
+        }
+
+        $cover = is_string($product->image_url) ? trim($product->image_url) : '';
+        if ($cover !== '' && ! in_array($cover, $normalized, true)) {
+            array_unshift($normalized, $cover);
+        }
+
+        if ($normalized === [] && $cover !== '') {
+            return [$cover];
+        }
+
+        return $normalized;
     }
 
     /** @param array<string, mixed> $data */
