@@ -42,11 +42,27 @@ class StorefrontBuilderController extends Controller
         $session = $this->findOrCreateActiveSession($user);
 
         if ($session->messages()->count() === 0) {
-            $this->appendAssistantMessage(
-                $session,
-                'Hi! Tell me about your business — what you sell, who it\'s for, and the vibe you want. I\'ll design and build your website.',
-                ['type' => 'welcome'],
-            );
+            if ($session->store_id && ! empty($session->business_profile['business_name'])) {
+                $name = (string) $session->business_profile['business_name'];
+                $this->appendAssistantMessage(
+                    $session,
+                    "Welcome! I've loaded {$name}. Next: pick a look for your site (or say \"build my website\"), then add products and publish when you're ready.",
+                    [
+                        'type' => 'welcome',
+                        'from_onboarding' => true,
+                        'suggested_actions' => [
+                            ['label' => 'Build my website', 'action' => 'send_message', 'message' => 'build my website'],
+                            ['label' => 'Show me template options', 'action' => 'send_message', 'message' => 'recommend templates for my store'],
+                        ],
+                    ],
+                );
+            } else {
+                $this->appendAssistantMessage(
+                    $session,
+                    'Hi! Tell me about your business — what you sell, who it\'s for, and the vibe you want. I\'ll design and build your website.',
+                    ['type' => 'welcome'],
+                );
+            }
         }
 
         $this->invalidateBuilderApiCache($session);
@@ -646,6 +662,28 @@ class StorefrontBuilderController extends Controller
             ->first();
 
         if ($existing) {
+            if (! $existing->store_id) {
+                $store = Store::with('merchant')
+                    ->whereHas('merchant', fn ($query) => $query->where('owner_user_id', $user->id))
+                    ->latest()
+                    ->first();
+
+                if ($store) {
+                    $existing->store_id = $store->id;
+                    $existing->status = 'template_recommendation';
+                    if (empty($existing->business_profile['business_name'])) {
+                        $existing->business_profile = [
+                            'business_name' => $store->name,
+                            'description' => $store->description,
+                            'industry' => $store->merchant?->industry,
+                            'brand_color' => $store->brand_color,
+                            'tone' => [],
+                        ];
+                    }
+                    $existing->save();
+                }
+            }
+
             return $existing;
         }
 

@@ -28,6 +28,8 @@ class StorePaymentController extends Controller
 
     public function update(Request $request): JsonResponse
     {
+        $this->assertEmailVerified($request, 'Verify your email before adding payout details.');
+
         $store = $this->findOwnedStoreForUser($request);
 
         $data = $request->validate([

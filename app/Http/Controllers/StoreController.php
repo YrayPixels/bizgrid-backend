@@ -375,6 +375,8 @@ class StoreController extends Controller
 
     public function publishStorefront(Request $request, int $storeId): JsonResponse
     {
+        $this->assertEmailVerified($request, 'Verify your email before publishing your storefront.');
+
         $store = $this->findOwnedStore($request, $storeId);
         $store = $this->publishService->publish($store);
         $published = $this->publishService->resolvePublished($store);

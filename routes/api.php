@@ -158,6 +158,8 @@ Route::prefix('storehause')->group(function () {
         Route::post('/ai/storefront-code/generate', [StorefrontCodeController::class, 'generate']);
         Route::get('/auth/me', [AuthController::class, 'me']);
         Route::post('/auth/logout', [AuthController::class, 'logout']);
+        Route::post('/auth/verify-email', [AuthController::class, 'verifyEmail'])->middleware('throttle:10,1');
+        Route::post('/auth/resend-email-verification', [AuthController::class, 'resendEmailVerification'])->middleware('throttle:5,1');
         Route::get('/dashboard', [OrderController::class, 'dashboard']);
         Route::get('/orders', [OrderController::class, 'myOrders']);
         Route::get('/orders/{orderId}', [OrderController::class, 'myOrder']);

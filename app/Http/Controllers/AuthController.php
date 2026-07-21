@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Http\Controllers;
 
 use App\Http\Controllers\Concerns\StorehauseHelpers;
+use App\Mail\MerchantEmailVerificationCodeEmail;
 use App\Mail\MerchantPasswordResetCodeEmail;
 use App\Mail\MerchantWelcomeEmail;
 use App\Models\Merchant;
@@ -51,6 +52,8 @@ class AuthController extends Controller
             ]);
         }
 
+        $this->sendEmailVerificationCode($user);
+
         $tokenResult = $user->createToken('storehause');
         $tokenResult->accessToken->expires_at = now()->addDays(30);
         $tokenResult->accessToken->save();
@@ -58,7 +61,7 @@ class AuthController extends Controller
 
         return response()->json([
             'token' => $token,
-            'user' => $this->formatUser($user),
+            'user' => $this->formatUser($user->fresh()),
         ], 201);
     }
 
@@ -252,6 +255,9 @@ class AuthController extends Controller
         $user->password = Hash::make($data['password']);
         $user->verification_code = null;
         $user->verification_code_expires_at = null;
+        if (! $user->email_verified_at) {
+            $user->email_verified_at = now();
+        }
         $user->save();
 
         // Optional: revoke existing sessions after password reset.
@@ -259,6 +265,59 @@ class AuthController extends Controller
 
         return response()->json([
             'message' => 'Password updated. You can sign in now.',
+        ]);
+    }
+
+    public function verifyEmail(Request $request): JsonResponse
+    {
+        $data = $request->validate([
+            'code' => 'required|string|size:6',
+        ]);
+
+        $user = $request->user();
+
+        if ($user->email_verified_at) {
+            return response()->json([
+                'message' => 'Email already verified.',
+                'user' => $this->formatUser($user),
+            ]);
+        }
+
+        if (
+            ! filled($user->verification_code)
+            || ! $user->verification_code_expires_at
+            || $user->verification_code_expires_at->isPast()
+            || ! Hash::check($data['code'], $user->verification_code)
+        ) {
+            return response()->json(['message' => 'Invalid or expired verification code.'], 422);
+        }
+
+        $user->email_verified_at = now();
+        $user->verification_code = null;
+        $user->verification_code_expires_at = null;
+        $user->save();
+
+        return response()->json([
+            'message' => 'Email verified.',
+            'user' => $this->formatUser($user->fresh()),
+        ]);
+    }
+
+    public function resendEmailVerification(Request $request): JsonResponse
+    {
+        $user = $request->user();
+
+        if ($user->email_verified_at) {
+            return response()->json([
+                'message' => 'Email already verified.',
+                'user' => $this->formatUser($user),
+            ]);
+        }
+
+        $this->sendEmailVerificationCode($user);
+
+        return response()->json([
+            'message' => 'Verification code sent.',
         ]);
     }
 
@@ -296,5 +355,27 @@ class AuthController extends Controller
         $tokenResult->accessToken->save();
 
         return $tokenResult->plainTextToken;
+    }
+
+    private function sendEmailVerificationCode(User $user): void
+    {
+        $code = (string) rand(100000, 999999);
+        $user->verification_code = Hash::make($code);
+        $user->verification_code_expires_at = now()->addMinutes(15);
+        $user->save();
+
+        try {
+            Mail::to($user->email)->send(new MerchantEmailVerificationCodeEmail($user, $code));
+        } catch (\Throwable $e) {
+            Log::warning('Failed to send merchant email verification code', [
+                'user_id' => $user->id,
+                'email' => $user->email,
+                'error' => $e->getMessage(),
+            ]);
+        }
+
+        if (config('app.env') === 'local') {
+            Log::info('Merchant email verification code', ['email' => $user->email, 'code' => $code]);
+        }
     }
 }

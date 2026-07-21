@@ -52,10 +52,28 @@ trait StorehauseHelpers
             'id' => (string) $user->id,
             'name' => $user->name,
             'email' => $user->email,
+            'email_verified_at' => $user->email_verified_at?->toIso8601String(),
             'has_store' => Merchant::where('owner_user_id', $user->id)->whereHas('stores')->exists(),
             'is_admin' => (bool) $user->is_admin,
             'impersonating' => $impersonating,
         ];
+    }
+
+    protected function assertEmailVerified(Request $request, string $message = 'Verify your email before continuing.'): void
+    {
+        $user = $request->user();
+        if ($user->currentAccessToken()?->name === 'admin-impersonation') {
+            return;
+        }
+
+        if ($user->email_verified_at) {
+            return;
+        }
+
+        throw new \Illuminate\Http\Exceptions\HttpResponseException(response()->json([
+            'message' => $message,
+            'code' => 'email_unverified',
+        ], 403));
     }
 
     protected function formatStore(Store $store): array
