@@ -9,6 +9,7 @@ use App\Models\Store;
 use App\Models\StoreDomain;
 use App\Models\StoreOrder;
 use App\Models\StoreProduct;
+use App\Models\StoreVisit;
 use App\Models\User;
 use App\Services\StoreNotificationService;
 use Illuminate\Http\Request;
@@ -148,6 +149,171 @@ trait StorehauseHelpers
     protected function productCount(Store $store): int
     {
         return StoreProduct::where('store_id', $store->id)->count();
+    }
+
+    /**
+     * Merchant store dashboard overview payload.
+     *
+     * @return array<string, mixed>
+     */
+    protected function buildMerchantDashboardPayload(Store $store): array
+    {
+        $since = now()->subDays(29)->startOfDay();
+        $orderQuery = StoreOrder::where('store_id', $store->id);
+        $salesQuery = (clone $orderQuery)->whereNotIn('status', ['cancelled', 'refunded']);
+        $totalVisits = StoreVisit::where('store_id', $store->id)->count();
+        $totalOrders = (clone $orderQuery)->count();
+        $totalSales = (float) (clone $salesQuery)->sum('total_amount');
+
+        $statusCounts = (clone $orderQuery)
+            ->selectRaw('status, COUNT(*) as count')
+            ->groupBy('status')
+            ->pluck('count', 'status');
+
+        $salesByDate = (clone $salesQuery)
+            ->where('placed_at', '>=', $since)
+            ->selectRaw('DATE(placed_at) as date, COUNT(*) as orders, SUM(total_amount) as sales')
+            ->groupBy('date')
+            ->orderBy('date')
+            ->get()
+            ->keyBy('date');
+
+        $salesByDay = collect(range(0, 29))->map(function (int $offset) use ($since, $salesByDate) {
+            $date = $since->copy()->addDays($offset)->toDateString();
+            $row = $salesByDate->get($date);
+
+            return [
+                'date' => $date,
+                'orders' => (int) ($row->orders ?? 0),
+                'sales' => (float) ($row->sales ?? 0),
+            ];
+        })->values();
+
+        $productTotals = [];
+        foreach ((clone $salesQuery)->get(['items']) as $order) {
+            foreach ($order->items ?? [] as $item) {
+                if (! is_array($item)) {
+                    continue;
+                }
+                $key = (string) ($item['product_id'] ?? $item['name'] ?? '');
+                if ($key === '') {
+                    continue;
+                }
+                if (! isset($productTotals[$key])) {
+                    $productTotals[$key] = [
+                        'product_id' => (string) ($item['product_id'] ?? ''),
+                        'name' => (string) ($item['name'] ?? 'Product'),
+                        'image_url' => $item['image_url'] ?? null,
+                        'unit_price' => (float) ($item['unit_price'] ?? 0),
+                        'currency' => (string) ($item['currency'] ?? 'NGN'),
+                        'quantity_sold' => 0,
+                        'total_earning' => 0.0,
+                    ];
+                }
+                $qty = (int) ($item['quantity'] ?? 0);
+                $lineTotal = (float) ($item['total'] ?? (($item['unit_price'] ?? 0) * $qty));
+                $productTotals[$key]['quantity_sold'] += $qty;
+                $productTotals[$key]['total_earning'] += $lineTotal;
+                if (($productTotals[$key]['image_url'] ?? null) === null && ! empty($item['image_url'])) {
+                    $productTotals[$key]['image_url'] = $item['image_url'];
+                }
+            }
+        }
+
+        $topProducts = collect($productTotals)
+            ->sortByDesc('total_earning')
+            ->take(5)
+            ->values()
+            ->all();
+
+        $referrers = StoreVisit::where('store_id', $store->id)
+            ->where('visited_at', '>=', $since)
+            ->pluck('referrer');
+
+        $trafficBuckets = [
+            'Direct' => 0,
+            'Google' => 0,
+            'Social' => 0,
+            'Other' => 0,
+        ];
+
+        foreach ($referrers as $referrer) {
+            $host = $this->classifyVisitReferrer(is_string($referrer) ? $referrer : null);
+            $trafficBuckets[$host]++;
+        }
+
+        $trafficTotal = max(array_sum($trafficBuckets), 1);
+        $trafficSources = collect($trafficBuckets)
+            ->map(fn (int $count, string $source) => [
+                'source' => $source,
+                'count' => $count,
+                'percentage' => (int) round(($count / $trafficTotal) * 100),
+            ])
+            ->filter(fn (array $row) => $row['count'] > 0)
+            ->sortByDesc('count')
+            ->values()
+            ->all();
+
+        return [
+            'metrics' => [
+                'total_orders' => $totalOrders,
+                'pending_orders' => (int) ($statusCounts['pending'] ?? 0),
+                'processing_orders' => (int) ($statusCounts['processing'] ?? 0),
+                'fulfilled_orders' => (int) ($statusCounts['fulfilled'] ?? 0),
+                'cancelled_orders' => (int) ($statusCounts['cancelled'] ?? 0),
+                'total_sales' => $totalSales,
+                'average_order_value' => $totalOrders > 0 ? round($totalSales / $totalOrders, 2) : 0,
+                'total_visits' => $totalVisits,
+                'visits_today' => StoreVisit::where('store_id', $store->id)
+                    ->where('visited_at', '>=', now()->startOfDay())
+                    ->count(),
+                'visits_last_30_days' => StoreVisit::where('store_id', $store->id)
+                    ->where('visited_at', '>=', $since)
+                    ->count(),
+                'conversion_rate' => $totalVisits > 0 ? round(($totalOrders / $totalVisits) * 100, 2) : 0,
+                'products_count' => $this->productCount($store),
+            ],
+            'sales_by_day' => $salesByDay,
+            'top_products' => $topProducts,
+            'traffic_sources' => $trafficSources,
+            'orders_by_status' => [
+                ['status' => 'pending', 'label' => 'Pending', 'count' => (int) ($statusCounts['pending'] ?? 0)],
+                ['status' => 'processing', 'label' => 'Processing', 'count' => (int) ($statusCounts['processing'] ?? 0)],
+                ['status' => 'fulfilled', 'label' => 'Fulfilled', 'count' => (int) ($statusCounts['fulfilled'] ?? 0)],
+            ],
+            'recent_orders' => StoreOrder::where('store_id', $store->id)
+                ->latest('placed_at')
+                ->limit(5)
+                ->get()
+                ->map(fn (StoreOrder $order) => $this->formatOrder($order))
+                ->values(),
+        ];
+    }
+
+    protected function classifyVisitReferrer(?string $referrer): string
+    {
+        if ($referrer === null || trim($referrer) === '') {
+            return 'Direct';
+        }
+
+        $host = strtolower((string) (parse_url($referrer, PHP_URL_HOST) ?? $referrer));
+
+        if (str_contains($host, 'google.') || $host === 'google' || str_contains($host, 'bing.') || str_contains($host, 'yahoo.')) {
+            return 'Google';
+        }
+
+        if (
+            str_contains($host, 'facebook.')
+            || str_contains($host, 'instagram.')
+            || str_contains($host, 'twitter.')
+            || str_contains($host, 'x.com')
+            || str_contains($host, 'tiktok.')
+            || str_contains($host, 'linkedin.')
+        ) {
+            return 'Social';
+        }
+
+        return 'Other';
     }
 
     protected function ensureStoreMerchantActive(Store $store): void
