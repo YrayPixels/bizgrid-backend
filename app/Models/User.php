@@ -38,6 +38,7 @@ class User extends Authenticatable
         'remember_token',
         'token',
         'verification_code',
+        'verification_code_expires_at',
     ];
 
     /**
@@ -51,6 +52,7 @@ class User extends Authenticatable
             'email_verified_at' => 'datetime',
             'password' => 'hashed',
             'is_admin' => 'boolean',
+            'verification_code_expires_at' => 'datetime',
         ];
     }
 }

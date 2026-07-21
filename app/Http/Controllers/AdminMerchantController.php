@@ -254,8 +254,12 @@ class AdminMerchantController extends Controller
             return response()->json(['success' => false, 'message' => 'Merchant or owner not found'], 404);
         }
 
-        $token = $merchant->owner->createToken('admin-impersonation')->plainTextToken;
-        $appUrl = config('dodopayments.app_url', 'http://localhost:3000');
+        $tokenResult = $merchant->owner->createToken('admin-impersonation', ['merchant:impersonated']);
+        $tokenResult->accessToken->expires_at = now()->addMinutes(15);
+        $tokenResult->accessToken->save();
+
+        $token = $tokenResult->plainTextToken;
+        $appUrl = rtrim((string) config('storehause.app_url', 'http://localhost:3000'), '/');
 
         $this->audit->log($request, 'merchant.impersonated', 'merchant', $merchant->id, [
             'owner_user_id' => $merchant->owner_user_id,
@@ -266,6 +270,7 @@ class AdminMerchantController extends Controller
             'data' => [
                 'token' => $token,
                 'app_url' => $appUrl,
+                'expires_in_minutes' => 15,
                 'merchant' => [
                     'id' => $merchant->id,
                     'business_name' => $merchant->business_name,
