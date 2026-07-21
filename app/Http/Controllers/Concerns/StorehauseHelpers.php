@@ -84,6 +84,8 @@ trait StorehauseHelpers
                 && filled($store->payout_bank_name)
                 && filled($store->payout_account_number),
             'checkout_enabled' => filled(config('paystack.public_key')) && filled(config('paystack.secret_key')),
+            'subscription_plan' => $store->merchant?->subscription_plan ?? 'starter',
+            'subscription_status' => $store->merchant?->subscription_status ?? 'trialing',
             'staff_count' => $store->staff_count,
             'physical_store_count' => $store->physical_store_count,
             'storefront_template_id' => $store->storefront_template_id ?? 'ai_pick',
