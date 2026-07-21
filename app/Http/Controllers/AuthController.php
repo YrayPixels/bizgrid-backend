@@ -213,6 +213,7 @@ class AuthController extends Controller
 
         $code = (string) rand(100000, 999999);
         $user->verification_code = Hash::make($code);
+        $user->verification_code_expires_at = now()->addMinutes(15);
         $user->save();
 
         Mail::to($user->email)->send(new MerchantPasswordResetCodeEmail($user, $code));
@@ -238,12 +239,19 @@ class AuthController extends Controller
             ->where('is_admin', false)
             ->first();
 
-        if (! $user || ! filled($user->verification_code) || ! Hash::check($data['code'], $user->verification_code)) {
+        if (
+            ! $user
+            || ! filled($user->verification_code)
+            || ! $user->verification_code_expires_at
+            || $user->verification_code_expires_at->isPast()
+            || ! Hash::check($data['code'], $user->verification_code)
+        ) {
             return response()->json(['message' => 'Invalid reset code'], 401);
         }
 
         $user->password = Hash::make($data['password']);
         $user->verification_code = null;
+        $user->verification_code_expires_at = null;
         $user->save();
 
         // Optional: revoke existing sessions after password reset.
@@ -265,7 +273,10 @@ class AuthController extends Controller
         }
 
         return response()->json([
-            'user' => $this->formatUser($request->user()),
+            'user' => $this->formatUser(
+                $request->user(),
+                $request->user()->currentAccessToken()?->name === 'admin-impersonation'
+            ),
         ]);
     }
 

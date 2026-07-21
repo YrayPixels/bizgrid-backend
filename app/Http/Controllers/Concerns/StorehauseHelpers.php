@@ -46,7 +46,7 @@ trait StorehauseHelpers
         return $store;
     }
 
-    protected function formatUser(User $user): array
+    protected function formatUser(User $user, bool $impersonating = false): array
     {
         return [
             'id' => (string) $user->id,
@@ -54,6 +54,7 @@ trait StorehauseHelpers
             'email' => $user->email,
             'has_store' => Merchant::where('owner_user_id', $user->id)->whereHas('stores')->exists(),
             'is_admin' => (bool) $user->is_admin,
+            'impersonating' => $impersonating,
         ];
     }
 

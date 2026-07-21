@@ -72,7 +72,12 @@ class AdminController extends Controller
 
     public function login_admin(Request $request): JsonResponse
     {
-        $admin = User::where('email', $request->email)->first();
+        $data = $request->validate([
+            'email' => 'required|email|max:255',
+            'password' => 'required|string|max:128',
+        ]);
+
+        $admin = User::where('email', strtolower($data['email']))->first();
         if (! $admin) {
             return response()->json(['message' => 'Admin not found'], 404);
         }
@@ -81,12 +86,13 @@ class AdminController extends Controller
             return response()->json(['message' => 'Unauthorized admin access'], 403);
         }
 
-        if (! Hash::check($request->password, $admin->password)) {
+        if (! Hash::check($data['password'], $admin->password)) {
             return response()->json(['message' => 'Invalid credentials'], 401);
         }
 
         $verification_code = rand(100000, 999999);
         $admin->verification_code = Hash::make($verification_code);
+        $admin->verification_code_expires_at = now()->addMinutes(10);
         $admin->save();
 
         Mail::to($admin->email)->send(new AdminVerificationCode($admin, (string) $verification_code));
@@ -104,7 +110,12 @@ class AdminController extends Controller
     public function verify_admin(Request $request): JsonResponse
     {
         try {
-            $admin = User::where('email', $request->email)->first();
+            $data = $request->validate([
+                'email' => 'required|email|max:255',
+                'verification_code' => 'required|string|size:6',
+            ]);
+
+            $admin = User::where('email', strtolower($data['email']))->first();
             if (! $admin) {
                 return response()->json(['message' => 'Admin not found'], 404);
             }
@@ -113,14 +124,26 @@ class AdminController extends Controller
                 return response()->json(['message' => 'Unauthorized admin access'], 403);
             }
 
-            if (! Hash::check($request->verification_code, $admin->verification_code)) {
+            if (
+                ! filled($admin->verification_code)
+                || ! $admin->verification_code_expires_at
+                || $admin->verification_code_expires_at->isPast()
+                || ! Hash::check($data['verification_code'], $admin->verification_code)
+            ) {
                 return response()->json(['message' => 'Invalid verification code'], 401);
             }
 
-            $token = $admin->createToken('admin-token')->plainTextToken;
+            $admin->tokens()->delete();
+
+            $tokenResult = $admin->createToken('admin-token');
+            $tokenResult->accessToken->expires_at = now()->addDay();
+            $tokenResult->accessToken->save();
+            $token = $tokenResult->plainTextToken;
 
             $admin->token = $token;
             $admin->email_verified_at = now();
+            $admin->verification_code = null;
+            $admin->verification_code_expires_at = null;
             $admin->save();
 
             return response()->json([
@@ -314,6 +337,7 @@ class AdminController extends Controller
 
         $code = (string) rand(100000, 999999);
         $admin->verification_code = Hash::make($code);
+        $admin->verification_code_expires_at = now()->addMinutes(15);
         $admin->save();
 
         Mail::to($admin->email)->send(new AdminPasswordResetCode($admin, $code));
@@ -333,14 +357,22 @@ class AdminController extends Controller
             'password' => 'required|string|min:8|max:128',
         ]);
 
-        $admin = User::where('email', $data['email'])->where('is_admin', true)->first();
-        if (! $admin || ! Hash::check($data['code'], $admin->verification_code)) {
+        $admin = User::where('email', strtolower($data['email']))->where('is_admin', true)->first();
+        if (
+            ! $admin
+            || ! filled($admin->verification_code)
+            || ! $admin->verification_code_expires_at
+            || $admin->verification_code_expires_at->isPast()
+            || ! Hash::check($data['code'], $admin->verification_code)
+        ) {
             return response()->json(['message' => 'Invalid reset code'], 401);
         }
 
         $admin->password = Hash::make($data['password']);
         $admin->verification_code = null;
+        $admin->verification_code_expires_at = null;
         $admin->save();
+        $admin->tokens()->delete();
 
         return response()->json(['message' => 'Password updated. You can sign in now.']);
     }
