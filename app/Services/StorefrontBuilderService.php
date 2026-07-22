@@ -1788,7 +1788,7 @@ class StorefrontBuilderService
         $changedPaths = [];
 
         foreach ($mediaUpdates as $path => $url) {
-            if (! in_array($path, ['media.hero_image_url', 'media.about_image_url'], true) || ! is_string($url) || trim($url) === '') {
+            if (! in_array($path, ['media.hero_image_url', 'media.hero_video_url', 'media.about_image_url'], true) || ! is_string($url) || trim($url) === '') {
                 continue;
             }
 

@@ -16,6 +16,7 @@ class StorefrontPathEditor
         'seo.title',
         'seo.description',
         'media.hero_image_url',
+        'media.hero_video_url',
         'media.about_image_url',
         'pages.contact.title',
         'pages.contact.body',
@@ -102,6 +103,7 @@ class StorefrontPathEditor
             'seo.title' => 'search title',
             'seo.description' => 'search description',
             'media.hero_image_url' => 'homepage header photo',
+            'media.hero_video_url' => 'homepage header video',
             'media.about_image_url' => 'about section photo',
             'pages.contact.title' => 'contact page title',
             'pages.contact.body' => 'contact page intro',
@@ -150,6 +152,13 @@ class StorefrontPathEditor
 
         if (str_starts_with($path, 'pages.home.blocks.')) {
             return self::applyHomeBlockPropField($storefront, $path, $value);
+        }
+
+        if ($path === 'media.hero_image_url') {
+            data_set($storefront, 'media.hero_image_url', $value);
+            data_set($storefront, 'media.hero_video_url', null);
+
+            return true;
         }
 
         data_set($storefront, $path, $value);

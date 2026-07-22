@@ -243,7 +243,12 @@ class StoreController extends Controller
         $store = $this->findOwnedStore($request, $storeId);
 
         $data = $request->validate([
-            'image' => 'required|image|max:5120',
+            'image' => [
+                'required',
+                'file',
+                'max:51200',
+                'mimetypes:image/jpeg,image/png,image/gif,image/webp,video/mp4,video/webm,video/quicktime',
+            ],
         ]);
 
         $file = $data['image'];
@@ -339,6 +344,7 @@ class StoreController extends Controller
             'storefront.data_plugs.home_products_source' => 'nullable|string|in:merchant_products,theme_products',
             'storefront.media' => 'nullable|array',
             'storefront.media.hero_image_url' => 'nullable|string|max:2000000',
+            'storefront.media.hero_video_url' => 'nullable|string|max:2000000',
             'storefront.media.about_image_url' => 'nullable|string|max:2000000',
             'storefront.media.category_images' => 'nullable|array',
             'storefront.media.category_images.*' => 'nullable|string|max:2000000',
@@ -346,6 +352,7 @@ class StoreController extends Controller
             'storefront.hero.headline' => 'required|string|max:180',
             'storefront.hero.subheadline' => 'required|string|max:500',
             'storefront.hero.cta_label' => 'required|string|max:80',
+            'storefront.hero.eyebrow' => 'nullable|string|max:80',
             'storefront.about' => 'required|array',
             'storefront.about.title' => 'required|string|max:160',
             'storefront.about.body' => 'required|string|max:2000',
