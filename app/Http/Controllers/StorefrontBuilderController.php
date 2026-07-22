@@ -1215,7 +1215,7 @@ class StorefrontBuilderController extends Controller
             'payment_currencies' => $profile['payment_currencies'] ?? [],
             'staff_count' => $profile['staff_count'] ?? null,
             'physical_store_count' => $profile['physical_store_count'] ?? null,
-            'storefront_template_id' => 'ai_pick',
+            'storefront_template_id' => StorefrontTemplate::DEFAULT_ID,
         ])->load('merchant');
     }
 
@@ -1603,7 +1603,7 @@ class StorefrontBuilderController extends Controller
             'logo_url' => $store->logo_url,
             'contact_email' => $store->contact_email ?? $store->merchant?->email,
             'contact_phone' => $store->contact_phone,
-            'storefront_template_id' => $store->storefront_template_id ?? 'ai_pick',
+            'storefront_template_id' => $store->storefront_template_id ?? StorefrontTemplate::DEFAULT_ID,
             'subdomain' => $store->slug,
             'subdomain_host' => $subdomainHost,
             'primary_domain' => $store->primary_domain ?? $subdomainHost,

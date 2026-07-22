@@ -106,7 +106,7 @@ class StoreController extends Controller
             'payment_currencies' => $data['payment_currencies'],
             'staff_count' => $data['staff_count'],
             'physical_store_count' => $data['physical_store_count'],
-            'storefront_template_id' => $data['storefront_template_id'] ?? 'ai_pick',
+            'storefront_template_id' => $data['storefront_template_id'] ?? StorefrontTemplate::DEFAULT_ID,
         ])->load('merchant');
 
         $this->notifications->notify(
@@ -288,9 +288,9 @@ class StoreController extends Controller
 
         $generationId = (string) Str::uuid();
 
-        $store->draft_json = $this->productService->extractEmbeddedProducts($store, $storefront);
+        $storefront = $this->productService->extractEmbeddedProducts($store, $storefront);
         $store->storefront_generation_id = $generationId;
-        $store->save();
+        $this->publishService->persistDraft($store, $storefront);
 
         $this->invalidateStoreApiCache($store);
 
@@ -304,7 +304,7 @@ class StoreController extends Controller
     public function getStorefront(Request $request, int $storeId): JsonResponse
     {
         $store = $this->findOwnedStore($request, $storeId);
-        $draft = $this->publishService->resolveDraft($store);
+        $draft = $this->publishService->resolveEditorDraft($store);
 
         return response()->json([
             'storefront' => $draft

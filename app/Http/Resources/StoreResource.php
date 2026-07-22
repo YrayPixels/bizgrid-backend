@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Http\Resources;
 
+use App\Models\StorefrontTemplate;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\JsonResource;
 
@@ -31,7 +32,7 @@ class StoreResource extends JsonResource
             'payment_currencies' => $this->payment_currencies ?? [],
             'staff_count' => $this->staff_count,
             'physical_store_count' => $this->physical_store_count,
-            'storefront_template_id' => $this->storefront_template_id ?? 'ai_pick',
+            'storefront_template_id' => $this->storefront_template_id ?? StorefrontTemplate::DEFAULT_ID,
             'subdomain' => $this->slug,
             'subdomain_host' => $subdomainHost,
             'primary_domain' => $this->primary_domain ?? $subdomainHost,

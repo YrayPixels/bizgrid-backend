@@ -7,6 +7,7 @@ namespace App\Http\Controllers\Concerns;
 use App\Models\Merchant;
 use App\Models\Store;
 use App\Models\StoreDomain;
+use App\Models\StorefrontTemplate;
 use App\Models\StoreOrder;
 use App\Models\StoreProduct;
 use App\Models\StoreVisit;
@@ -107,7 +108,7 @@ trait StorehauseHelpers
             'subscription_status' => $store->merchant?->subscription_status ?? 'trialing',
             'staff_count' => $store->staff_count,
             'physical_store_count' => $store->physical_store_count,
-            'storefront_template_id' => $store->storefront_template_id ?? 'ai_pick',
+            'storefront_template_id' => $store->storefront_template_id ?? StorefrontTemplate::DEFAULT_ID,
             'subdomain' => $store->slug,
             'subdomain_host' => $subdomainHost,
             'primary_domain' => $store->primary_domain ?? $subdomainHost,

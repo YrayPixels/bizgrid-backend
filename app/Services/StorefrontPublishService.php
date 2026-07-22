@@ -36,6 +36,34 @@ class StorefrontPublishService
         return null;
     }
 
+    /**
+     * Draft for the website editor: prefer stores.draft_json, and hydrate once from
+     * the active builder session when the store draft is empty but the session has
+     * publishable JSON (so builder and website share one draft).
+     *
+     * @return array<string, mixed>|null
+     */
+    public function resolveEditorDraft(Store $store): ?array
+    {
+        $storeDraft = $this->resolveDraft($store);
+        if (is_array($storeDraft) && $storeDraft !== []) {
+            return $storeDraft;
+        }
+
+        $sessionSnapshot = $this->findActiveSessionSnapshot($store);
+        if (! is_array($sessionSnapshot) || $sessionSnapshot === []) {
+            return null;
+        }
+
+        if (! $this->hasPublishableStorefront($sessionSnapshot)) {
+            return null;
+        }
+
+        $this->persistDraft($store, $sessionSnapshot);
+
+        return $this->resolveDraft($store);
+    }
+
     /** @return array<string, mixed>|null */
     public function resolveFullDraft(Store $store): ?array
     {

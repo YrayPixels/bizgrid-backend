@@ -12,6 +12,9 @@ class StorefrontTemplate extends Model
 
     protected $keyType = 'string';
 
+    /** Default storefront template for new merchants. */
+    public const DEFAULT_ID = 'minimalistic';
+
     protected $fillable = [
         'id',
         'label',
@@ -84,10 +87,10 @@ class StorefrontTemplate extends Model
     public static function defaultActiveConcreteIds(): array
     {
         return [
+            'minimalistic',
             'fashion_lookbook',
             'beauty',
             'cosmetics',
-            'minimalistic',
             'furniture-hardware',
             'hair-and-fashion',
         ];

@@ -315,6 +315,41 @@ it('publishes JSON storefront content that only exists on the builder session', 
         ->assertJsonPath('storefront.hero.headline', 'Session headline');
 });
 
+it('hydrates store draft_json from the builder session when loading the website editor draft', function () {
+    $user = User::factory()->create();
+    $store = publishTestStorefront($user);
+    $store->update([
+        'draft_json' => null,
+        'storefront_content' => null,
+    ]);
+
+    \App\Models\StorefrontBuilderSession::create([
+        'user_id' => $user->id,
+        'store_id' => $store->id,
+        'status' => 'content_generated',
+        'storefront_snapshot' => [
+            'hero' => [
+                'headline' => 'Hydrated headline',
+                'subheadline' => 'From the builder session only',
+                'cta_label' => 'Shop',
+            ],
+            'seo' => [
+                'title' => 'Hydrated store',
+                'description' => 'Visible in the website editor after hydrate',
+            ],
+        ],
+    ]);
+
+    $this->actingAs($user, 'sanctum')
+        ->getJson("/api/storehause/ai/storefront/{$store->id}")
+        ->assertOk()
+        ->assertJsonPath('storefront.hero.headline', 'Hydrated headline');
+
+    $store->refresh();
+    expect($store->draft_json)->not->toBeNull();
+    expect($store->draft_json['hero']['headline'])->toBe('Hydrated headline');
+});
+
 it('excludes stores with empty published_json from the public index', function () {
     $user = User::factory()->create();
     $store = publishTestStorefront($user);

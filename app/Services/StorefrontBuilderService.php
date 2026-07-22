@@ -223,7 +223,7 @@ class StorefrontBuilderService
 
     public function resolveStorefrontTemplate(Store $store): string
     {
-        $templateId = $store->storefront_template_id ?? 'ai_pick';
+        $templateId = $store->storefront_template_id ?? StorefrontTemplate::DEFAULT_ID;
 
         if (in_array($templateId, StorefrontTemplate::concreteIds(), true)) {
             return $templateId;
@@ -231,22 +231,23 @@ class StorefrontBuilderService
 
         $industry = $store->merchant?->industry ?? 'other';
         $activeTemplateIds = StorefrontTemplate::activeConcreteIds();
-        $firstActive = fn (array $ids, string $fallback): string => collect($ids)
-            ->first(fn (string $id): bool => in_array($id, $activeTemplateIds, true), $fallback);
+        $fallback = StorefrontTemplate::DEFAULT_ID;
+        $firstActive = fn (array $ids, string $default): string => collect($ids)
+            ->first(fn (string $id): bool => in_array($id, $activeTemplateIds, true), $default);
 
         if ($industry === 'beauty_and_skincare') {
-            return $firstActive(['cosmetics', 'beauty', 'minimalistic'], 'minimalistic');
+            return $firstActive(['cosmetics', 'beauty', $fallback], $fallback);
         }
 
         if ($industry === 'fashion_and_apparel') {
-            return $firstActive(['fashion_lookbook', 'minimalistic'], 'minimalistic');
+            return $firstActive(['fashion_lookbook', $fallback], $fallback);
         }
 
         if (in_array($industry, ['electronics', 'food_and_beverage', 'home_and_living'], true)) {
-            return $firstActive(['minimalistic', 'cosmetics'], 'minimalistic');
+            return $firstActive([$fallback, 'cosmetics'], $fallback);
         }
 
-        return in_array('minimalistic', $activeTemplateIds, true) ? 'minimalistic' : ($activeTemplateIds[0] ?? 'minimalistic');
+        return in_array($fallback, $activeTemplateIds, true) ? $fallback : ($activeTemplateIds[0] ?? $fallback);
     }
 
     /**

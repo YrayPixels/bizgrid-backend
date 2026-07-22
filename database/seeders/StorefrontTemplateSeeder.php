@@ -149,7 +149,7 @@ class StorefrontTemplateSeeder extends Seeder
                 'best_for' => 'Wellness brands',
                 'preview' => 'minimal',
                 'type' => 'json',
-                'sort_order' => 50,
+                'sort_order' => 5,
                 'industries' => ['home_and_living', 'food_and_beverage', 'electronics', 'services', 'other'],
                 'tone_tags' => ['minimal', 'calm', 'clean', 'warm'],
                 'visual_tags' => ['soft', 'neutral', 'catalog-friendly'],
