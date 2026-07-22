@@ -16,7 +16,6 @@ use App\Http\Controllers\AdminSearchController;
 use App\Http\Controllers\AdminStoreController;
 use App\Http\Controllers\AdminStorefrontTemplateController;
 use App\Http\Controllers\AiChatController;
-use App\Http\Controllers\ProductAiController;
 use App\Http\Controllers\AuthController;
 use App\Http\Controllers\BillingController;
 use App\Http\Controllers\CustomerController;
@@ -160,7 +159,6 @@ Route::prefix('storehause')->group(function () {
         Route::post('/billing/topup', [BillingController::class, 'topup'])->middleware('throttle:20,1');
         Route::post('/billing/portal', [BillingController::class, 'portal'])->middleware('throttle:20,1');
         Route::post('/ai/storefront-code/generate', [StorefrontCodeController::class, 'generate']);
-        Route::post('/ai/products/describe', [ProductAiController::class, 'describe'])->middleware('throttle:30,1');
         Route::get('/auth/me', [AuthController::class, 'me']);
         Route::post('/auth/logout', [AuthController::class, 'logout']);
         Route::post('/auth/verify-email', [AuthController::class, 'verifyEmail'])->middleware('throttle:10,1');

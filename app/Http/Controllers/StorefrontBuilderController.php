@@ -124,11 +124,17 @@ class StorefrontBuilderController extends Controller
         } elseif (! empty($data['storefront_snapshot']) && is_array($data['storefront_snapshot'])) {
             $this->persistStorefrontSnapshot($session, $request->user(), $data);
         } else {
-            try {
-                $this->processUserMessage($session, $data['message']);
-            } catch (StorefrontAiUnavailableException $exception) {
-                return $this->aiUnavailableResponse($exception);
-            }
+            // Merchant builder agents/tools run in Next.js. Laravel only persists
+            // client turns (assistant_message / storefront_snapshot) or visual extras.
+            $this->appendAssistantMessage(
+                $session,
+                'I could not process that update. Please try again from the website builder.',
+                [
+                    'type' => 'conversation',
+                    'error' => 'client_turn_required',
+                ],
+            );
+            $session->save();
         }
 
         $this->invalidateBuilderApiCache($session);
@@ -481,7 +487,7 @@ class StorefrontBuilderController extends Controller
     {
         $data = $request->validate([
             'instruction' => 'required|string|max:8000',
-            'storefront' => 'nullable|array',
+            'storefront' => 'required|array',
             'changed_paths' => 'nullable|array',
             'changed_paths.*' => 'string',
             'assistant_message' => 'nullable|string|max:4000',
@@ -498,24 +504,10 @@ class StorefrontBuilderController extends Controller
 
         $this->enforceAiUsage($store);
 
-        if (! empty($data['storefront'])) {
-            $storefront = $data['storefront'];
-            $changedPaths = $data['changed_paths'] ?? [];
-            $summary = $data['assistant_message']
-                ?? $this->builderService->describeStorefrontEdit($changedPaths);
-        } else {
-            try {
-                $baseStorefront = $session->storefront_snapshot
-                    ?? $this->publishService->resolveDraft($store)
-                    ?? $this->builderService->synthesizeStorefront($store->load('merchant'));
-                $result = $this->builderService->applyChatEdit($baseStorefront, $data['instruction'], $store);
-                $storefront = $result['storefront'];
-                $changedPaths = $result['changed_paths'];
-                $summary = $result['assistant_message'] ?? $this->builderService->describeStorefrontEdit($changedPaths);
-            } catch (StorefrontAiUnavailableException $exception) {
-                return $this->aiUnavailableResponse($exception);
-            }
-        }
+        $storefront = $data['storefront'];
+        $changedPaths = $data['changed_paths'] ?? [];
+        $summary = $data['assistant_message']
+            ?? $this->builderService->describeStorefrontEdit($changedPaths);
 
         unset($storefront['products']);
         $this->publishService->persistDraft($store, $storefront);
@@ -720,374 +712,11 @@ class StorefrontBuilderController extends Controller
         ]);
     }
 
-    private function processUserMessage(StorefrontBuilderSession $session, string $message): void
-    {
-        $context = $this->sessionContext($session, $message);
-
-        if (! $this->builderService->isSubstantiveMessage($message)) {
-            $this->appendAssistantMessage(
-                $session,
-                $this->builderService->conversationalReply($context, $message),
-                ['type' => 'conversation'],
-            );
-
-            return;
-        }
-
-        $profile = $this->builderService->extractBusinessProfileFromMessage(
-            $message,
-            $session->business_profile ?? [],
-            $context['recent_messages'] ?? [],
-        );
-        $session->business_profile = $profile;
-        $session->last_intent = $message;
-
-        $hasMinimum = ! empty($profile['business_name'])
-            && ! empty($profile['description'])
-            && strlen((string) $profile['description']) >= 10;
-
-        if ($hasMinimum && ! $session->store_id) {
-            $store = $this->createStoreFromProfile($session->user, $profile);
-            $session->store_id = $store->id;
-            $session->status = 'template_recommendation';
-        } elseif ($hasMinimum) {
-            $session->status = 'template_recommendation';
-            if ($session->store) {
-                $session->store->fill([
-                    'name' => $profile['business_name'] ?? $session->store->name,
-                    'description' => $profile['description'] ?? $session->store->description,
-                    'brand_color' => $profile['brand_color'] ?? $session->store->brand_color,
-                ])->save();
-                $session->store->merchant?->fill([
-                    'business_name' => $profile['business_name'] ?? $session->store->merchant?->business_name,
-                    'industry' => $profile['industry'] ?? $session->store->merchant?->industry,
-                ])->save();
-            }
-        } else {
-            $session->status = 'collecting_requirements';
-        }
-
-        $session->save();
-        $session->load('store.merchant');
-
-        $hasDraft = ! empty($session->storefront_snapshot);
-        $recommendations = $hasMinimum || $hasDraft
-            ? $this->recommendTemplatesForProfile($profile)
-            : [];
-
-        if ($hasDraft && $this->builderService->isStockImageIntent($message)) {
-            $this->applyVisualBuilderUpdates($session, ['apply_stock_images' => true]);
-
-            return;
-        }
-
-        if ($hasDraft && $this->builderService->isProductIntent($message)) {
-            $this->appendAssistantMessage(
-                $session,
-                'Products live on your Products page — add names, prices, photos, and inventory there. They appear on your storefront automatically.',
-                [
-                    'type' => 'product_guidance',
-                    'suggested_actions' => [
-                        ['type' => 'link', 'label' => 'Go to Products', 'href' => '/admin/products'],
-                        ['type' => 'prompt', 'label' => 'Suggest stock photos', 'message' => 'Add suitable stock photos to my website'],
-                        ...$this->builderService->colorPresetActions($profile['industry'] ?? null, 2),
-                    ],
-                ],
-            );
-
-            return;
-        }
-
-        if ($hasDraft && $this->builderService->isColorIntent($message)) {
-            $resolved = $this->builderService->resolveBrandColorFromMessage(
-                $message,
-                $profile,
-                $session->store,
-            );
-            if ($resolved && $this->applyVisualBuilderUpdates($session, [
-                'brand_color' => $resolved['brand_color'],
-                'color_label' => $resolved['label'],
-                'palette' => $resolved['palette'] ?? null,
-            ])) {
-                return;
-            }
-        }
-
-        if ($hasDraft && $this->builderService->isBuildIntent($message)) {
-            $designDirection = $this->builderService->resolveDesignDirectionFromMessage($message, $profile, $session->store);
-            $paletteOptions = [];
-
-            if (is_array($designDirection)) {
-                $session->selected_template_id = $designDirection['template_id'];
-                $profile['brand_color'] = $designDirection['brand_color'];
-
-                if (! empty($designDirection['industry'])) {
-                    $profile['industry'] = $designDirection['industry'];
-                }
-
-                if (! empty($designDirection['tone'])) {
-                    $profile['tone'] = array_values(array_unique(array_merge($profile['tone'] ?? [], $designDirection['tone'])));
-                }
-
-                $session->business_profile = $profile;
-
-                if ($session->store) {
-                    $session->store->storefront_template_id = $designDirection['template_id'];
-                    $session->store->brand_color = $designDirection['brand_color'];
-                    $session->store->save();
-                    $session->store->merchant?->fill([
-                        'industry' => $profile['industry'] ?? $session->store->merchant?->industry,
-                    ])->save();
-                }
-
-                $paletteOptions = array_values(array_map(
-                    fn (array $entry): string => $entry['color'],
-                    $designDirection['palette'] ?? [],
-                ));
-            } else {
-                $templateId = $this->builderService->resolveTemplateFromMessage($message);
-                if ($templateId) {
-                    $session->selected_template_id = $templateId;
-                    if ($session->store) {
-                        $session->store->storefront_template_id = $templateId;
-                        $session->store->save();
-                    }
-                }
-            }
-
-            $result = $this->executeGenerateDraftTool($session, $recommendations);
-            if ($result['ok'] ?? false) {
-                if (is_array($designDirection)) {
-                    $rebuildMessage = sprintf(
-                        'Done — I refreshed your website with %s. Your primary color is %s. Check the preview on the right, then tell me what to refine.',
-                        rtrim($designDirection['merchant_summary'], '.'),
-                        strtolower($designDirection['color_label']),
-                    );
-                    $payload = [
-                        'type' => 'website_generated',
-                        'generation_id' => $result['generation_id'] ?? null,
-                        'design_direction' => $designDirection,
-                        'color_options' => $paletteOptions,
-                    ];
-                } else {
-                    $resolvedTemplateId = $session->selected_template_id ?? 'new';
-                    $templateLabel = is_string($resolvedTemplateId)
-                        ? $this->templateLabel($resolvedTemplateId)
-                        : 'new';
-                    $rebuildMessage = $this->builderService->isDesignChangeIntent($message) || $this->builderService->isRebuildIntent($message)
-                        ? "Done — I refreshed your website with a {$templateLabel} look. Check the preview on the right, then tell me what to refine."
-                        : 'Your website is ready. Preview it on the right, then tell me what to refine — headline, about section, CTA, or SEO.';
-                    $payload = [
-                        'type' => 'website_generated',
-                        'generation_id' => $result['generation_id'] ?? null,
-                    ];
-                }
-
-                $this->appendAssistantMessage($session, $rebuildMessage, $payload);
-            }
-
-            return;
-        }
-
-        if ($hasDraft && $this->builderService->isEditIntent($message)) {
-            $this->applyChatEditFromMessage($session, $message);
-
-            return;
-        }
-
-        if ($hasDraft) {
-            $this->appendAssistantMessage(
-                $session,
-                $this->builderService->conversationalReply($context, $message),
-                ['type' => 'conversation'],
-            );
-
-            return;
-        }
-
-        if ($this->builderService->isBuildIntent($message) && $hasMinimum) {
-            $result = $this->executeGenerateDraftTool($session, $recommendations);
-            if ($result['ok'] ?? false) {
-                $this->appendAssistantMessage(
-                    $session,
-                    'Your website is ready. Preview it on the right, then tell me what to refine — headline, about section, CTA, or SEO.',
-                    [
-                        'type' => 'website_generated',
-                        'generation_id' => $result['generation_id'] ?? null,
-                    ],
-                );
-
-                return;
-            }
-        }
-
-        if (! $hasMinimum) {
-            $missing = [];
-            if (empty($profile['business_name'])) {
-                $missing[] = 'business name';
-            }
-            if (empty($profile['description']) || strlen((string) $profile['description']) < 10) {
-                $missing[] = 'short description of what you sell';
-            }
-
-            $this->appendAssistantMessage(
-                $session,
-                'Thanks — I still need your '.implode(' and ', $missing).'. For example: "Glow Rituals is an organic skincare brand for busy professionals."',
-                ['type' => 'requirements_request', 'profile' => $profile],
-            );
-
-            return;
-        }
-
-        try {
-            $agentTurn = $this->builderService->planBuilderTurn(
-                $message,
-                $context,
-                $profile,
-                $recommendations,
-            );
-        } catch (StorefrontAiUnavailableException) {
-            $this->handleBuilderTurnWithoutAi($session, $message, $profile, $recommendations);
-
-            return;
-        }
-
-        $toolResults = $this->executeBuilderToolCalls(
-            $session,
-            $agentTurn['tool_calls'],
-            $recommendations,
-        );
-
-        $this->appendAssistantMessage(
-            $session,
-            $agentTurn['assistant_message'],
-            [
-                'type' => 'agent_turn',
-                'plan' => $agentTurn['plan'] ?? [],
-                'tool_calls' => $agentTurn['tool_calls'],
-                'tool_results' => $toolResults,
-                'recommendations' => $recommendations,
-                'profile' => $profile,
-            ],
-        );
-    }
-
-    /**
-     * @param  array<string, mixed>  $profile
-     * @param  list<array<string, mixed>>  $recommendations
-     */
-    private function handleBuilderTurnWithoutAi(
-        StorefrontBuilderSession $session,
-        string $message,
-        array $profile,
-        array $recommendations,
-    ): void {
-        if ($this->builderService->isBuildIntent($message)) {
-            $result = $this->executeGenerateDraftTool($session, $recommendations);
-            if ($result['ok'] ?? false) {
-                $this->appendAssistantMessage(
-                    $session,
-                    'Your website is ready. Preview it on the right, then tell me what to refine — headline, about section, CTA, or SEO.',
-                    [
-                        'type' => 'website_generated',
-                        'generation_id' => $result['generation_id'] ?? null,
-                    ],
-                );
-
-                return;
-            }
-        }
-
-        $businessName = $profile['business_name'] ?? 'your business';
-        $templateLabel = $recommendations[0]['label'] ?? 'website';
-
-        $this->appendAssistantMessage(
-            $session,
-            "Great — I can build a {$templateLabel} style storefront for {$businessName}. Say “build my website” when you’re ready.",
-            [
-                'type' => 'agent_turn',
-                'recommendations' => $recommendations,
-                'profile' => $profile,
-            ],
-        );
-    }
-
     private function aiUnavailableResponse(StorefrontAiUnavailableException $exception): JsonResponse
     {
         return response()->json([
             'message' => $exception->getMessage(),
         ], 503);
-    }
-
-    /**
-     * @param  list<array{name: string, arguments: array<string, mixed>}>  $toolCalls
-     * @param  list<array<string, mixed>>  $recommendations
-     * @return list<array<string, mixed>>
-     */
-    private function executeBuilderToolCalls(
-        StorefrontBuilderSession $session,
-        array $toolCalls,
-        array $recommendations,
-    ): array {
-        $results = [];
-
-        foreach ($toolCalls as $toolCall) {
-            $name = $toolCall['name'] ?? null;
-            $arguments = is_array($toolCall['arguments'] ?? null) ? $toolCall['arguments'] : [];
-
-            if ($name === 'recommend_templates') {
-                $results[] = [
-                    'name' => $name,
-                    'ok' => true,
-                    'recommendations_count' => count($recommendations),
-                ];
-                continue;
-            }
-
-            if ($name === 'ask_clarifying_question') {
-                $results[] = [
-                    'name' => $name,
-                    'ok' => true,
-                    'question' => $arguments['question'] ?? null,
-                ];
-                continue;
-            }
-
-            if ($name === 'select_template') {
-                $templateId = $arguments['template_id'] ?? null;
-                if (! is_string($templateId) || ! in_array($templateId, StorefrontTemplate::activeConcreteIds(), true)) {
-                    $results[] = [
-                        'name' => $name,
-                        'ok' => false,
-                        'error' => 'invalid_template_id',
-                    ];
-                    continue;
-                }
-
-                $session->selected_template_id = $templateId;
-                $session->status = 'template_recommendation';
-                $session->save();
-
-                if ($session->store) {
-                    $session->store->storefront_template_id = $templateId;
-                    $session->store->save();
-                }
-
-                $results[] = [
-                    'name' => $name,
-                    'ok' => true,
-                    'template_id' => $templateId,
-                    'source' => $arguments['source'] ?? 'ai_selected',
-                ];
-                continue;
-            }
-
-            if ($name === 'generate_draft') {
-                $results[] = $this->executeGenerateDraftTool($session, $recommendations);
-            }
-        }
-
-        return $results;
     }
 
     /**
@@ -1277,44 +906,6 @@ class StorefrontBuilderController extends Controller
             'business_name' => $profile['business_name'] ?? $store->merchant?->business_name,
             'industry' => $profile['industry'] ?? $store->merchant?->industry,
         ])->save();
-    }
-
-    private function applyChatEditFromMessage(StorefrontBuilderSession $session, string $instruction): void
-    {
-        $store = $session->store;
-        if (! $store) {
-            $this->appendAssistantMessage(
-                $session,
-                'Generate a website before applying chat edits.',
-                ['type' => 'conversation'],
-            );
-
-            return;
-        }
-
-        $baseStorefront = $session->storefront_snapshot
-            ?? $this->publishService->resolveDraft($store)
-            ?? $this->builderService->synthesizeStorefront($store->load('merchant'));
-        $result = $this->builderService->applyChatEdit($baseStorefront, $instruction, $session->store);
-        $storefront = $result['storefront'];
-        $changedPaths = $result['changed_paths'];
-        $summary = $result['assistant_message'] ?? $this->builderService->describeStorefrontEdit($changedPaths);
-
-        unset($storefront['products']);
-        $this->publishService->persistDraft($store, $storefront);
-
-        $session->storefront_snapshot = $storefront;
-        $session->status = 'review_ready';
-        $session->save();
-
-        $this->appendAssistantMessage(
-            $session,
-            $summary,
-            [
-                'type' => 'website_refined',
-                'changed_paths' => $changedPaths,
-            ],
-        );
     }
 
     private function appendUserMessage(StorefrontBuilderSession $session, string $content): void

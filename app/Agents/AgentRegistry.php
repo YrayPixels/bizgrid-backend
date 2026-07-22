@@ -3,6 +3,7 @@
 namespace App\Agents;
 
 use App\Agents\Contracts\AgentInterface;
+use App\Services\PlatformAiConfigService;
 use RuntimeException;
 
 class AgentRegistry
@@ -73,12 +74,10 @@ class AgentRegistry
     }
 
     /**
-     * Check if any registered agent is available (API key configured).
+     * Check if AI is available (API key configured).
      */
     public function available(): bool
     {
-        $fallback = app(InterpreterAgent::class);
-
-        return $fallback->available();
+        return app(PlatformAiConfigService::class)->available();
     }
 }

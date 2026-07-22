@@ -77,12 +77,10 @@ it('generates a storefront draft from a builder session', function () {
     expect($store->draft_json)->not->toBeNull();
 });
 
-it('responds conversationally to greetings when the merchant already has a store', function () {
-    mockStorefrontAiAgent(function ($mock) {
-        $mock->shouldReceive('respondToConversation')
-            ->once()
-            ->andReturn('Hi! Tell me what you would like to work on next for Glow Rituals.');
-    });
+it('requires a Next.js client turn instead of running PHP agent orchestration', function () {
+    $mock = Mockery::mock(App\Services\StorefrontAiAgentService::class);
+    $mock->shouldReceive('available')->andReturn(false);
+    app()->instance(App\Services\StorefrontAiAgentService::class, $mock);
 
     $user = User::factory()->create();
     $merchant = Merchant::create([
@@ -121,11 +119,11 @@ it('responds conversationally to greetings when the merchant already has a store
 
     $response->assertOk();
 
-    $assistantMessages = collect($response->json('session.messages'))
+    $lastAssistant = collect($response->json('session.messages'))
         ->where('role', 'assistant')
-        ->pluck('content');
+        ->last();
 
-    expect($assistantMessages->last())->not->toContain('Pick one below');
+    expect($lastAssistant['payload']['error'] ?? null)->toBe('client_turn_required');
 });
 
 it('can generate a storefront draft from a structured chat tool turn', function () {
@@ -163,9 +161,32 @@ it('can generate a storefront draft from a structured chat tool turn', function 
         'business_profile' => glowRitualsProfile(),
     ]);
 
+    $storefront = [
+        'template' => ['id' => 'cosmetics', 'source' => 'ai_selected'],
+        'hero' => [
+            'headline' => 'Glow Rituals',
+            'subheadline' => 'Organic skincare for busy professionals.',
+            'cta_label' => 'Shop now',
+        ],
+        'about' => [
+            'title' => 'About Glow Rituals',
+            'body' => 'Organic skincare for busy professionals.',
+        ],
+        'seo' => [
+            'title' => 'Glow Rituals',
+            'description' => 'Organic skincare for busy professionals.',
+        ],
+    ];
+
+    // Next.js agents synthesize; Laravel only persists the client turn.
     $response = $this->actingAs($user, 'sanctum')
         ->postJson("/api/storehause/storefront-builder/sessions/{$session->id}/messages", [
             'message' => 'Go ahead and generate the draft',
+            'status' => 'content_generated',
+            'selected_template_id' => 'cosmetics',
+            'assistant_message' => 'Your website is ready. Preview it on the right.',
+            'assistant_payload' => ['type' => 'website_generated'],
+            'storefront_snapshot' => $storefront,
         ]);
 
     $response->assertOk()
@@ -246,7 +267,7 @@ it('starts a builder session without requiring OpenAI', function () {
         ]);
 });
 
-it('applies stock photos when the merchant asks for suitable stock images', function () {
+it('persists stock photos from a Next.js client turn', function () {
     $mock = Mockery::mock(App\Services\StorefrontAiAgentService::class);
     $mock->shouldReceive('available')->andReturn(false);
     app()->instance(App\Services\StorefrontAiAgentService::class, $mock);
@@ -275,23 +296,25 @@ it('applies stock photos when the merchant asks for suitable stock images', func
     ]);
 
     $session = builderSessionWithDraft($user, $store);
+    $snapshot = $session->storefront_snapshot;
+    $snapshot['media'] = array_merge($snapshot['media'] ?? [], [
+        'hero_image_url' => 'https://images.example.test/hero.jpg',
+    ]);
 
     $response = $this->actingAs($user, 'sanctum')
         ->postJson("/api/storehause/storefront-builder/sessions/{$session->id}/messages", [
             'message' => 'Add suitable stock photos to my website',
+            'assistant_message' => 'I added suitable photos to your site.',
+            'assistant_payload' => ['type' => 'media_updated'],
+            'storefront_snapshot' => $snapshot,
         ]);
 
     $response->assertOk();
-
-    $lastAssistant = collect($response->json('session.messages'))
-        ->where('role', 'assistant')
-        ->last();
-
-    expect($lastAssistant['content'])->toContain('suitable photos');
-    expect($response->json('session.storefront_snapshot.media.hero_image_url'))->not->toBeNull();
+    expect($response->json('session.storefront_snapshot.media.hero_image_url'))
+        ->toBe('https://images.example.test/hero.jpg');
 });
 
-it('rebuilds the draft when the merchant asks to build for cosmetics', function () {
+it('persists a cosmetics rebuild from a Next.js client turn', function () {
     $mock = Mockery::mock(App\Services\StorefrontAiAgentService::class);
     $mock->shouldReceive('available')->andReturn(false);
     app()->instance(App\Services\StorefrontAiAgentService::class, $mock);
@@ -322,10 +345,16 @@ it('rebuilds the draft when the merchant asks to build for cosmetics', function 
     $session = builderSessionWithDraft($user, $store, [
         'selected_template_id' => 'minimalistic',
     ]);
+    $snapshot = $session->storefront_snapshot;
+    $snapshot['template'] = ['id' => 'cosmetics', 'source' => 'merchant_selected'];
 
     $response = $this->actingAs($user, 'sanctum')
         ->postJson("/api/storehause/storefront-builder/sessions/{$session->id}/messages", [
             'message' => 'Lets build for cosmetics this time',
+            'selected_template_id' => 'cosmetics',
+            'assistant_message' => 'I refreshed your site with the cosmetics look.',
+            'assistant_payload' => ['type' => 'website_generated'],
+            'storefront_snapshot' => $snapshot,
         ]);
 
     $response->assertOk()
@@ -472,7 +501,7 @@ it('syncs the active builder session when the website draft is saved', function 
     );
 });
 
-it('guides merchants to the products page when they want to add a product', function () {
+it('persists product guidance from a Next.js client turn', function () {
     $mock = Mockery::mock(App\Services\StorefrontAiAgentService::class);
     $mock->shouldReceive('available')->andReturn(false);
     app()->instance(App\Services\StorefrontAiAgentService::class, $mock);
@@ -505,6 +534,13 @@ it('guides merchants to the products page when they want to add a product', func
     $response = $this->actingAs($user, 'sanctum')
         ->postJson("/api/storehause/storefront-builder/sessions/{$session->id}/messages", [
             'message' => 'I want to add a product',
+            'assistant_message' => 'You can manage products on the Products page.',
+            'assistant_payload' => [
+                'type' => 'product_guidance',
+                'suggested_actions' => [
+                    ['type' => 'link', 'label' => 'Products', 'href' => '/admin/products'],
+                ],
+            ],
         ]);
 
     $response->assertOk();
@@ -518,7 +554,7 @@ it('guides merchants to the products page when they want to add a product', func
     expect($lastAssistant['payload']['suggested_actions'][0]['href'])->toBe('/admin/products');
 });
 
-it('updates the contact page intro from builder chat', function () {
+it('persists a contact page intro edit from the Next.js client', function () {
     $mock = Mockery::mock(App\Services\StorefrontAiAgentService::class);
     $mock->shouldReceive('available')->andReturn(false);
     app()->instance(App\Services\StorefrontAiAgentService::class, $mock);
@@ -548,9 +584,15 @@ it('updates the contact page intro from builder chat', function () {
 
     $session = builderSessionWithDraft($user, $store);
 
+    $storefront = $session->storefront_snapshot;
+    $storefront['pages']['contact']['body'] = 'We reply within 24 hours on weekdays.';
+
     $response = $this->actingAs($user, 'sanctum')
         ->postJson("/api/storehause/storefront-builder/sessions/{$session->id}/edit", [
             'instruction' => 'Update the contact page intro to "We reply within 24 hours on weekdays."',
+            'storefront' => $storefront,
+            'changed_paths' => ['pages.contact.body'],
+            'assistant_message' => 'Done — I updated the contact intro. Check the preview on the right.',
         ]);
 
     $response->assertOk();
@@ -559,7 +601,7 @@ it('updates the contact page intro from builder chat', function () {
         ->toContain('We reply within 24 hours on weekdays');
 });
 
-it('adds a new faq item from builder chat', function () {
+it('persists a new faq item edit from the Next.js client', function () {
     $mock = Mockery::mock(App\Services\StorefrontAiAgentService::class);
     $mock->shouldReceive('available')->andReturn(false);
     app()->instance(App\Services\StorefrontAiAgentService::class, $mock);
@@ -588,11 +630,20 @@ it('adds a new faq item from builder chat', function () {
     ]);
 
     $session = builderSessionWithDraft($user, $store);
-    $initialCount = count($session->storefront_snapshot['pages']['faq']['items'] ?? []);
+
+    $storefront = $session->storefront_snapshot;
+    $initialCount = count($storefront['pages']['faq']['items'] ?? []);
+    $storefront['pages']['faq']['items'][] = [
+        'question' => 'What is your return policy?',
+        'answer' => 'We accept returns within 30 days of delivery.',
+    ];
 
     $response = $this->actingAs($user, 'sanctum')
         ->postJson("/api/storehause/storefront-builder/sessions/{$session->id}/edit", [
             'instruction' => 'Add a fourth FAQ about returns',
+            'storefront' => $storefront,
+            'changed_paths' => ['pages.faq.items'],
+            'assistant_message' => 'Done — I updated the FAQ. Check the preview on the right.',
         ]);
 
     $response->assertOk();
@@ -602,7 +653,7 @@ it('adds a new faq item from builder chat', function () {
     expect(collect($items)->last()['question'])->toContain('return');
 });
 
-it('refreshes faq items from builder chat without asking for specifics', function () {
+it('persists refreshed faq items from a Next.js client turn', function () {
     $mock = Mockery::mock(App\Services\StorefrontAiAgentService::class);
     $mock->shouldReceive('available')->andReturn(false);
     app()->instance(App\Services\StorefrontAiAgentService::class, $mock);
@@ -639,9 +690,20 @@ it('refreshes faq items from builder chat without asking for specifics', functio
         ],
     ]);
 
+    $snapshot = $session->storefront_snapshot;
+    $snapshot['pages']['faq']['items'] = [
+        [
+            'question' => 'Where is ABI HOUSES based?',
+            'answer' => 'We ship fashion essentials nationwide.',
+        ],
+    ];
+
     $response = $this->actingAs($user, 'sanctum')
         ->postJson("/api/storehause/storefront-builder/sessions/{$session->id}/messages", [
             'message' => 'Update the faq and the answers',
+            'assistant_message' => 'I refreshed your FAQ section.',
+            'assistant_payload' => ['type' => 'website_refined', 'changed_paths' => ['pages.faq.items']],
+            'storefront_snapshot' => $snapshot,
         ]);
 
     $response->assertOk();
@@ -696,7 +758,7 @@ it('emits home page blocks when synthesizing a cosmetics storefront', function (
         ->toContain('hero-main', 'featured-products', 'home-faq');
 });
 
-it('reorders homepage faq above products from builder chat', function () {
+it('persists homepage faq reorder from the Next.js client', function () {
     $mock = Mockery::mock(App\Services\StorefrontAiAgentService::class);
     $mock->shouldReceive('available')->andReturn(false);
     app()->instance(App\Services\StorefrontAiAgentService::class, $mock);
@@ -726,9 +788,28 @@ it('reorders homepage faq above products from builder chat', function () {
 
     $session = builderSessionWithDraft($user, $store);
 
+    $storefront = $session->storefront_snapshot;
+    $blocks = $storefront['pages']['home']['blocks'];
+    $faqIndex = collect($blocks)->search(fn (array $block) => ($block['id'] ?? null) === 'home-faq');
+    $productsIndex = collect($blocks)->search(fn (array $block) => ($block['id'] ?? null) === 'featured-products');
+    expect($faqIndex)->not->toBeFalse();
+    expect($productsIndex)->not->toBeFalse();
+
+    if ($faqIndex > $productsIndex) {
+        $faqBlock = $blocks[$faqIndex];
+        unset($blocks[$faqIndex]);
+        $blocks = array_values($blocks);
+        $productsIndex = collect($blocks)->search(fn (array $block) => ($block['id'] ?? null) === 'featured-products');
+        array_splice($blocks, $productsIndex, 0, [$faqBlock]);
+    }
+    $storefront['pages']['home']['blocks'] = array_values($blocks);
+
     $response = $this->actingAs($user, 'sanctum')
         ->postJson("/api/storehause/storefront-builder/sessions/{$session->id}/edit", [
             'instruction' => 'Move FAQ above products on the homepage',
+            'storefront' => $storefront,
+            'changed_paths' => ['pages.home.blocks'],
+            'assistant_message' => 'Done — I reordered the homepage sections. Check the preview on the right.',
         ]);
 
     $response->assertOk();
@@ -746,7 +827,7 @@ it('reorders homepage faq above products from builder chat', function () {
     expect($faqIndex)->toBeLessThan($productsIndex);
 });
 
-it('updates the trust section copy from builder chat', function () {
+it('persists trust section copy from the Next.js client', function () {
     $mock = Mockery::mock(App\Services\StorefrontAiAgentService::class);
     $mock->shouldReceive('available')->andReturn(false);
     app()->instance(App\Services\StorefrontAiAgentService::class, $mock);
@@ -776,9 +857,21 @@ it('updates the trust section copy from builder chat', function () {
 
     $session = builderSessionWithDraft($user, $store);
 
+    $storefront = $session->storefront_snapshot;
+    $blocks = $storefront['pages']['home']['blocks'];
+    foreach ($blocks as $index => $block) {
+        if (($block['id'] ?? null) === 'trust-features') {
+            $blocks[$index]['props']['body'] = 'Premium formulas chosen for calm, everyday glow.';
+        }
+    }
+    $storefront['pages']['home']['blocks'] = $blocks;
+
     $response = $this->actingAs($user, 'sanctum')
         ->postJson("/api/storehause/storefront-builder/sessions/{$session->id}/edit", [
             'instruction' => 'Make the trust section more premium',
+            'storefront' => $storefront,
+            'changed_paths' => ['pages.home.blocks'],
+            'assistant_message' => 'Done — I updated the trust section. Check the preview on the right.',
         ]);
 
     $response->assertOk();
@@ -789,7 +882,7 @@ it('updates the trust section copy from builder chat', function () {
     expect($trustBlock['props']['body'] ?? '')->toContain('Premium formulas');
 });
 
-it('syncs legacy hero edits into homepage blocks', function () {
+it('persists hero headline edits from the Next.js client', function () {
     $mock = Mockery::mock(App\Services\StorefrontAiAgentService::class);
     $mock->shouldReceive('available')->andReturn(false);
     app()->instance(App\Services\StorefrontAiAgentService::class, $mock);
@@ -819,9 +912,22 @@ it('syncs legacy hero edits into homepage blocks', function () {
 
     $session = builderSessionWithDraft($user, $store);
 
+    $storefront = $session->storefront_snapshot;
+    $storefront['hero']['headline'] = 'Glow Rituals Daily Ritual';
+    $blocks = $storefront['pages']['home']['blocks'];
+    foreach ($blocks as $index => $block) {
+        if (($block['id'] ?? null) === 'hero-main') {
+            $blocks[$index]['props']['headline'] = 'Glow Rituals Daily Ritual';
+        }
+    }
+    $storefront['pages']['home']['blocks'] = $blocks;
+
     $response = $this->actingAs($user, 'sanctum')
         ->postJson("/api/storehause/storefront-builder/sessions/{$session->id}/edit", [
             'instruction' => 'Change the headline to Glow Rituals Daily Ritual',
+            'storefront' => $storefront,
+            'changed_paths' => ['hero.headline', 'pages.home.blocks'],
+            'assistant_message' => 'Done — I updated the headline. Check the preview on the right.',
         ]);
 
     $response->assertOk();
@@ -834,7 +940,7 @@ it('syncs legacy hero edits into homepage blocks', function () {
     expect($heroBlock['props']['headline'] ?? null)->toBe('Glow Rituals Daily Ritual');
 });
 
-it('adds a promo banner above the faq from builder chat', function () {
+it('persists a promo banner above faq from the Next.js client', function () {
     $mock = Mockery::mock(App\Services\StorefrontAiAgentService::class);
     $mock->shouldReceive('available')->andReturn(false);
     app()->instance(App\Services\StorefrontAiAgentService::class, $mock);
@@ -863,11 +969,31 @@ it('adds a promo banner above the faq from builder chat', function () {
     ]);
 
     $session = builderSessionWithDraft($user, $store);
-    $initialCount = count($session->storefront_snapshot['pages']['home']['blocks'] ?? []);
+
+    $storefront = $session->storefront_snapshot;
+    $blocks = $storefront['pages']['home']['blocks'];
+    $initialCount = count($blocks);
+    $faqIndex = collect($blocks)->search(fn (array $block) => ($block['id'] ?? null) === 'home-faq');
+    expect($faqIndex)->not->toBeFalse();
+
+    $promo = [
+        'id' => 'promo-banner-new',
+        'type' => 'cta_banner',
+        'props' => [
+            'headline' => 'Limited-time glow set',
+            'body' => 'Save on your everyday essentials.',
+            'cta_label' => 'Shop now',
+        ],
+    ];
+    array_splice($blocks, $faqIndex, 0, [$promo]);
+    $storefront['pages']['home']['blocks'] = array_values($blocks);
 
     $response = $this->actingAs($user, 'sanctum')
         ->postJson("/api/storehause/storefront-builder/sessions/{$session->id}/edit", [
             'instruction' => 'Add a promo banner above the FAQ',
+            'storefront' => $storefront,
+            'changed_paths' => ['pages.home.blocks'],
+            'assistant_message' => 'Done — I added a promo banner. Check the preview on the right.',
         ]);
 
     $response->assertOk();
@@ -876,14 +1002,14 @@ it('adds a promo banner above the faq from builder chat', function () {
     expect(count($blocks))->toBe($initialCount + 1);
 
     $faqIndex = collect($blocks)->search(fn (array $block) => ($block['id'] ?? null) === 'home-faq');
-    $promoIndex = collect($blocks)->search(fn (array $block) => ($block['type'] ?? null) === 'cta_banner' && $block['id'] !== 'serum-promo');
+    $promoIndex = collect($blocks)->search(fn (array $block) => ($block['id'] ?? null) === 'promo-banner-new');
 
     expect($promoIndex)->not->toBeFalse();
     expect($faqIndex)->not->toBeFalse();
     expect($promoIndex)->toBeLessThan($faqIndex);
 });
 
-it('removes the stats section from builder chat', function () {
+it('persists stats section removal from the Next.js client', function () {
     $mock = Mockery::mock(App\Services\StorefrontAiAgentService::class);
     $mock->shouldReceive('available')->andReturn(false);
     app()->instance(App\Services\StorefrontAiAgentService::class, $mock);
@@ -913,9 +1039,18 @@ it('removes the stats section from builder chat', function () {
 
     $session = builderSessionWithDraft($user, $store);
 
+    $storefront = $session->storefront_snapshot;
+    $storefront['pages']['home']['blocks'] = collect($storefront['pages']['home']['blocks'])
+        ->reject(fn (array $block) => ($block['id'] ?? null) === 'home-stats')
+        ->values()
+        ->all();
+
     $response = $this->actingAs($user, 'sanctum')
         ->postJson("/api/storehause/storefront-builder/sessions/{$session->id}/edit", [
             'instruction' => 'Remove the stats section',
+            'storefront' => $storefront,
+            'changed_paths' => ['pages.home.blocks'],
+            'assistant_message' => 'Done — I removed the stats section. Check the preview on the right.',
         ]);
 
     $response->assertOk();
@@ -970,7 +1105,7 @@ it('generates block trees for about contact and faq pages on draft generation', 
     expect(collect($snapshot['pages']['contact']['blocks'])->pluck('type')->all())->toContain('contact_form');
 });
 
-it('updates the contact form fields from builder chat', function () {
+it('persists contact form field edits from the Next.js client', function () {
     $mock = Mockery::mock(App\Services\StorefrontAiAgentService::class);
     $mock->shouldReceive('available')->andReturn(false);
     app()->instance(App\Services\StorefrontAiAgentService::class, $mock);
@@ -1000,9 +1135,36 @@ it('updates the contact form fields from builder chat', function () {
 
     $session = builderSessionWithDraft($user, $store);
 
+    $storefront = $session->storefront_snapshot;
+    $blocks = $storefront['pages']['contact']['blocks'] ?? [];
+    $formIndex = collect($blocks)->search(fn (array $block) => ($block['type'] ?? null) === 'contact_form');
+    if ($formIndex === false) {
+        $blocks[] = [
+            'id' => 'contact-form',
+            'type' => 'contact_form',
+            'props' => [
+                'fields' => [
+                    ['name' => 'name', 'label' => 'Name'],
+                    ['name' => 'email', 'label' => 'Email'],
+                    ['name' => 'order_number', 'label' => 'Order number'],
+                ],
+            ],
+        ];
+    } else {
+        $blocks[$formIndex]['props']['fields'] = [
+            ['name' => 'name', 'label' => 'Name'],
+            ['name' => 'email', 'label' => 'Email'],
+            ['name' => 'order_number', 'label' => 'Order number'],
+        ];
+    }
+    $storefront['pages']['contact']['blocks'] = array_values($blocks);
+
     $response = $this->actingAs($user, 'sanctum')
         ->postJson("/api/storehause/storefront-builder/sessions/{$session->id}/edit", [
             'instruction' => 'Add a contact form with name, email, and order number',
+            'storefront' => $storefront,
+            'changed_paths' => ['pages.contact.blocks'],
+            'assistant_message' => 'Done — I updated the contact form. Check the preview on the right.',
         ]);
 
     $response->assertOk();
@@ -1015,7 +1177,7 @@ it('updates the contact form fields from builder chat', function () {
         ->toContain('name', 'email', 'order_number');
 });
 
-it('regenerates the about page section from builder chat', function () {
+it('persists about page regeneration from the Next.js client', function () {
     $mock = Mockery::mock(App\Services\StorefrontAiAgentService::class);
     $mock->shouldReceive('available')->andReturn(false);
     app()->instance(App\Services\StorefrontAiAgentService::class, $mock);
@@ -1044,11 +1206,17 @@ it('regenerates the about page section from builder chat', function () {
     ]);
 
     $session = builderSessionWithDraft($user, $store);
-    $beforeBody = data_get($session->storefront_snapshot, 'pages.about.blocks.0.props.body');
+
+    $storefront = $session->storefront_snapshot;
+    $beforeBody = data_get($storefront, 'pages.about.blocks.0.props.body');
+    data_set($storefront, 'pages.about.blocks.0.props.body', 'A refreshed about story for Glow Rituals.');
 
     $response = $this->actingAs($user, 'sanctum')
         ->postJson("/api/storehause/storefront-builder/sessions/{$session->id}/edit", [
             'instruction' => 'Fix the about page',
+            'storefront' => $storefront,
+            'changed_paths' => ['pages.about.blocks'],
+            'assistant_message' => 'Done — I refreshed the about page. Check the preview on the right.',
         ]);
 
     $response->assertOk();
@@ -1056,9 +1224,10 @@ it('regenerates the about page section from builder chat', function () {
     $afterBody = data_get($response->json('session.storefront_snapshot'), 'pages.about.blocks.0.props.body');
     expect($response->json('session.storefront_snapshot.pages.about.blocks'))->toBeArray()->not->toBeEmpty();
     expect($afterBody)->not->toBe($beforeBody);
+    expect($afterBody)->toContain('refreshed about story');
 });
 
-it('regenerates the FAQ section from builder chat', function () {
+it('persists FAQ section regeneration from the Next.js client', function () {
     $mock = Mockery::mock(App\Services\StorefrontAiAgentService::class);
     $mock->shouldReceive('available')->andReturn(false);
     app()->instance(App\Services\StorefrontAiAgentService::class, $mock);
@@ -1087,11 +1256,20 @@ it('regenerates the FAQ section from builder chat', function () {
     ]);
 
     $session = builderSessionWithDraft($user, $store);
-    $beforeItems = data_get($session->storefront_snapshot, 'pages.faq.blocks.0.props.items');
+
+    $storefront = $session->storefront_snapshot;
+    $beforeItems = data_get($storefront, 'pages.faq.blocks.0.props.items');
+    data_set($storefront, 'pages.faq.blocks.0.props.items', [
+        ['question' => 'How fast do you ship?', 'answer' => 'Orders leave within 2 business days.'],
+        ['question' => 'Do you offer samples?', 'answer' => 'Yes — ask our team for a sample kit.'],
+    ]);
 
     $response = $this->actingAs($user, 'sanctum')
         ->postJson("/api/storehause/storefront-builder/sessions/{$session->id}/edit", [
             'instruction' => 'Regenerate the FAQ section',
+            'storefront' => $storefront,
+            'changed_paths' => ['pages.faq.blocks'],
+            'assistant_message' => 'Done — I refreshed your FAQ. Check the preview on the right.',
         ]);
 
     $response->assertOk();
@@ -1099,6 +1277,7 @@ it('regenerates the FAQ section from builder chat', function () {
     $afterItems = data_get($response->json('session.storefront_snapshot'), 'pages.faq.blocks.0.props.items');
     expect($response->json('session.storefront_snapshot.pages.faq.blocks'))->toBeArray()->not->toBeEmpty();
     expect($afterItems)->not->toBe($beforeItems);
+    expect($afterItems[0]['question'])->toContain('ship');
 });
 
 it('serves catalog products in builder preview without persisting them in storefront json', function () {

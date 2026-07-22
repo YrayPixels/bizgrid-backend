@@ -10,7 +10,7 @@ use Illuminate\Console\Command;
 class EvalAgents extends Command
 {
     protected $signature = 'agents:eval
-                            {agent? : The agent to evaluate (interpreter, design-director, color-specialist, etc.)}
+                            {agent? : The agent to evaluate (marketing-agent, storefront-writer, etc.)}
                             {--version= : Prompt version to test}
                             {--all : Run all agent evals}';
 
@@ -65,7 +65,7 @@ class EvalAgents extends Command
     private function resolveAgents(): array
     {
         if ($this->option('all')) {
-            return ['interpreter', 'design-director'];
+            return app(AgentRegistry::class)->names();
         }
 
         $agent = $this->argument('agent');
