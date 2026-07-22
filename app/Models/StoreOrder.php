@@ -17,6 +17,8 @@ class StoreOrder extends Model
         'customer_email',
         'customer_phone',
         'delivery_address',
+        'delivery_method',
+        'delivery_fee',
         'status',
         'payment_status',
         'paystack_reference',
@@ -27,8 +29,11 @@ class StoreOrder extends Model
         'total_amount',
         'items',
         'notes',
+        'tracking_number',
         'placed_at',
         'paid_at',
+        'stock_restored_at',
+        'shipped_at',
         'settlement_status',
     ];
 
@@ -37,10 +42,13 @@ class StoreOrder extends Model
         return [
             'subtotal' => 'decimal:2',
             'discount_amount' => 'decimal:2',
+            'delivery_fee' => 'decimal:2',
             'total_amount' => 'decimal:2',
             'items' => 'array',
             'placed_at' => 'datetime',
             'paid_at' => 'datetime',
+            'stock_restored_at' => 'datetime',
+            'shipped_at' => 'datetime',
         ];
     }
 

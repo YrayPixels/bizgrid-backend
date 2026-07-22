@@ -506,13 +506,24 @@ class StorehauseController extends Controller
     public function updateMyOrderStatus(Request $request, int $orderId): JsonResponse
     {
         $data = $request->validate([
-            'status' => 'required|string|in:pending,processing,fulfilled,cancelled,refunded',
+            'status' => 'required|string|in:pending,processing,shipped,delivered,cancelled,fulfilled,refunded,confirmed',
             'notes' => 'nullable|string|max:1000',
+            'tracking_number' => 'nullable|string|max:120',
+            'refund' => 'sometimes|boolean',
         ]);
 
         $store = $this->findOwnedStoreForUser($request);
         $order = StoreOrder::where('store_id', $store->id)->findOrFail($orderId);
-        $order->fill($data)->save();
+        // Legacy path retained for compatibility; prefer OrderController.
+        $order->status = app(\App\Services\OrderLifecycleService::class)
+            ->normalizeFulfillmentStatus((string) $data['status']);
+        if (array_key_exists('notes', $data)) {
+            $order->notes = $data['notes'];
+        }
+        if (array_key_exists('tracking_number', $data)) {
+            $order->tracking_number = $data['tracking_number'];
+        }
+        $order->save();
 
         return response()->json([
             'message' => 'Order updated.',

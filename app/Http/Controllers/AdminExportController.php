@@ -45,7 +45,21 @@ class AdminExportController extends Controller
 
         return response()->streamDownload(function () {
             $handle = fopen('php://output', 'w');
-            fputcsv($handle, ['id', 'order_number', 'merchant', 'customer', 'total', 'currency', 'status', 'placed_at']);
+            fputcsv($handle, [
+                'id',
+                'order_number',
+                'merchant',
+                'customer',
+                'total',
+                'currency',
+                'status',
+                'payment_status',
+                'settlement_status',
+                'delivery_method',
+                'tracking_number',
+                'placed_at',
+                'paid_at',
+            ]);
 
             StoreOrder::with(['store.merchant:id,business_name'])
                 ->orderByDesc('id')
@@ -59,7 +73,12 @@ class AdminExportController extends Controller
                             $o->total_amount,
                             $o->currency,
                             $o->status,
+                            $o->payment_status,
+                            $o->settlement_status,
+                            $o->delivery_method,
+                            $o->tracking_number,
                             $o->placed_at?->toIso8601String(),
+                            $o->paid_at?->toIso8601String(),
                         ]);
                     }
                 });

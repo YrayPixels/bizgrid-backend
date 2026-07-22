@@ -4,7 +4,10 @@ declare(strict_types=1);
 
 namespace App\Services;
 
+use App\Mail\CustomerOrderCancelledEmail;
 use App\Mail\CustomerOrderConfirmationEmail;
+use App\Mail\CustomerOrderRefundedEmail;
+use App\Mail\CustomerOrderShippedEmail;
 use App\Mail\CustomerPaymentConfirmationEmail;
 use App\Mail\MerchantBillingEmail;
 use App\Mail\MerchantLowStockEmail;
@@ -53,6 +56,33 @@ class StoreNotificationService
                 Mail::to($recipient)->send(new MerchantOrderPaidEmail($store, $order));
             }
         }
+    }
+
+    public function orderShipped(Store $store, StoreOrder $order): void
+    {
+        if ($store->notify_customer_order_confirmation && filled($order->customer_email)) {
+            Mail::to($order->customer_email)->send(new CustomerOrderShippedEmail($store, $order));
+        }
+    }
+
+    public function orderCancelled(Store $store, StoreOrder $order): void
+    {
+        if ($store->notify_customer_order_confirmation && filled($order->customer_email)) {
+            Mail::to($order->customer_email)->send(new CustomerOrderCancelledEmail($store, $order));
+        }
+    }
+
+    public function orderRefunded(Store $store, StoreOrder $order): void
+    {
+        if ($store->notify_customer_payment_confirmation && filled($order->customer_email)) {
+            Mail::to($order->customer_email)->send(new CustomerOrderRefundedEmail($store, $order));
+        }
+    }
+
+    public function orderStatusChanged(Store $store, StoreOrder $order, string $previousStatus): void
+    {
+        // Hook for future merchant status-change digests; shipped/cancelled/refunded use dedicated mails.
+        unset($store, $order, $previousStatus);
     }
 
     public function lowStock(Store $store, StoreProduct $product): void

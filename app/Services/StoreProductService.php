@@ -193,6 +193,26 @@ class StoreProductService
         return $lowStock;
     }
 
+    /**
+     * @param  list<array<string, mixed>>  $items
+     */
+    public function restoreStockForOrderItems(array $items): void
+    {
+        foreach ($items as $line) {
+            if (! is_array($line)) {
+                continue;
+            }
+
+            $product = StoreProduct::query()->find($line['product_id'] ?? null);
+            if (! $product || $product->stock_quantity === null) {
+                continue;
+            }
+
+            $product->stock_quantity = (int) $product->stock_quantity + (int) ($line['quantity'] ?? 0);
+            $product->save();
+        }
+    }
+
     /** @param list<array<string, mixed>> $items
      * @return array{imported: int, failed: int, errors: list<array{row: int, field: string|null, message: string}>}
      */

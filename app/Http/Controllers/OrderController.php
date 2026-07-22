@@ -6,12 +6,18 @@ namespace App\Http\Controllers;
 
 use App\Http\Controllers\Concerns\StorehauseHelpers;
 use App\Models\StoreOrder;
+use App\Services\OrderLifecycleService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Validation\Rule;
 
 class OrderController extends Controller
 {
     use StorehauseHelpers;
+
+    public function __construct(
+        private readonly OrderLifecycleService $orderLifecycle,
+    ) {}
 
     public function dashboard(Request $request): JsonResponse
     {
@@ -26,7 +32,12 @@ class OrderController extends Controller
         $query = StoreOrder::where('store_id', $store->id)->latest('placed_at');
 
         if ($request->filled('status') && $request->status !== 'all') {
-            $query->where('status', $request->status);
+            $status = $this->orderLifecycle->normalizeFulfillmentStatus((string) $request->status);
+            $query->where('status', $status);
+        }
+
+        if ($request->filled('payment_status') && $request->payment_status !== 'all') {
+            $query->where('payment_status', $request->payment_status);
         }
 
         if ($request->filled('search')) {
@@ -66,19 +77,30 @@ class OrderController extends Controller
     public function updateMyOrderStatus(Request $request, int $orderId): JsonResponse
     {
         $data = $request->validate([
-            'status' => 'required|string|in:pending,processing,fulfilled,cancelled,refunded',
+            'status' => [
+                'required',
+                'string',
+                Rule::in([
+                    ...OrderLifecycleService::FULFILLMENT_STATUSES,
+                    'fulfilled',
+                    'refunded',
+                    'confirmed',
+                ]),
+            ],
             'notes' => 'nullable|string|max:1000',
+            'tracking_number' => 'nullable|string|max:120',
+            'refund' => 'sometimes|boolean',
         ]);
 
         $store = $this->findOwnedStoreForUser($request);
         $order = StoreOrder::where('store_id', $store->id)->findOrFail($orderId);
-        $order->fill($data)->save();
 
+        $order = $this->orderLifecycle->updateStatus($order, $data);
         $this->invalidateStoreApiCache($store);
 
         return response()->json([
             'message' => 'Order updated.',
-            'order' => $this->formatOrder($order->fresh()),
+            'order' => $this->formatOrder($order->fresh() ?? $order),
         ]);
     }
 }

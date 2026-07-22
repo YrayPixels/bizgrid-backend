@@ -160,6 +160,12 @@ class StoreController extends Controller
             'sms_sender_name' => 'sometimes|nullable|string|max:11',
             'store_perks' => 'sometimes|nullable|array|max:12',
             'store_perks.*' => 'string|max:160',
+            'allow_local_delivery' => 'sometimes|boolean',
+            'allow_pickup' => 'sometimes|boolean',
+            'default_delivery_fee' => 'sometimes|nullable|numeric|min:0|max:999999',
+            'fulfilment_promise' => 'sometimes|nullable|string|max:255',
+            'shipping_policy' => 'sometimes|nullable|string|max:5000',
+            'return_policy' => 'sometimes|nullable|string|max:5000',
         ], $this->businessProfileRules(required: false)));
 
         $store = Store::with('merchant')
@@ -211,6 +217,12 @@ class StoreController extends Controller
             'customer_order_note',
             'sms_sender_name',
             'store_perks',
+            'allow_local_delivery',
+            'allow_pickup',
+            'default_delivery_fee',
+            'fulfilment_promise',
+            'shipping_policy',
+            'return_policy',
         ] as $field) {
             if (array_key_exists($field, $data)) {
                 $store->{$field} = $data[$field];

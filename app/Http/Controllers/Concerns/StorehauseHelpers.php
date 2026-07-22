@@ -112,6 +112,16 @@ trait StorehauseHelpers
             'subdomain_host' => $subdomainHost,
             'primary_domain' => $store->primary_domain ?? $subdomainHost,
             'notifications' => app(StoreNotificationService::class)->formatNotificationSettings($store),
+            'shipping' => [
+                'allow_local_delivery' => (bool) ($store->allow_local_delivery ?? true),
+                'allow_pickup' => (bool) ($store->allow_pickup ?? false),
+                'default_delivery_fee' => $store->default_delivery_fee !== null
+                    ? (float) $store->default_delivery_fee
+                    : null,
+                'fulfilment_promise' => $store->fulfilment_promise,
+                'shipping_policy' => $store->shipping_policy,
+                'return_policy' => $store->return_policy,
+            ],
             'store_perks' => array_values(array_filter(array_map(
                 fn ($perk) => is_string($perk) ? trim($perk) : '',
                 is_array($store->store_perks) ? $store->store_perks : [],
@@ -128,6 +138,9 @@ trait StorehauseHelpers
             'customer_email' => $order->customer_email,
             'customer_phone' => $order->customer_phone,
             'delivery_address' => $order->delivery_address,
+            'delivery_method' => $order->delivery_method ?? 'delivery',
+            'delivery_fee' => (float) ($order->delivery_fee ?? 0),
+            'tracking_number' => $order->tracking_number,
             'status' => $order->status,
             'payment_status' => $order->payment_status,
             'paystack_reference' => $order->paystack_reference,
@@ -141,6 +154,7 @@ trait StorehauseHelpers
             'notes' => $order->notes,
             'placed_at' => $order->placed_at?->toIso8601String(),
             'paid_at' => $order->paid_at?->toIso8601String(),
+            'shipped_at' => $order->shipped_at?->toIso8601String(),
             'created_at' => $order->created_at?->toIso8601String(),
             'updated_at' => $order->updated_at?->toIso8601String(),
         ];
@@ -160,7 +174,9 @@ trait StorehauseHelpers
     {
         $since = now()->subDays(29)->startOfDay();
         $orderQuery = StoreOrder::where('store_id', $store->id);
-        $salesQuery = (clone $orderQuery)->whereNotIn('status', ['cancelled', 'refunded']);
+        $salesQuery = (clone $orderQuery)
+            ->where('status', '!=', 'cancelled')
+            ->where('payment_status', '!=', 'refunded');
         $totalVisits = StoreVisit::where('store_id', $store->id)->count();
         $totalOrders = (clone $orderQuery)->count();
         $totalSales = (float) (clone $salesQuery)->sum('total_amount');
@@ -259,7 +275,9 @@ trait StorehauseHelpers
                 'total_orders' => $totalOrders,
                 'pending_orders' => (int) ($statusCounts['pending'] ?? 0),
                 'processing_orders' => (int) ($statusCounts['processing'] ?? 0),
-                'fulfilled_orders' => (int) ($statusCounts['fulfilled'] ?? 0),
+                'shipped_orders' => (int) ($statusCounts['shipped'] ?? 0),
+                'delivered_orders' => (int) ($statusCounts['delivered'] ?? 0),
+                'fulfilled_orders' => (int) ($statusCounts['delivered'] ?? 0),
                 'cancelled_orders' => (int) ($statusCounts['cancelled'] ?? 0),
                 'total_sales' => $totalSales,
                 'average_order_value' => $totalOrders > 0 ? round($totalSales / $totalOrders, 2) : 0,
@@ -279,7 +297,8 @@ trait StorehauseHelpers
             'orders_by_status' => [
                 ['status' => 'pending', 'label' => 'Pending', 'count' => (int) ($statusCounts['pending'] ?? 0)],
                 ['status' => 'processing', 'label' => 'Processing', 'count' => (int) ($statusCounts['processing'] ?? 0)],
-                ['status' => 'fulfilled', 'label' => 'Fulfilled', 'count' => (int) ($statusCounts['fulfilled'] ?? 0)],
+                ['status' => 'shipped', 'label' => 'Shipped', 'count' => (int) ($statusCounts['shipped'] ?? 0)],
+                ['status' => 'delivered', 'label' => 'Delivered', 'count' => (int) ($statusCounts['delivered'] ?? 0)],
             ],
             'recent_orders' => StoreOrder::where('store_id', $store->id)
                 ->latest('placed_at')

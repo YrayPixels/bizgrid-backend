@@ -37,7 +37,7 @@ class AbandonedRecoveryService
         $checkoutItems = StoreOrder::query()
             ->where('store_id', $store->id)
             ->whereNull('paid_at')
-            ->whereNotIn('status', ['cancelled', 'refunded'])
+            ->whereNotIn('status', ['cancelled'])
             ->whereIn('payment_status', ['awaiting_payment', 'pending'])
             ->where('placed_at', '<=', $cutoff)
             ->latest('placed_at')

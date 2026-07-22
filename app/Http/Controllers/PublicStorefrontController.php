@@ -179,6 +179,7 @@ class PublicStorefrontController extends Controller
             'customer.email' => 'required|email|max:255',
             'customer.phone' => 'required|string|max:40',
             'delivery_address' => 'required|string|max:2000',
+            'delivery_method' => 'nullable|string|in:delivery,pickup',
             'notes' => 'nullable|string|max:1000',
             'callback_url' => 'nullable|url|max:2048',
             'session_token' => 'nullable|string|max:64',
@@ -188,6 +189,27 @@ class PublicStorefrontController extends Controller
             'items.*.selected_options' => 'nullable|array',
             'items.*.selected_options.*' => 'string|max:80',
         ]);
+
+        $deliveryMethod = (string) ($data['delivery_method'] ?? 'delivery');
+        $allowDelivery = (bool) ($store->allow_local_delivery ?? true);
+        $allowPickup = (bool) ($store->allow_pickup ?? false);
+
+        if ($deliveryMethod === 'delivery' && ! $allowDelivery && $allowPickup) {
+            $deliveryMethod = 'pickup';
+        }
+        if ($deliveryMethod === 'pickup' && ! $allowPickup && $allowDelivery) {
+            $deliveryMethod = 'delivery';
+        }
+        if ($deliveryMethod === 'pickup' && ! $allowPickup) {
+            return response()->json(['message' => 'Pickup is not available for this store.'], 422);
+        }
+        if ($deliveryMethod === 'delivery' && ! $allowDelivery) {
+            return response()->json(['message' => 'Delivery is not available for this store.'], 422);
+        }
+
+        $deliveryFee = $deliveryMethod === 'delivery'
+            ? (float) ($store->default_delivery_fee ?? 0)
+            : 0.0;
 
         $products = StoreProduct::query()
             ->where('store_id', $store->id)
@@ -244,7 +266,7 @@ class PublicStorefrontController extends Controller
 
         $cartDiscount = $this->discountService->resolveCartDiscount($subtotal, $activeDiscounts);
         $discountAmount = (float) $cartDiscount['amount'];
-        $totalAmount = max(0, round($subtotal - $discountAmount, 2));
+        $totalAmount = max(0, round($subtotal - $discountAmount + $deliveryFee, 2));
 
         $store->loadMissing('merchant');
         if ($store->merchant) {
@@ -262,6 +284,8 @@ class PublicStorefrontController extends Controller
             $subtotal,
             $discountAmount,
             $cartDiscount,
+            $deliveryFee,
+            $deliveryMethod,
             $totalAmount,
             $currency,
             $paystackEnabled,
@@ -274,6 +298,8 @@ class PublicStorefrontController extends Controller
                 'customer_email' => strtolower($data['customer']['email']),
                 'customer_phone' => $data['customer']['phone'],
                 'delivery_address' => $data['delivery_address'],
+                'delivery_method' => $deliveryMethod,
+                'delivery_fee' => $deliveryFee,
                 'status' => 'pending',
                 'payment_status' => $paystackEnabled ? 'awaiting_payment' : 'pending',
                 'currency' => $currency,
@@ -352,6 +378,37 @@ class PublicStorefrontController extends Controller
         }
 
         $this->invalidateStoreApiCache($store);
+
+        return response()->json([
+            'order' => $this->formatOrder($order),
+        ]);
+    }
+
+    public function lookupOrder(Request $request, string $slug): JsonResponse
+    {
+        $store = Store::with('merchant')->where('slug', Str::slug($slug))->first();
+
+        if (! $store || ! $this->publishService->isPublished($store)) {
+            return response()->json(['message' => 'Storefront not found.'], 404);
+        }
+
+        $data = $request->validate([
+            'order' => 'required|string|max:40',
+            'email' => 'nullable|email|max:255',
+        ]);
+
+        $query = StoreOrder::query()
+            ->where('store_id', $store->id)
+            ->where('order_number', $data['order']);
+
+        if (filled($data['email'] ?? null)) {
+            $query->where('customer_email', strtolower((string) $data['email']));
+        }
+
+        $order = $query->first();
+        if (! $order) {
+            return response()->json(['message' => 'Order not found.'], 404);
+        }
 
         return response()->json([
             'order' => $this->formatOrder($order),
@@ -680,6 +737,12 @@ class PublicStorefrontController extends Controller
             'checkout' => [
                 'payments_enabled' => $this->paystack->isConfigured(),
                 'paystack_public_key' => $this->paystack->publicKey(),
+                'allow_local_delivery' => (bool) ($store->allow_local_delivery ?? true),
+                'allow_pickup' => (bool) ($store->allow_pickup ?? false),
+                'default_delivery_fee' => $store->default_delivery_fee !== null
+                    ? (float) $store->default_delivery_fee
+                    : 0.0,
+                'fulfilment_promise' => $store->fulfilment_promise,
             ],
         ];
     }

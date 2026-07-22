@@ -98,6 +98,20 @@ class PaystackService
         return $order->fresh();
     }
 
+    public function refundTransaction(string $reference, ?int $amountInMinorUnits = null): array
+    {
+        $this->assertConfigured();
+
+        $payload = [
+            'transaction' => $reference,
+        ];
+        if ($amountInMinorUnits !== null) {
+            $payload['amount'] = $amountInMinorUnits;
+        }
+
+        return $this->request('post', '/refund', $payload);
+    }
+
     public function handleWebhook(string $payload, ?string $signature): void
     {
         $this->assertConfigured();

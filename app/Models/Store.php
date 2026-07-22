@@ -40,6 +40,12 @@ class Store extends Model
         'customer_order_note',
         'sms_sender_name',
         'store_perks',
+        'allow_local_delivery',
+        'allow_pickup',
+        'default_delivery_fee',
+        'fulfilment_promise',
+        'shipping_policy',
+        'return_policy',
         'storefront_template_id',
         'storefront_content',
         'draft_json',
@@ -66,6 +72,9 @@ class Store extends Model
             'notify_customer_order_confirmation' => 'boolean',
             'notify_customer_payment_confirmation' => 'boolean',
             'notify_merchant_low_stock' => 'boolean',
+            'allow_local_delivery' => 'boolean',
+            'allow_pickup' => 'boolean',
+            'default_delivery_fee' => 'decimal:2',
             'store_perks' => 'array',
         ];
     }
