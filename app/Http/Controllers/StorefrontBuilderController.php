@@ -331,11 +331,19 @@ class StorefrontBuilderController extends Controller
         $data = $request->validate([
             'storefront' => 'nullable|array',
             'selected_template_id' => ['nullable', 'string', Rule::in(StorefrontTemplate::activeConcreteIds())],
+            'skip_assistant_message' => 'nullable|boolean',
+            'business_profile' => 'nullable|array',
         ]);
 
         $session = $this->findOwnedSession($request, $sessionId);
         $store = $this->ensureStoreForSession($session, $request->user());
         $this->enforceAiUsage($store);
+
+        if (! empty($data['business_profile']) && is_array($data['business_profile'])) {
+            $session->business_profile = $data['business_profile'];
+            $session->save();
+        }
+
         $this->syncStoreFromProfile($store, $session->business_profile ?? []);
         $templateId = $data['selected_template_id'] ?? $session->selected_template_id;
 
@@ -367,14 +375,16 @@ class StorefrontBuilderController extends Controller
 
         $mergedStorefront = $this->productService->mergeIntoStorefront($storefront, $store);
 
-        $this->appendAssistantMessage(
-            $session,
-            'Your website is ready. Preview it on the right, then tell me what to refine — headline, about section, CTA, or SEO.',
-            [
-                'type' => 'website_generated',
-                'generation_id' => $generationId,
-            ],
-        );
+        if (! ($data['skip_assistant_message'] ?? false)) {
+            $this->appendAssistantMessage(
+                $session,
+                'Your website is ready. Preview it on the right, then tell me what to refine — headline, about section, CTA, or SEO.',
+                [
+                    'type' => 'website_generated',
+                    'generation_id' => $generationId,
+                ],
+            );
+        }
 
         $this->invalidateBuilderApiCache($session);
 
