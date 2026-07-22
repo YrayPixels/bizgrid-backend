@@ -6,9 +6,11 @@ namespace App\Http\Controllers;
 
 use App\Http\Controllers\Concerns\StorehauseHelpers;
 use App\Models\StoreOrder;
+use App\Services\OrderInvoiceService;
 use App\Services\OrderLifecycleService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Http\Response;
 use Illuminate\Validation\Rule;
 
 class OrderController extends Controller
@@ -17,6 +19,7 @@ class OrderController extends Controller
 
     public function __construct(
         private readonly OrderLifecycleService $orderLifecycle,
+        private readonly OrderInvoiceService $invoices,
     ) {}
 
     public function dashboard(Request $request): JsonResponse
@@ -101,6 +104,19 @@ class OrderController extends Controller
         return response()->json([
             'message' => 'Order updated.',
             'order' => $this->formatOrder($order->fresh() ?? $order),
+        ]);
+    }
+
+    public function invoice(Request $request, int $orderId): Response
+    {
+        $store = $this->findOwnedStoreForUser($request);
+        $order = StoreOrder::where('store_id', $store->id)->findOrFail($orderId);
+        $html = $this->invoices->renderHtml($store, $order);
+        $filename = ($order->invoice_number ?: $order->order_number).'.html';
+
+        return response($html, 200, [
+            'Content-Type' => 'text/html; charset=UTF-8',
+            'Content-Disposition' => 'inline; filename="'.$filename.'"',
         ]);
     }
 }

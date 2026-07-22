@@ -18,6 +18,7 @@ use App\Http\Controllers\AdminStorefrontTemplateController;
 use App\Http\Controllers\AiChatController;
 use App\Http\Controllers\AuthController;
 use App\Http\Controllers\BillingController;
+use App\Http\Controllers\CustomerController;
 use App\Http\Controllers\MarketingController;
 use App\Http\Controllers\OrderController;
 use App\Http\Controllers\PaystackWebhookController;
@@ -133,6 +134,7 @@ Route::prefix('storehause')->group(function () {
     Route::post('/public/storefronts/{slug}/orders', [PublicStorefrontController::class, 'placeOrder'])->middleware('throttle:30,1');
     Route::post('/public/storefronts/{slug}/orders/verify', [PublicStorefrontController::class, 'verifyPayment'])->middleware('throttle:60,1');
     Route::get('/public/storefronts/{slug}/orders/lookup', [PublicStorefrontController::class, 'lookupOrder'])->middleware('throttle:60,1');
+    Route::get('/public/storefronts/{slug}/orders/invoice', [PublicStorefrontController::class, 'publicInvoice'])->middleware('throttle:60,1');
     Route::post('/public/storefronts/{slug}/abandoned-carts', [PublicStorefrontController::class, 'recordAbandonedCart'])->middleware('throttle:30,1');
     Route::post('/public/storefronts/{slug}/contact', [PublicStorefrontController::class, 'submitContact'])->middleware('throttle:10,1');
     Route::get('/public/storefronts/{slug}/products/{productId}/reviews', [PublicStorefrontController::class, 'listProductReviews'])->middleware('throttle:60,1');
@@ -164,7 +166,11 @@ Route::prefix('storehause')->group(function () {
         Route::get('/dashboard', [OrderController::class, 'dashboard']);
         Route::get('/orders', [OrderController::class, 'myOrders']);
         Route::get('/orders/{orderId}', [OrderController::class, 'myOrder']);
+        Route::get('/orders/{orderId}/invoice', [OrderController::class, 'invoice']);
         Route::patch('/orders/{orderId}/status', [OrderController::class, 'updateMyOrderStatus']);
+        Route::get('/customers', [CustomerController::class, 'index']);
+        Route::get('/customers/{customerId}', [CustomerController::class, 'show']);
+        Route::patch('/customers/{customerId}', [CustomerController::class, 'update']);
         Route::post('/stores', [StoreController::class, 'createStore']);
         Route::get('/stores/me', [StoreController::class, 'myStore']);
         Route::patch('/stores/me', [StoreController::class, 'updateMyStore']);

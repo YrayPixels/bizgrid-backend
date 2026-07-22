@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace App\Services;
 
 use App\Models\Merchant;
-use App\Models\StoreOrder;
+use App\Models\StoreCustomer;
 use Illuminate\Support\Carbon;
 
 class MerchantUsageService
@@ -193,11 +193,9 @@ class MerchantUsageService
             return 0;
         }
 
-        return (int) StoreOrder::query()
+        return (int) StoreCustomer::query()
             ->whereIn('store_id', $storeIds)
-            ->whereNotNull('customer_email')
-            ->distinct('customer_email')
-            ->count('customer_email');
+            ->count();
     }
 
     public function planLimits(array $plan): array

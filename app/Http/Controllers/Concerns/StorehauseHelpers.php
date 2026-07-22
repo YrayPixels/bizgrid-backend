@@ -131,9 +131,15 @@ trait StorehauseHelpers
 
     protected function formatOrder(StoreOrder $order): array
     {
+        $items = app(\App\Services\StoreOrderItemService::class)->linesForOrder($order);
+
         return [
             'id' => (string) $order->id,
             'order_number' => $order->order_number,
+            'invoice_number' => $order->invoice_number,
+            'store_customer_id' => $order->store_customer_id
+                ? (string) $order->store_customer_id
+                : null,
             'customer_name' => $order->customer_name,
             'customer_email' => $order->customer_email,
             'customer_phone' => $order->customer_phone,
@@ -150,7 +156,7 @@ trait StorehauseHelpers
             'discount_amount' => (float) ($order->discount_amount ?? 0),
             'discount_label' => $order->discount_label,
             'total_amount' => (float) $order->total_amount,
-            'items' => $order->items ?? [],
+            'items' => $items,
             'notes' => $order->notes,
             'placed_at' => $order->placed_at?->toIso8601String(),
             'paid_at' => $order->paid_at?->toIso8601String(),
@@ -205,42 +211,61 @@ trait StorehauseHelpers
             ];
         })->values();
 
-        $productTotals = [];
-        foreach ((clone $salesQuery)->get(['items']) as $order) {
-            foreach ($order->items ?? [] as $item) {
-                if (! is_array($item)) {
-                    continue;
-                }
-                $key = (string) ($item['product_id'] ?? $item['name'] ?? '');
-                if ($key === '') {
-                    continue;
-                }
-                if (! isset($productTotals[$key])) {
-                    $productTotals[$key] = [
-                        'product_id' => (string) ($item['product_id'] ?? ''),
-                        'name' => (string) ($item['name'] ?? 'Product'),
-                        'image_url' => $item['image_url'] ?? null,
-                        'unit_price' => (float) ($item['unit_price'] ?? 0),
-                        'currency' => (string) ($item['currency'] ?? 'NGN'),
-                        'quantity_sold' => 0,
-                        'total_earning' => 0.0,
-                    ];
-                }
-                $qty = (int) ($item['quantity'] ?? 0);
-                $lineTotal = (float) ($item['total'] ?? (($item['unit_price'] ?? 0) * $qty));
-                $productTotals[$key]['quantity_sold'] += $qty;
-                $productTotals[$key]['total_earning'] += $lineTotal;
-                if (($productTotals[$key]['image_url'] ?? null) === null && ! empty($item['image_url'])) {
-                    $productTotals[$key]['image_url'] = $item['image_url'];
-                }
-            }
-        }
-
-        $topProducts = collect($productTotals)
-            ->sortByDesc('total_earning')
-            ->take(5)
+        $topProducts = \App\Models\StoreOrderItem::query()
+            ->selectRaw('product_id, name, MAX(image_url) as image_url, MAX(unit_price) as unit_price, MAX(currency) as currency, SUM(quantity) as quantity_sold, SUM(line_total) as total_earning')
+            ->where('store_id', $store->id)
+            ->whereIn('store_order_id', (clone $salesQuery)->select('id'))
+            ->groupBy('product_id', 'name')
+            ->orderByDesc('total_earning')
+            ->limit(5)
+            ->get()
+            ->map(fn ($row) => [
+                'product_id' => (string) ($row->product_id ?? ''),
+                'name' => (string) $row->name,
+                'image_url' => $row->image_url,
+                'unit_price' => (float) $row->unit_price,
+                'currency' => (string) ($row->currency ?? 'NGN'),
+                'quantity_sold' => (int) $row->quantity_sold,
+                'total_earning' => (float) $row->total_earning,
+            ])
             ->values()
             ->all();
+
+        // Fallback for stores whose items were not yet backfilled.
+        if ($topProducts === []) {
+            $productTotals = [];
+            foreach ((clone $salesQuery)->get(['items']) as $order) {
+                foreach ($order->items ?? [] as $item) {
+                    if (! is_array($item)) {
+                        continue;
+                    }
+                    $key = (string) ($item['product_id'] ?? $item['name'] ?? '');
+                    if ($key === '') {
+                        continue;
+                    }
+                    if (! isset($productTotals[$key])) {
+                        $productTotals[$key] = [
+                            'product_id' => (string) ($item['product_id'] ?? ''),
+                            'name' => (string) ($item['name'] ?? 'Product'),
+                            'image_url' => $item['image_url'] ?? null,
+                            'unit_price' => (float) ($item['unit_price'] ?? 0),
+                            'currency' => (string) ($item['currency'] ?? 'NGN'),
+                            'quantity_sold' => 0,
+                            'total_earning' => 0.0,
+                        ];
+                    }
+                    $qty = (int) ($item['quantity'] ?? 0);
+                    $lineTotal = (float) ($item['total'] ?? (($item['unit_price'] ?? 0) * $qty));
+                    $productTotals[$key]['quantity_sold'] += $qty;
+                    $productTotals[$key]['total_earning'] += $lineTotal;
+                }
+            }
+            $topProducts = collect($productTotals)
+                ->sortByDesc('total_earning')
+                ->take(5)
+                ->values()
+                ->all();
+        }
 
         $referrers = StoreVisit::where('store_id', $store->id)
             ->where('visited_at', '>=', $since)

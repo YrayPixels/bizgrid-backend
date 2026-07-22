@@ -13,13 +13,16 @@ use App\Models\StoreProductReview;
 use App\Models\StoreVisit;
 use App\Services\AbandonedRecoveryService;
 use App\Services\MerchantUsageEnforcementService;
+use App\Services\OrderInvoiceService;
 use App\Services\PaystackService;
 use App\Services\PlatformNotificationService;
+use App\Services\StoreCustomerService;
 use App\Services\StoreNotificationService;
 use App\Services\StoreCategoryService;
 use App\Services\StoreDiscountService;
 use App\Services\StorefrontBuilderService;
 use App\Services\StorefrontPublishService;
+use App\Services\StoreOrderItemService;
 use App\Services\StoreProductService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -42,6 +45,9 @@ class PublicStorefrontController extends Controller
         private readonly PaystackService $paystack,
         private readonly AbandonedRecoveryService $abandonedRecovery,
         private readonly StoreNotificationService $storeNotifications,
+        private readonly StoreCustomerService $customers,
+        private readonly StoreOrderItemService $orderItems,
+        private readonly OrderInvoiceService $invoices,
     ) {}
 
     public function listPublished(): JsonResponse
@@ -326,6 +332,10 @@ class PublicStorefrontController extends Controller
             return $order;
         });
 
+        $this->orderItems->syncForOrder($order, $items);
+        $this->customers->upsertFromOrder($store, $order->fresh() ?? $order);
+        $order = $order->fresh() ?? $order;
+
         $this->storeNotifications->orderPlaced($store, $order, $paystackEnabled);
 
         foreach ($lowStockProducts as $product) {
@@ -394,18 +404,15 @@ class PublicStorefrontController extends Controller
 
         $data = $request->validate([
             'order' => 'required|string|max:40',
-            'email' => 'nullable|email|max:255',
+            'email' => 'required|email|max:255',
         ]);
 
-        $query = StoreOrder::query()
+        $order = StoreOrder::query()
             ->where('store_id', $store->id)
-            ->where('order_number', $data['order']);
+            ->where('order_number', $data['order'])
+            ->where('customer_email', strtolower((string) $data['email']))
+            ->first();
 
-        if (filled($data['email'] ?? null)) {
-            $query->where('customer_email', strtolower((string) $data['email']));
-        }
-
-        $order = $query->first();
         if (! $order) {
             return response()->json(['message' => 'Order not found.'], 404);
         }
@@ -415,16 +422,45 @@ class PublicStorefrontController extends Controller
         ]);
     }
 
+    public function publicInvoice(Request $request, string $slug): \Illuminate\Http\Response
+    {
+        $store = Store::with('merchant')->where('slug', Str::slug($slug))->first();
+
+        if (! $store || ! $this->publishService->isPublished($store)) {
+            abort(404, 'Storefront not found.');
+        }
+
+        $data = $request->validate([
+            'order' => 'required|string|max:40',
+            'email' => 'required|email|max:255',
+        ]);
+
+        $order = StoreOrder::query()
+            ->where('store_id', $store->id)
+            ->where('order_number', $data['order'])
+            ->where('customer_email', strtolower((string) $data['email']))
+            ->firstOrFail();
+
+        $html = $this->invoices->renderHtml($store, $order);
+        $filename = ($order->invoice_number ?: $order->order_number).'.html';
+
+        return response($html, 200, [
+            'Content-Type' => 'text/html; charset=UTF-8',
+            'Content-Disposition' => 'inline; filename="'.$filename.'"',
+        ]);
+    }
+
     private function defaultCheckoutCallback(Store $store, StoreOrder $order): string
     {
         $base = rtrim((string) config('dodopayments.app_url', 'http://localhost:3000'), '/');
         $platformDomain = config('storehause.platform_domain', 'bizgrid.shop');
+        $query = 'order='.urlencode($order->order_number).'&email='.urlencode((string) $order->customer_email);
 
         if (app()->environment('local')) {
-            return "{$base}/s/{$store->slug}/checkout/success?order=".urlencode($order->order_number);
+            return "{$base}/s/{$store->slug}/checkout/success?{$query}";
         }
 
-        return "https://{$store->slug}.{$platformDomain}/checkout/success?order=".urlencode($order->order_number);
+        return "https://{$store->slug}.{$platformDomain}/checkout/success?{$query}";
     }
 
     public function recordVisit(Request $request, string $slug): JsonResponse

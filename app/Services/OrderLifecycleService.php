@@ -32,6 +32,8 @@ class OrderLifecycleService
         private readonly PaystackService $paystack,
         private readonly StoreNotificationService $storeNotifications,
         private readonly PlatformNotificationService $notifications,
+        private readonly StoreCustomerService $customers,
+        private readonly StoreOrderItemService $orderItems,
     ) {}
 
     public function normalizeFulfillmentStatus(string $status): string
@@ -151,6 +153,7 @@ class OrderLifecycleService
         if ($order->store) {
             $this->storeNotifications->orderCancelled($order->store, $order);
         }
+        $this->customers->recalculateForOrder($order);
 
         return $order;
     }
@@ -220,6 +223,7 @@ class OrderLifecycleService
         if ($order->store) {
             $this->storeNotifications->orderRefunded($order->store, $order);
         }
+        $this->customers->recalculateForOrder($order);
 
         return $order;
     }
@@ -230,7 +234,7 @@ class OrderLifecycleService
             return;
         }
 
-        $items = is_array($order->items) ? $order->items : [];
+        $items = $this->orderItems->linesForOrder($order);
         $this->productService->restoreStockForOrderItems($items);
         $order->stock_restored_at = now();
         $order->save();

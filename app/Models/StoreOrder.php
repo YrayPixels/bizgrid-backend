@@ -5,6 +5,7 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 
 class StoreOrder extends Model
 {
@@ -12,7 +13,9 @@ class StoreOrder extends Model
 
     protected $fillable = [
         'store_id',
+        'store_customer_id',
         'order_number',
+        'invoice_number',
         'customer_name',
         'customer_email',
         'customer_phone',
@@ -55,5 +58,15 @@ class StoreOrder extends Model
     public function store(): BelongsTo
     {
         return $this->belongsTo(Store::class);
+    }
+
+    public function customer(): BelongsTo
+    {
+        return $this->belongsTo(StoreCustomer::class, 'store_customer_id');
+    }
+
+    public function lineItems(): HasMany
+    {
+        return $this->hasMany(StoreOrderItem::class);
     }
 }

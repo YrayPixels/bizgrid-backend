@@ -130,9 +130,14 @@ class StoreNotificationService
     {
         $platformDomain = config('storehause.platform_domain', 'bizgrid.shop');
         $base = 'https://'.$store->slug.'.'.$platformDomain;
+        $email = urlencode((string) $order->customer_email);
 
         if ($path === 'checkout/success') {
-            return $base.'/checkout/success?order='.urlencode($order->order_number);
+            return $base.'/checkout/success?order='.urlencode($order->order_number).'&email='.$email;
+        }
+
+        if ($path === 'orders/track') {
+            return $base.'/orders/track?order='.urlencode($order->order_number).'&email='.$email;
         }
 
         return $base.'/checkout?recover='.urlencode($order->order_number);
