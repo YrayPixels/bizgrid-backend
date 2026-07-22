@@ -133,6 +133,11 @@ class ApiCacheService
 
         if ($store->slug) {
             Cache::tags(["public:{$store->slug}"])->flush();
+
+            $platformDomain = strtolower((string) config('storehause.platform_domain', 'bizgrid.shop'));
+            if ($platformDomain !== '') {
+                Cache::tags(['public:host:'.$store->slug.'.'.$platformDomain])->flush();
+            }
         }
 
         if ($store->primary_domain) {
