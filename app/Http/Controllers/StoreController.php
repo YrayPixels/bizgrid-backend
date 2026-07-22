@@ -52,6 +52,7 @@ class StoreController extends Controller
             $merchant = $existingStore->merchant;
             if ($merchant) {
                 $this->enforcement->assertCanCreateStore($merchant);
+                $merchant->ensureActive();
             }
 
             return response()->json([
@@ -69,6 +70,7 @@ class StoreController extends Controller
                 'email' => $user->email,
                 'industry' => $data['industry'],
                 'status' => 'active',
+                'activated_at' => now(),
                 'subscription_plan' => 'starter',
                 'subscription_status' => 'trialing',
             ],
@@ -81,10 +83,7 @@ class StoreController extends Controller
             'industry' => $data['industry'],
         ])->save();
 
-        if ($merchant->status === 'pending') {
-            $merchant->status = 'active';
-            $merchant->save();
-        }
+        $merchant->ensureActive();
 
         $slug = isset($data['slug'])
             ? $this->uniqueStoreSlug($data['slug'], baseSlug: Str::slug($data['slug']))
@@ -118,6 +117,7 @@ class StoreController extends Controller
 
         $this->invalidateUserApiCache($user->id);
         $this->invalidateStoreApiCache($store);
+        $this->invalidateAdminApiCache();
 
         return response()->json([
             'store' => $this->formatStore($store),

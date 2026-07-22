@@ -6,6 +6,7 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Support\Str;
 
 class Merchant extends Model
 {
@@ -66,5 +67,84 @@ class Merchant extends Model
     public function stores(): HasMany
     {
         return $this->hasMany(Store::class);
+    }
+
+    public function hasCompletedOnboarding(): bool
+    {
+        if (array_key_exists('stores_count', $this->attributes)) {
+            return (int) $this->attributes['stores_count'] > 0;
+        }
+
+        if ($this->relationLoaded('stores')) {
+            return $this->stores->isNotEmpty();
+        }
+
+        return $this->stores()->exists();
+    }
+
+    /**
+     * Create a pending merchant shell at signup so admin can see incomplete onboarding.
+     */
+    public static function ensurePendingForUser(User $user): self
+    {
+        $existing = static::where('owner_user_id', $user->id)->first();
+        if ($existing) {
+            return $existing;
+        }
+
+        $displayName = filled($user->name)
+            ? (string) $user->name
+            : (string) Str::before((string) $user->email, '@');
+        if ($displayName === '') {
+            $displayName = 'Merchant';
+        }
+
+        $base = Str::slug($displayName) ?: 'merchant';
+        $slug = $base;
+        $suffix = 2;
+        while (static::where('slug', $slug)->exists()) {
+            $slug = "{$base}-{$suffix}";
+            $suffix++;
+        }
+
+        return static::create([
+            'owner_user_id' => $user->id,
+            'business_name' => $displayName,
+            'slug' => $slug,
+            'contact_name' => $user->name,
+            'email' => $user->email,
+            'status' => 'pending',
+            'subscription_plan' => 'starter',
+            'subscription_status' => 'trialing',
+        ]);
+    }
+
+    /**
+     * Promote pending merchants to active (e.g. after onboarding).
+     * Suspended accounts are left alone.
+     */
+    public function ensureActive(): void
+    {
+        if ($this->status === 'suspended') {
+            return;
+        }
+
+        $dirty = false;
+
+        if ($this->status !== 'active') {
+            $this->status = 'active';
+            $dirty = true;
+        }
+
+        if ($this->activated_at === null) {
+            $this->activated_at = now();
+            $dirty = true;
+        }
+
+        if ($dirty) {
+            $this->suspended_at = null;
+            $this->suspension_reason = null;
+            $this->save();
+        }
     }
 }

@@ -47,6 +47,7 @@ class Store extends Model
         'shipping_policy',
         'return_policy',
         'storefront_template_id',
+        'preferred_storefront_template_id',
         'storefront_content',
         'draft_json',
         'published_json',
@@ -56,6 +57,21 @@ class Store extends Model
         'orders_count',
         'gross_revenue',
     ];
+
+    protected static function booted(): void
+    {
+        static::updating(function (Store $store): void {
+            // Platform migrate/restore writes preferred + template together.
+            // Any other template change is a merchant (or AI) choice — drop the deferred preference.
+            if (
+                $store->isDirty('storefront_template_id')
+                && ! $store->isDirty('preferred_storefront_template_id')
+                && $store->preferred_storefront_template_id !== null
+            ) {
+                $store->preferred_storefront_template_id = null;
+            }
+        });
+    }
 
     protected function casts(): array
     {

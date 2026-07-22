@@ -1164,6 +1164,10 @@ class StorefrontBuilderController extends Controller
             ->first();
 
         if ($existing) {
+            if ($existing->merchant) {
+                $existing->merchant->ensureActive();
+            }
+
             return $existing;
         }
 
@@ -1180,6 +1184,7 @@ class StorefrontBuilderController extends Controller
                 'email' => $user->email,
                 'industry' => $industry,
                 'status' => 'active',
+                'activated_at' => now(),
                 'subscription_plan' => 'starter',
                 'subscription_status' => 'trialing',
             ],
@@ -1192,15 +1197,12 @@ class StorefrontBuilderController extends Controller
             'industry' => $industry,
         ])->save();
 
-        if ($merchant->status === 'pending') {
-            $merchant->status = 'active';
-            $merchant->save();
-        }
+        $merchant->ensureActive();
 
         $slug = $this->uniqueStoreSlug($businessName);
         $platformDomain = config('storehause.platform_domain', 'bizgrid.shop');
 
-        return Store::create([
+        $store = Store::create([
             'merchant_id' => $merchant->id,
             'name' => $businessName,
             'slug' => $slug,
@@ -1217,6 +1219,10 @@ class StorefrontBuilderController extends Controller
             'physical_store_count' => $profile['physical_store_count'] ?? null,
             'storefront_template_id' => StorefrontTemplate::DEFAULT_ID,
         ])->load('merchant');
+
+        $this->invalidateAdminApiCache();
+
+        return $store;
     }
 
     private function ensureStoreForSession(StorefrontBuilderSession $session, User $user): Store

@@ -26,7 +26,8 @@ class AdminMerchantController extends Controller
     ) {}
     public function index(Request $request): JsonResponse
     {
-        $query = Merchant::withCount('stores')
+        $query = Merchant::with(['owner:id,name,email'])
+            ->withCount('stores')
             ->withSum('stores as gross_revenue', 'gross_revenue')
             ->withSum('stores as products_count', 'products_count')
             ->withSum('stores as orders_count', 'orders_count')
@@ -40,6 +41,14 @@ class AdminMerchantController extends Controller
             $query->where('subscription_plan', $request->plan);
         }
 
+        if ($request->filled('onboarding') && $request->onboarding !== 'all') {
+            if ($request->onboarding === 'incomplete') {
+                $query->whereDoesntHave('stores');
+            } elseif ($request->onboarding === 'complete') {
+                $query->whereHas('stores');
+            }
+        }
+
         if ($request->filled('search')) {
             $search = $request->search;
             $query->where(function ($q) use ($search) {
@@ -47,7 +56,11 @@ class AdminMerchantController extends Controller
                     ->orWhere('contact_name', 'like', "%{$search}%")
                     ->orWhere('email', 'like', "%{$search}%")
                     ->orWhere('phone', 'like', "%{$search}%")
-                    ->orWhere('industry', 'like', "%{$search}%");
+                    ->orWhere('industry', 'like', "%{$search}%")
+                    ->orWhereHas('owner', function ($ownerQuery) use ($search) {
+                        $ownerQuery->where('name', 'like', "%{$search}%")
+                            ->orWhere('email', 'like', "%{$search}%");
+                    });
             });
         }
 
@@ -73,6 +86,8 @@ class AdminMerchantController extends Controller
             ->groupBy('status')
             ->pluck('count', 'status');
 
+        $incompleteOnboarding = Merchant::query()->whereDoesntHave('stores')->count();
+
         return response()->json([
             'success' => true,
             'data' => [
@@ -80,6 +95,7 @@ class AdminMerchantController extends Controller
                 'active_merchants' => (int) ($counts['active'] ?? 0),
                 'pending_merchants' => (int) ($counts['pending'] ?? 0),
                 'suspended_merchants' => (int) ($counts['suspended'] ?? 0),
+                'incomplete_onboarding' => $incompleteOnboarding,
                 'total_stores' => Merchant::query()->withCount('stores')->get()->sum('stores_count'),
             ],
         ]);
@@ -335,6 +351,7 @@ class AdminMerchantController extends Controller
             'products_count' => (int) ($merchant->products_count ?? 0),
             'orders_count' => (int) ($merchant->orders_count ?? 0),
             'gross_revenue' => (float) ($merchant->gross_revenue ?? 0),
+            'onboarding_completed' => $merchant->hasCompletedOnboarding(),
             'owner' => $merchant->relationLoaded('owner') && $merchant->owner ? [
                 'id' => $merchant->owner->id,
                 'name' => $merchant->owner->name,

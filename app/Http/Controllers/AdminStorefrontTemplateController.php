@@ -6,13 +6,19 @@ namespace App\Http\Controllers;
 
 use App\Http\Controllers\Concerns\InvalidatesApiCache;
 use App\Models\StorefrontTemplate;
+use App\Services\StorefrontTemplateAssignmentService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Validator;
+use InvalidArgumentException;
 
 class AdminStorefrontTemplateController extends Controller
 {
     use InvalidatesApiCache;
+
+    public function __construct(
+        private readonly StorefrontTemplateAssignmentService $assignmentService,
+    ) {}
 
     public function index(): JsonResponse
     {
@@ -51,13 +57,34 @@ class AdminStorefrontTemplateController extends Controller
 
         $template = StorefrontTemplate::find($id);
         if (! $template) {
+            StorefrontTemplate::ensureSeeded();
+            $template = StorefrontTemplate::find($id);
+        }
+        if (! $template) {
             return response()->json([
                 'success' => false,
                 'message' => 'Template not found',
             ], 404);
         }
 
-        $template->fill($validator->validated())->save();
+        $data = $validator->validated();
+
+        if (array_key_exists('is_active', $data)) {
+            try {
+                $this->assignmentService->applyActiveStatus($template, (bool) $data['is_active']);
+            } catch (InvalidArgumentException $e) {
+                return response()->json([
+                    'success' => false,
+                    'message' => $e->getMessage(),
+                ], 422);
+            }
+            unset($data['is_active']);
+            $template = $template->fresh();
+        }
+
+        if ($data !== []) {
+            $template->fill($data)->save();
+        }
 
         $this->invalidateTemplateApiCache();
 
@@ -84,14 +111,27 @@ class AdminStorefrontTemplateController extends Controller
 
         $template = StorefrontTemplate::find($id);
         if (! $template) {
+            StorefrontTemplate::ensureSeeded();
+            $template = StorefrontTemplate::find($id);
+        }
+        if (! $template) {
             return response()->json([
                 'success' => false,
                 'message' => 'Template not found',
             ], 404);
         }
 
-        $template->is_active = (bool) $validator->validated()['is_active'];
-        $template->save();
+        try {
+            $result = $this->assignmentService->applyActiveStatus(
+                $template,
+                (bool) $validator->validated()['is_active'],
+            );
+        } catch (InvalidArgumentException $e) {
+            return response()->json([
+                'success' => false,
+                'message' => $e->getMessage(),
+            ], 422);
+        }
 
         $this->invalidateTemplateApiCache();
 
@@ -99,6 +139,7 @@ class AdminStorefrontTemplateController extends Controller
             'success' => true,
             'message' => 'Template status updated',
             'data' => $template->fresh()->toCatalogArray(),
+            'assignment' => $result,
         ]);
     }
 }

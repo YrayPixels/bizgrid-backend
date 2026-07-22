@@ -1,6 +1,7 @@
 <?php
 
 use App\Mail\MerchantWelcomeEmail;
+use App\Models\Merchant;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Mail;
@@ -30,6 +31,12 @@ it('registers a new merchant account', function () {
 
     expect($response->json('token'))->toBeString()->not->toBeEmpty();
     expect(User::where('email', 'merchant@example.com')->exists())->toBeTrue();
+
+    $merchant = Merchant::where('email', 'merchant@example.com')->first();
+    expect($merchant)->not->toBeNull()
+        ->and($merchant->status)->toBe('pending')
+        ->and($merchant->business_name)->toBe('Test Merchant')
+        ->and($merchant->hasCompletedOnboarding())->toBeFalse();
 
     Mail::assertSent(MerchantWelcomeEmail::class, function (MerchantWelcomeEmail $mail) {
         return $mail->hasTo('merchant@example.com')

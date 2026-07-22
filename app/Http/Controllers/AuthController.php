@@ -42,6 +42,9 @@ class AuthController extends Controller
             'password' => Hash::make($data['password']),
         ]);
 
+        Merchant::ensurePendingForUser($user);
+        $this->invalidateAdminApiCache();
+
         try {
             Mail::to($user->email)->send(new MerchantWelcomeEmail($user));
         } catch (\Throwable $e) {
@@ -187,8 +190,9 @@ class AuthController extends Controller
             }
         }
 
-        $merchant = Merchant::where('owner_user_id', $user->id)->first();
-        if ($merchant && $merchant->status === 'suspended') {
+        $merchant = Merchant::ensurePendingForUser($user);
+        $this->invalidateAdminApiCache();
+        if ($merchant->status === 'suspended') {
             return $redirectWithError('Your account has been suspended. Please contact support.');
         }
 

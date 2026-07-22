@@ -79,7 +79,35 @@ it('returns merchant stats for admin', function () {
         ->getJson('/api/admin/merchants/stats')
         ->assertOk()
         ->assertJsonPath('success', true)
-        ->assertJsonPath('data.total_merchants', 0);
+        ->assertJsonPath('data.total_merchants', 0)
+        ->assertJsonPath('data.incomplete_onboarding', 0);
+});
+
+it('lists incomplete onboarding merchants for admin', function () {
+    \Illuminate\Support\Facades\Mail::fake();
+
+    $admin = User::factory()->create(['is_admin' => true]);
+
+    $this->postJson('/api/storehause/auth/register', [
+        'name' => 'Incomplete Merchant',
+        'email' => 'incomplete@example.com',
+        'password' => 'secret12345',
+    ])->assertCreated();
+
+    $this->actingAs($admin, 'sanctum')
+        ->getJson('/api/admin/merchants?onboarding=incomplete')
+        ->assertOk()
+        ->assertJsonPath('success', true)
+        ->assertJsonPath('meta.total', 1)
+        ->assertJsonPath('data.0.email', 'incomplete@example.com')
+        ->assertJsonPath('data.0.onboarding_completed', false)
+        ->assertJsonPath('data.0.status', 'pending');
+
+    $this->actingAs($admin, 'sanctum')
+        ->getJson('/api/admin/merchants/stats')
+        ->assertOk()
+        ->assertJsonPath('data.incomplete_onboarding', 1)
+        ->assertJsonPath('data.pending_merchants', 1);
 });
 
 it('requires is_admin flag for admin-created users', function () {
