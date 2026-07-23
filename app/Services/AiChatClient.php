@@ -34,6 +34,12 @@ class AiChatClient
             $payload['model'] = $this->config->chatModel($provider);
         }
 
+        // OpenAI/compatible APIs reject tool_choice unless tools are present.
+        $hasTools = isset($payload['tools']) && is_array($payload['tools']) && count($payload['tools']) > 0;
+        if (! $hasTools) {
+            unset($payload['tool_choice']);
+        }
+
         return Http::withToken($apiKey)
             ->acceptJson()
             ->connectTimeout(20)
@@ -60,6 +66,11 @@ class AiChatClient
 
         if (! isset($payload['model']) || ! is_string($payload['model']) || $payload['model'] === '') {
             $payload['model'] = $this->config->chatModel($provider);
+        }
+
+        $hasTools = isset($payload['tools']) && is_array($payload['tools']) && count($payload['tools']) > 0;
+        if (! $hasTools) {
+            unset($payload['tool_choice']);
         }
 
         return Http::withToken($apiKey)
