@@ -1161,6 +1161,20 @@ class StorefrontBuilderController extends Controller
             $this->publishService->reconnectAndSaveModel($session);
         }
 
+        // Ask AI / refine tools need a draft. If the session snapshot is empty but the
+        // store already has website draft JSON, hydrate so Next.js draft tools unlock.
+        if ((! is_array($storefrontSnapshot) || $storefrontSnapshot === []) && $store) {
+            $editorDraft = $this->publishService->resolveEditorDraft($store);
+            if (is_array($editorDraft) && $editorDraft !== []) {
+                $storefrontSnapshot = $editorDraft;
+                $session->storefront_snapshot = $editorDraft;
+                if (in_array($session->status, ['collecting_requirements', 'template_recommendation'], true)) {
+                    $session->status = 'content_generated';
+                }
+                $this->publishService->reconnectAndSaveModel($session);
+            }
+        }
+
         $storefrontSnapshot = $this->projectStorage->hydrateSnapshot(
             is_array($storefrontSnapshot) ? $storefrontSnapshot : null,
             (int) $session->id,
