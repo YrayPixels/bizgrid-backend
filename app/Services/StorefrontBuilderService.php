@@ -523,6 +523,37 @@ class StorefrontBuilderService
             || preg_match('/\b(terracotta|teal|navy|blush|burgundy|sage|amber|coral|cream|black|green|blue|ocean(?:ic)?|pink|red|purple|rose|gold|mint|lavender|peach|mauve|indigo|maroon|ruby|emerald|crimson|charcoal|ivory|beige)\b/', $trimmed) === 1;
     }
 
+    public function isOpenEndedColorRequest(string $message): bool
+    {
+        $trimmed = strtolower(trim($message));
+
+        if (preg_match('/\bsurprise me\b/', $trimmed) === 1) {
+            return true;
+        }
+
+        if (preg_match('/\b(random|surprise|unexpected|different|fresh|wild|crazy|fun)\b.*\b(color|colour|shade|hue|palette)\b/i', $message) === 1) {
+            return true;
+        }
+
+        if (preg_match('/\b(give me|pick|choose|select|suggest|show me)\b.*\b(random|any|a?\s*color|a?\s*colour|something|anything)\b/i', $message) === 1) {
+            return true;
+        }
+
+        if (preg_match('/\b(very\s+)?random\s+(color|colour)\b/i', $message) === 1) {
+            return true;
+        }
+
+        if (preg_match('/\bany\s+(color|colour)\b/i', $message) === 1) {
+            return true;
+        }
+
+        if (preg_match('/\bdifferent\s+(color|colour)\b/i', $message) === 1) {
+            return true;
+        }
+
+        return preg_match('/\bgive me a very random color\b/', $trimmed) === 1;
+    }
+
     public function extractColorHintFromMessage(string $message): ?string
     {
         $lower = strtolower(trim($message));

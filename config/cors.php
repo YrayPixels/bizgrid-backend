@@ -1,72 +1,54 @@
 <?php
 
+/**
+ * CORS for the StoreHause API.
+ *
+ * Storefronts and the merchant app run on many hosts (apex, www, subdomains,
+ * custom domains). With credentials disabled, allowing all origins is correct.
+ *
+ * Do not set STOREHAUSE_CORS_ORIGINS in production unless you fully understand
+ * multi-tenant origin requirements — a partial allowlist will break www vs apex.
+ */
+
+$platformDomain = strtolower(trim((string) env('STOREHAUSE_PLATFORM_DOMAIN', 'bizgrid.shop')));
+$platformDomain = preg_replace('/^www\./', '', $platformDomain) ?: 'bizgrid.shop';
+
+$originPatterns = [];
+$escaped = preg_quote($platformDomain, '/');
+// https://bizgrid.shop, https://www.bizgrid.shop, https://shop.bizgrid.shop
+$originPatterns[] = '#^https?://([a-z0-9-]+\.)*'.$escaped.'$#i';
+
+if (env('APP_ENV', 'production') === 'local') {
+    $originPatterns[] = '#^https?://([a-z0-9-]+\.)?localhost(:\d+)?$#i';
+    $originPatterns[] = '#^https?://([a-z0-9-]+\.)?127\.0\.0\.1(:\d+)?$#i';
+}
+
+$extraPatterns = env('STOREHAUSE_CORS_ORIGIN_PATTERNS');
+if (filled($extraPatterns)) {
+    foreach (explode(',', (string) $extraPatterns) as $pattern) {
+        $pattern = trim($pattern);
+        if ($pattern !== '') {
+            $originPatterns[] = $pattern;
+        }
+    }
+}
+
 return [
 
-    /*
-    |--------------------------------------------------------------------------
-    | Cross-Origin Resource Sharing (CORS) Configuration
-    |--------------------------------------------------------------------------
-    |
-    | Settings for cross-origin resource sharing. You can adjust these to
-    | match the needs of your application. For APIs consumed by a SPA,
-    | a permissive configuration is typical during development.
-    |
-    */
-
-    'paths' => ['api/*', 'sanctum/csrf-cookie'],
+    'paths' => ['api/*', 'sanctum/csrf-cookie', '*'],
 
     'allowed_methods' => ['*'],
 
-    'allowed_origins' => (function () {
-        $origins = env('STOREHAUSE_CORS_ORIGINS');
+    // Always open — required for www + merchant subdomains + custom domains.
+    'allowed_origins' => ['*'],
 
-        if (filled($origins)) {
-            return array_map('trim', explode(',', (string) $origins));
-        }
-
-        // Fallback for local development
-        if (config('app.env') === 'local') {
-            return [
-                'http://localhost:3000',
-                'http://localhost:5173',
-                'http://127.0.0.1:3000',
-                'http://127.0.0.1:5173',
-            ];
-        }
-
-        // Build from configured URLs
-        $allowed = [];
-        if (filled(config('storehause.app_url'))) {
-            $allowed[] = rtrim((string) config('storehause.app_url'), '/');
-        }
-        if (filled(config('storehause.admin_app_url'))) {
-            $allowed[] = rtrim((string) config('storehause.admin_app_url'), '/');
-        }
-
-        return ! empty($allowed) ? $allowed : ['*'];
-    })(),
-
-    'allowed_origins_patterns' => (function () {
-        $patterns = [];
-        $platformDomain = config('storehause.platform_domain');
-        if (filled($platformDomain)) {
-            $escaped = preg_quote((string) $platformDomain, '/');
-            $patterns[] = '#^https?://([a-z0-9-]+\.)?'.$escaped.'$#i';
-        }
-        // Local subdomain storefronts (*.localhost)
-        if (config('app.env') === 'local') {
-            $patterns[] = '#^https?://([a-z0-9-]+\.)?localhost(:\d+)?$#i';
-            $patterns[] = '#^https?://([a-z0-9-]+\.)?127\.0\.0\.1(:\d+)?$#i';
-        }
-
-        return $patterns;
-    })(),
+    'allowed_origins_patterns' => $originPatterns,
 
     'allowed_headers' => ['*'],
 
     'exposed_headers' => [],
 
-    'max_age' => 0,
+    'max_age' => 60 * 60 * 24,
 
     'supports_credentials' => false,
 
