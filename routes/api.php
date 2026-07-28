@@ -21,6 +21,7 @@ use App\Http\Controllers\AuthController;
 use App\Http\Controllers\BillingController;
 use App\Http\Controllers\CustomerController;
 use App\Http\Controllers\MarketingController;
+use App\Http\Controllers\OpenTokenController;
 use App\Http\Controllers\OrderController;
 use App\Http\Controllers\PaystackWebhookController;
 use App\Http\Controllers\PublicStorefrontController;
@@ -152,6 +153,7 @@ Route::prefix('storehause')->group(function () {
         Route::get('/ai/config', [AiConfigController::class, 'show']);
         Route::post('/ai/chat', [AiChatController::class, 'chat'])->middleware('throttle:60,1');
         Route::post('/ai/chat/stream', [AiChatController::class, 'chatStream'])->middleware('throttle:60,1');
+        Route::post('/ai/open-token', [OpenTokenController::class, 'generate'])->middleware('throttle:30,1');
         Route::post('/ai/vision/product', [VisionController::class, 'analyzeProduct'])->middleware('throttle:30,1');
 
         Route::get('/billing/subscription', [BillingController::class, 'subscription']);
