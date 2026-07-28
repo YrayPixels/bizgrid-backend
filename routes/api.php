@@ -36,10 +36,7 @@ use App\Http\Controllers\StoreDiscountController;
 use App\Http\Controllers\TikTokWebhookController;
 use App\Http\Controllers\VisionController;
 use App\Http\Controllers\WhatsAppWebhookController;
-use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
-
-use App\Http\Controllers\Concerns\StorehauseHelpers;
 
 Route::post('/login-admin', [AdminController::class, 'login_admin'])->middleware('throttle:5,1');
 Route::post('/verify-admin', [AdminController::class, 'verify_admin'])->middleware('throttle:5,1');
@@ -49,17 +46,7 @@ Route::post('/request-admin-password-reset', [AdminController::class, 'request_p
 Route::post('/reset-admin-password-with-code', [AdminController::class, 'reset_password_with_code'])->middleware('throttle:5,1');
 
 Route::middleware('auth:sanctum')->group(function () {
-    Route::post('/validate-token', function (Request $request) {
-        $helpers = new class
-        {
-            use StorehauseHelpers;
-        };
-
-        return response()->json([
-            'valid' => true,
-            'user' => $helpers->formatUser($request->user()),
-        ]);
-    });
+    Route::post('/validate-token', [AuthController::class, 'validateToken']);
 
     Route::middleware('admin')->group(function () {
         Route::post('/create-admin', [AdminController::class, 'create_admin'])->middleware('admin.role:super_admin');

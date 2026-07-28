@@ -333,6 +333,14 @@ class AuthController extends Controller
         ]);
     }
 
+    public function validateToken(Request $request): JsonResponse
+    {
+        return response()->json([
+            'valid' => true,
+            'user' => $this->formatUser($request->user()),
+        ]);
+    }
+
     public function me(Request $request): JsonResponse
     {
         $merchant = Merchant::where('owner_user_id', $request->user()->id)->first();
