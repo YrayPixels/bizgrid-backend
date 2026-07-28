@@ -64,5 +64,5 @@ See `RAILWAY.md` for Railway deployment notes.
 
 Maintenance endpoints (protected by `DEPLOY_KEY`):
 
-- `GET /maintenance/migrate?key=...`
-- `GET /maintenance/cache-clear?key=...`
+- `POST /maintenance/migrate?key=...`
+- `POST /maintenance/cache-clear?key=...`
