@@ -5,6 +5,8 @@ declare(strict_types=1);
 namespace App\Http\Controllers;
 
 use App\Http\Controllers\Concerns\StorehauseHelpers;
+use App\Http\Requests\LoginRequest;
+use App\Http\Requests\RegisterRequest;
 use App\Mail\MerchantEmailVerificationCodeEmail;
 use App\Mail\MerchantPasswordResetCodeEmail;
 use App\Mail\MerchantWelcomeEmail;
@@ -28,13 +30,9 @@ class AuthController extends Controller
         private readonly GoogleOAuthService $googleOAuth,
     ) {}
 
-    public function register(Request $request): JsonResponse
+    public function register(RegisterRequest $request): JsonResponse
     {
-        $data = $request->validate([
-            'name' => 'required|string|max:120',
-            'email' => 'required|email|max:255|unique:users,email',
-            'password' => 'required|string|min:8|max:128',
-        ]);
+        $data = $request->validated();
 
         $user = User::create([
             'name' => $data['name'],
@@ -68,13 +66,9 @@ class AuthController extends Controller
         ], 201);
     }
 
-    public function login(Request $request): JsonResponse
+    public function login(LoginRequest $request): JsonResponse
     {
-        $data = $request->validate([
-            'email' => 'required|email|max:255',
-            'password' => 'required|string|max:128',
-            'remember' => 'sometimes|boolean',
-        ]);
+        $data = $request->validated();
 
         $user = User::where('email', strtolower($data['email']))->first();
 
@@ -198,7 +192,15 @@ class AuthController extends Controller
 
         $token = $this->issueMerchantToken($user, 30);
 
-        return redirect()->away($frontendBase.'/login?auth_token='.urlencode($token));
+        // Exchange code pattern: generate short-lived code instead of embedding token in URL
+        $code = Str::random(64);
+        \Illuminate\Support\Facades\Cache::put("auth:exchange:{$code}", [
+            'token' => $token,
+            'user_id' => $user->id,
+            'type' => 'merchant',
+        ], now()->addMinutes(2));
+
+        return redirect()->away($frontendBase.'/login?auth_code='.urlencode($code));
     }
 
     public function requestPasswordReset(Request $request): JsonResponse
@@ -218,7 +220,7 @@ class AuthController extends Controller
             ]);
         }
 
-        $code = (string) rand(100000, 999999);
+        $code = (string) random_int(100000, 999999);
         $user->verification_code = Hash::make($code);
         $user->verification_code_expires_at = now()->addMinutes(15);
         $user->save();
@@ -358,6 +360,33 @@ class AuthController extends Controller
         ]);
     }
 
+    public function exchangeCode(Request $request): JsonResponse
+    {
+        $data = $request->validate([
+            'code' => 'required|string|size:64',
+        ]);
+
+        $payload = \Illuminate\Support\Facades\Cache::pull("auth:exchange:{$data['code']}");
+
+        if (! is_array($payload) || ! isset($payload['token'], $payload['user_id'])) {
+            return response()->json([
+                'error' => 'Invalid or expired code.',
+            ], 401);
+        }
+
+        $user = User::find($payload['user_id']);
+        if (! $user) {
+            return response()->json([
+                'error' => 'User not found.',
+            ], 404);
+        }
+
+        return response()->json([
+            'token' => $payload['token'],
+            'user' => $this->formatUser($user),
+        ]);
+    }
+
     private function issueMerchantToken(User $user, int $days): string
     {
         $tokenResult = $user->createToken('storehause');
@@ -369,7 +398,7 @@ class AuthController extends Controller
 
     private function sendEmailVerificationCode(User $user): void
     {
-        $code = (string) rand(100000, 999999);
+        $code = (string) random_int(100000, 999999);
         $user->verification_code = Hash::make($code);
         $user->verification_code_expires_at = now()->addMinutes(15);
         $user->save();

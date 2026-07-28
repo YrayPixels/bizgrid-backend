@@ -419,6 +419,9 @@ class StorefrontBuilderController extends Controller
             $store->save();
         }
 
+        // Enforce AI usage BEFORE streaming (same as generateDraft)
+        $this->enforceAiUsage($store);
+
         return SseStream::response(function ($emit) use ($data, $session, $store) {
             try {
                 if (! empty($data['storefront'])) {

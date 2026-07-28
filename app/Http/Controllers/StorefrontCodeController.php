@@ -4,11 +4,16 @@ namespace App\Http\Controllers;
 
 use App\Agents\StorefrontCodeAgent;
 use App\Models\Store;
+use App\Services\MerchantUsageEnforcementService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
 class StorefrontCodeController extends Controller
 {
+    public function __construct(
+        private readonly MerchantUsageEnforcementService $enforcement,
+    ) {}
+
     public function generate(Request $request, StorefrontCodeAgent $agent): JsonResponse
     {
         $data = $request->validate([
@@ -27,6 +32,12 @@ class StorefrontCodeController extends Controller
         // Verify the store belongs to the authenticated user
         if ($store->merchant_id !== $request->user()?->merchant?->id) {
             return response()->json(['error' => 'Unauthorized.'], 403);
+        }
+
+        // Enforce AI plan limits + consume credit
+        if ($store->merchant) {
+            $this->enforcement->assertCanUseAi($store->merchant);
+            $this->enforcement->consumeAiCredit($store->merchant);
         }
 
         $result = $agent->generate($store, [

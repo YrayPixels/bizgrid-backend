@@ -17,6 +17,17 @@ class TikTokWebhookController extends Controller
 
     public function handle(Request $request): Response
     {
+        // Verify webhook signature if secret is configured
+        $secret = config('tiktok.webhook_secret');
+        if (filled($secret)) {
+            $raw = $request->getContent();
+            $signature = $request->header('X-TikTok-Signature');
+
+            if (! $this->tiktok->verifyWebhookSignature($raw, $signature, $secret)) {
+                return response('Invalid signature.', 403);
+            }
+        }
+
         $payload = $request->json()->all();
         if (! is_array($payload)) {
             return response('Ignored.', 200);

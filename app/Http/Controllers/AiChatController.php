@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Services\AiChatClient;
+use App\Services\MerchantUsageEnforcementService;
 use App\Services\PlatformAiConfigService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -15,6 +16,7 @@ class AiChatController extends Controller
     public function __construct(
         private readonly PlatformAiConfigService $aiConfig,
         private readonly AiChatClient $aiChat,
+        private readonly MerchantUsageEnforcementService $enforcement,
     ) {}
 
     /**
@@ -34,6 +36,12 @@ class AiChatController extends Controller
             return response()->json([
                 'error' => 'AI API key is not configured.',
             ], 503);
+        }
+
+        // Enforce AI plan limits (do NOT consume credit on chat messages)
+        $merchant = $this->enforcement->merchantForUser((int) $request->user()->id);
+        if ($merchant) {
+            $this->enforcement->assertCanUseAi($merchant);
         }
 
         $rawBody = (string) $request->getContent();
@@ -96,6 +104,12 @@ class AiChatController extends Controller
             return response()->json([
                 'error' => 'AI API key is not configured. Add keys in the platform admin AI settings page.',
             ], 503);
+        }
+
+        // Enforce AI plan limits (do NOT consume credit on chat messages)
+        $merchant = $this->enforcement->merchantForUser((int) $request->user()->id);
+        if ($merchant) {
+            $this->enforcement->assertCanUseAi($merchant);
         }
 
         $body = $request->validate([

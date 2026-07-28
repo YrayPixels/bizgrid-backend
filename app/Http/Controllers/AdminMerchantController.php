@@ -15,6 +15,7 @@ use App\Services\MerchantUsageService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Validator;
+use Illuminate\Support\Str;
 
 class AdminMerchantController extends Controller
 {
@@ -275,6 +276,15 @@ class AdminMerchantController extends Controller
         $tokenResult->accessToken->save();
 
         $token = $tokenResult->plainTextToken;
+
+        // Exchange code pattern: generate short-lived code for impersonation
+        $code = Str::random(64);
+        \Illuminate\Support\Facades\Cache::put("auth:exchange:{$code}", [
+            'token' => $token,
+            'user_id' => $merchant->owner->id,
+            'type' => 'impersonation',
+        ], now()->addMinutes(2));
+
         $appUrl = rtrim((string) config('storehause.app_url', 'http://localhost:3000'), '/');
 
         $this->audit->log($request, 'merchant.impersonated', 'merchant', $merchant->id, [
@@ -284,9 +294,9 @@ class AdminMerchantController extends Controller
         return response()->json([
             'success' => true,
             'data' => [
-                'token' => $token,
+                'code' => $code,
                 'app_url' => $appUrl,
-                'expires_in_minutes' => 15,
+                'expires_in_minutes' => 2,
                 'merchant' => [
                     'id' => $merchant->id,
                     'business_name' => $merchant->business_name,

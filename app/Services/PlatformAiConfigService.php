@@ -140,12 +140,52 @@ class PlatformAiConfigService
      *     providers: array<string, array{
      *         configured: bool,
      *         chat_model: string,
+     *         api_key_configured: bool
+     *     }>
+     * }
+     */
+    public function publicConfig(): array
+    {
+        $providers = [];
+
+        foreach (self::PROVIDERS as $name) {
+            $apiKey = $this->apiKey($name);
+            $providers[$name] = [
+                'configured' => filled($apiKey),
+                'chat_model' => $this->chatModel($name),
+                'api_key_configured' => filled($apiKey),
+            ];
+        }
+
+        return [
+            'provider' => $this->provider(),
+            'chat_model' => $this->chatModel(),
+            'vision_model' => $this->visionModel(),
+            'available' => $this->available(),
+            'vision_available' => $this->visionAvailable(),
+            'providers' => $providers,
+            'model_options' => $this->modelOptions(),
+        ];
+    }
+
+    /**
+     * Admin-only config that includes api_key_preview for display in admin UI.
+     *
+     * @return array{
+     *     provider: string,
+     *     chat_model: string,
+     *     vision_model: string,
+     *     available: bool,
+     *     vision_available: bool,
+     *     providers: array<string, array{
+     *         configured: bool,
+     *         chat_model: string,
      *         api_key_configured: bool,
      *         api_key_preview: string|null
      *     }>
      * }
      */
-    public function publicConfig(): array
+    public function adminConfig(): array
     {
         $providers = [];
 
@@ -215,7 +255,7 @@ class PlatformAiConfigService
 
         $this->clearCache();
 
-        return $this->publicConfig();
+        return $this->adminConfig();
     }
 
     public function clearCache(): void

@@ -252,13 +252,27 @@ class StoreController extends Controller
         ]);
 
         $file = $data['image'];
+
+        // Map MIME type to safe extension
+        $mime = $file->getMimeType();
+        $extensionMap = [
+            'image/jpeg' => 'jpg',
+            'image/png' => 'png',
+            'image/gif' => 'gif',
+            'image/webp' => 'webp',
+            'video/mp4' => 'mp4',
+            'video/webm' => 'webm',
+            'video/quicktime' => 'mov',
+        ];
+
+        $extension = $extensionMap[$mime] ?? 'bin';
         $directory = public_path("storehause/uploads/{$store->id}");
 
         if (! File::exists($directory)) {
             File::makeDirectory($directory, 0755, true);
         }
 
-        $filename = Str::uuid().'.'.$file->getClientOriginalExtension();
+        $filename = Str::uuid().'.'.$extension;
         $file->move($directory, $filename);
 
         return response()->json([

@@ -153,6 +153,20 @@ class TikTokMessagingService
     }
 
     /**
+     * Verify TikTok webhook signature using HMAC-SHA256.
+     */
+    public function verifyWebhookSignature(string $payload, ?string $signature, string $secret): bool
+    {
+        if ($signature === null || $signature === '') {
+            return false;
+        }
+
+        $expectedSignature = hash_hmac('sha256', $payload, $secret);
+
+        return hash_equals($expectedSignature, $signature);
+    }
+
+    /**
      * @param  mixed  $payload
      */
     private function extractErrorMessage(mixed $payload, string $fallback): string

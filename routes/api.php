@@ -38,22 +38,27 @@ use App\Http\Controllers\WhatsAppWebhookController;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
 
-Route::get('/test-api', fn () => response()->json([
-    'message' => 'API is working',
-    'timestamp' => now(),
-], 200));
+use App\Http\Controllers\Concerns\StorehauseHelpers;
 
 Route::post('/login-admin', [AdminController::class, 'login_admin'])->middleware('throttle:5,1');
 Route::post('/verify-admin', [AdminController::class, 'verify_admin'])->middleware('throttle:5,1');
+Route::post('/exchange-admin-code', [AdminController::class, 'exchangeCode'])->middleware('throttle:10,1');
 Route::get('/admin/auth/google', [AdminController::class, 'redirectToGoogle'])->middleware('throttle:10,1');
 Route::post('/request-admin-password-reset', [AdminController::class, 'request_password_reset'])->middleware('throttle:5,1');
 Route::post('/reset-admin-password-with-code', [AdminController::class, 'reset_password_with_code'])->middleware('throttle:5,1');
 
 Route::middleware('auth:sanctum')->group(function () {
-    Route::post('/validate-token', fn (Request $request) => response()->json([
-        'valid' => true,
-        'user' => $request->user(),
-    ]));
+    Route::post('/validate-token', function (Request $request) {
+        $helpers = new class
+        {
+            use StorehauseHelpers;
+        };
+
+        return response()->json([
+            'valid' => true,
+            'user' => $helpers->formatUser($request->user()),
+        ]);
+    });
 
     Route::middleware('admin')->group(function () {
         Route::post('/create-admin', [AdminController::class, 'create_admin'])->middleware('admin.role:super_admin');
@@ -116,6 +121,7 @@ Route::middleware('auth:sanctum')->group(function () {
 Route::prefix('storehause')->group(function () {
     Route::post('/auth/register', [AuthController::class, 'register'])->middleware('throttle:10,1');
     Route::post('/auth/login', [AuthController::class, 'login'])->middleware('throttle:10,1');
+    Route::post('/auth/exchange-code', [AuthController::class, 'exchangeCode'])->middleware('throttle:10,1');
     Route::get('/auth/google', [AuthController::class, 'redirectToGoogle'])->middleware('throttle:10,1');
     Route::get('/auth/google/callback', [AuthController::class, 'handleGoogleCallback'])->middleware('throttle:10,1');
     Route::post('/auth/request-password-reset', [AuthController::class, 'requestPasswordReset'])->middleware('throttle:5,1');
@@ -142,10 +148,6 @@ Route::prefix('storehause')->group(function () {
     Route::post('/public/storefronts/{slug}/visits', [PublicStorefrontController::class, 'recordVisit'])->middleware('throttle:60,1');
 
     // AI chat proxy — uses backend API key, no user auth needed
-    Route::get('/ai/config', [AiConfigController::class, 'show']);
-    Route::post('/ai/chat', [AiChatController::class, 'chat'])->middleware('throttle:60,1');
-    Route::post('/ai/chat/stream', [AiChatController::class, 'chatStream'])->middleware('throttle:60,1');
-    Route::post('/ai/vision/product', [VisionController::class, 'analyzeProduct'])->middleware('throttle:30,1');
     Route::post('/billing/webhook', [BillingController::class, 'webhook'])->middleware('throttle:120,1');
     Route::post('/paystack/webhook', [PaystackWebhookController::class, 'handle'])->middleware('throttle:120,1');
     Route::get('/marketing/facebook/callback', [MarketingController::class, 'facebookCallback']);
@@ -154,6 +156,12 @@ Route::prefix('storehause')->group(function () {
     Route::post('/webhooks/tiktok', [TikTokWebhookController::class, 'handle'])->middleware('throttle:120,1');
 
     Route::middleware(['auth:sanctum', 'merchant.active', 'api.cache:merchant'])->group(function () {
+        // AI proxies — authenticated merchants only (platform keys must not be public)
+        Route::get('/ai/config', [AiConfigController::class, 'show']);
+        Route::post('/ai/chat', [AiChatController::class, 'chat'])->middleware('throttle:60,1');
+        Route::post('/ai/chat/stream', [AiChatController::class, 'chatStream'])->middleware('throttle:60,1');
+        Route::post('/ai/vision/product', [VisionController::class, 'analyzeProduct'])->middleware('throttle:30,1');
+
         Route::get('/billing/subscription', [BillingController::class, 'subscription']);
         Route::post('/billing/checkout', [BillingController::class, 'checkout'])->middleware('throttle:20,1');
         Route::post('/billing/topup', [BillingController::class, 'topup'])->middleware('throttle:20,1');

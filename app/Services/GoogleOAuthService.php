@@ -46,6 +46,12 @@ class GoogleOAuthService
 
     public function fetchUser(string $state): SocialiteUser
     {
+        // Validate state parameter before exchanging code
+        $cachedData = Cache::get($this->stateCacheKey($state));
+        if (! is_array($cachedData)) {
+            throw new \RuntimeException('Invalid or expired OAuth state parameter.');
+        }
+
         return Socialite::driver('google')
             ->redirectUrl($this->redirectUri())
             ->stateless()

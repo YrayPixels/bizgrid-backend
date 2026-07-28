@@ -144,10 +144,42 @@ class VisionAgent
             return $imageUrl;
         }
 
-        // HTTP(S) URL — download and convert to base64
+        // HTTP(S) URL — validate and download
         if (str_starts_with($imageUrl, 'http://') || str_starts_with($imageUrl, 'https://')) {
+            // SSRF protection: parse host and reject private/reserved IPs
+            $parsed = parse_url($imageUrl);
+            if (! $parsed || empty($parsed['host'])) {
+                Log::warning('VisionAgent: invalid URL format', ['url' => $imageUrl]);
+
+                return null;
+            }
+
+            $host = $parsed['host'];
+
+            // Reject localhost and common private hostnames
+            $blockedHosts = ['localhost', '127.0.0.1', '::1', '0.0.0.0', '[::1]'];
+            if (in_array(strtolower($host), $blockedHosts, true)) {
+                Log::warning('VisionAgent: blocked localhost/loopback host', ['host' => $host]);
+
+                return null;
+            }
+
+            // Resolve host to IP and check against private ranges
+            $ip = gethostbyname($host);
+            if ($ip === $host) {
+                // gethostbyname returns the hostname unchanged if DNS resolution fails
+                // Allow the request to proceed (may be a public hostname without local DNS)
+                $ip = null;
+            }
+
+            if ($ip !== null && ! $this->isPublicIp($ip)) {
+                Log::warning('VisionAgent: blocked private/reserved IP', ['host' => $host, 'ip' => $ip]);
+
+                return null;
+            }
+
             try {
-                $response = Http::timeout(15)->get($imageUrl);
+                $response = Http::timeout(15)->maxSize(5 * 1024 * 1024)->get($imageUrl);
 
                 if (! $response->successful()) {
                     Log::warning('VisionAgent: could not download image', [
@@ -172,15 +204,22 @@ class VisionAgent
             }
         }
 
-        // Local file path — read and convert
-        if (file_exists($imageUrl)) {
-            $mime = mime_content_type($imageUrl) ?: 'image/jpeg';
-
-            return 'data:'.$mime.';base64,'.base64_encode(file_get_contents($imageUrl));
-        }
-
+        // Reject all other schemes (file://, etc.)
         Log::warning('VisionAgent: unsupported image URL format', ['url' => $imageUrl]);
 
         return null;
+    }
+
+    /**
+     * Check if an IP address is public (not private/reserved).
+     */
+    private function isPublicIp(string $ip): bool
+    {
+        // Use filter_var with flags to reject private and reserved ranges
+        return filter_var(
+            $ip,
+            FILTER_VALIDATE_IP,
+            FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE
+        ) !== false;
     }
 }

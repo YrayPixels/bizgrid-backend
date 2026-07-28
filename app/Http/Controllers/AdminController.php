@@ -78,20 +78,13 @@ class AdminController extends Controller
         ]);
 
         $admin = User::where('email', strtolower($data['email']))->first();
-        if (! $admin) {
-            return response()->json(['message' => 'Admin not found'], 404);
-        }
 
-        if (! $admin->is_admin) {
-            return response()->json(['message' => 'Unauthorized admin access'], 403);
-        }
-
-        if (! Hash::check($data['password'], $admin->password)) {
+        if (! $admin || ! $admin->is_admin || ! Hash::check($data['password'], $admin->password)) {
             return response()->json(['message' => 'Invalid credentials'], 401);
         }
 
-        $verification_code = rand(100000, 999999);
-        $admin->verification_code = Hash::make($verification_code);
+        $verification_code = random_int(100000, 999999);
+        $admin->verification_code = Hash::make((string) $verification_code);
         $admin->verification_code_expires_at = now()->addMinutes(10);
         $admin->save();
 
@@ -226,7 +219,15 @@ class AdminController extends Controller
             'email' => $admin->email,
         ]);
 
-        return redirect()->away($frontendBase.'/?auth_token='.urlencode($token));
+        // Exchange code pattern: generate short-lived code instead of embedding token in URL
+        $code = Str::random(64);
+        \Illuminate\Support\Facades\Cache::put("auth:exchange:{$code}", [
+            'token' => $token,
+            'user_id' => $admin->id,
+            'type' => 'admin',
+        ], now()->addMinutes(2));
+
+        return redirect()->away($frontendBase.'/?auth_code='.urlencode($code));
     }
 
     public function delete_admin(Request $request): JsonResponse
@@ -335,7 +336,7 @@ class AdminController extends Controller
             return response()->json(['message' => 'If that account exists, a reset code was sent.']);
         }
 
-        $code = (string) rand(100000, 999999);
+        $code = (string) random_int(100000, 999999);
         $admin->verification_code = Hash::make($code);
         $admin->verification_code_expires_at = now()->addMinutes(15);
         $admin->save();
@@ -390,6 +391,33 @@ class AdminController extends Controller
         $this->audit->log($request, 'admin.sessions_revoked', 'user', $target->id);
 
         return response()->json(['message' => 'All sessions revoked for '.$target->email]);
+    }
+
+    public function exchangeCode(Request $request): JsonResponse
+    {
+        $data = $request->validate([
+            'code' => 'required|string|size:64',
+        ]);
+
+        $payload = \Illuminate\Support\Facades\Cache::pull("auth:exchange:{$data['code']}");
+
+        if (! is_array($payload) || ! isset($payload['token'], $payload['user_id'])) {
+            return response()->json([
+                'error' => 'Invalid or expired code.',
+            ], 401);
+        }
+
+        $admin = User::find($payload['user_id']);
+        if (! $admin || ! $admin->is_admin) {
+            return response()->json([
+                'error' => 'Admin not found.',
+            ], 404);
+        }
+
+        return response()->json([
+            'token' => $payload['token'],
+            'admin' => $this->formatAdmin($admin),
+        ]);
     }
 
     private function formatAdmin(User $user): array

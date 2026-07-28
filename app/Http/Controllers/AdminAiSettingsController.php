@@ -25,7 +25,7 @@ class AdminAiSettingsController extends Controller
     {
         return response()->json([
             'success' => true,
-            'data' => $this->aiConfig->publicConfig(),
+            'data' => $this->aiConfig->adminConfig(),
         ]);
     }
 
