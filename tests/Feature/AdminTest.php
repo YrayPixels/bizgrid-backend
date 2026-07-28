@@ -34,6 +34,33 @@ it('allows admin users to access admin routes', function () {
         ->assertJsonPath('success', true);
 });
 
+it('validates admin tokens and includes admin metadata', function () {
+    $admin = User::factory()->create([
+        'is_admin' => true,
+        'admin_role' => 'super_admin',
+    ]);
+
+    $this->actingAs($admin, 'sanctum')
+        ->postJson('/api/validate-token')
+        ->assertOk()
+        ->assertJsonPath('valid', true)
+        ->assertJsonPath('user.is_admin', true)
+        ->assertJsonPath('user.admin_role', 'super_admin')
+        ->assertJsonPath('user.email', $admin->email)
+        ->assertJsonPath('admin.email', $admin->email)
+        ->assertJsonPath('admin.admin_role', 'super_admin');
+});
+
+it('marks non-admin tokens as not admin on validate-token', function () {
+    $user = User::factory()->create(['is_admin' => false]);
+
+    $this->actingAs($user, 'sanctum')
+        ->postJson('/api/validate-token')
+        ->assertOk()
+        ->assertJsonPath('valid', true)
+        ->assertJsonPath('user.is_admin', false);
+});
+
 it('allows admin to create another admin', function () {
     $admin = User::factory()->create(['is_admin' => true]);
 

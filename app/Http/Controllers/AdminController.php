@@ -211,7 +211,10 @@ class AdminController extends Controller
             $admin->email_verified_at = now();
         }
 
-        $token = $admin->createToken('admin-token')->plainTextToken;
+        $tokenResult = $admin->createToken('admin-token');
+        $tokenResult->accessToken->expires_at = now()->addDay();
+        $tokenResult->accessToken->save();
+        $token = $tokenResult->plainTextToken;
         $admin->token = $token;
         $admin->save();
 
@@ -417,6 +420,35 @@ class AdminController extends Controller
         return response()->json([
             'token' => $payload['token'],
             'admin' => $this->formatAdmin($admin),
+        ]);
+    }
+
+    public function validateToken(Request $request): JsonResponse
+    {
+        /** @var User $user */
+        $user = $request->user();
+
+        if (! $user->is_admin) {
+            return response()->json([
+                'valid' => true,
+                'user' => [
+                    'id' => $user->id,
+                    'name' => $user->name,
+                    'email' => $user->email,
+                    'is_admin' => false,
+                ],
+            ]);
+        }
+
+        $admin = $this->formatAdmin($user);
+
+        return response()->json([
+            'valid' => true,
+            'user' => [
+                ...$admin,
+                'is_admin' => true,
+            ],
+            'admin' => $admin,
         ]);
     }
 

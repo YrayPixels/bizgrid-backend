@@ -46,7 +46,7 @@ Route::post('/request-admin-password-reset', [AdminController::class, 'request_p
 Route::post('/reset-admin-password-with-code', [AdminController::class, 'reset_password_with_code'])->middleware('throttle:5,1');
 
 Route::middleware('auth:sanctum')->group(function () {
-    Route::post('/validate-token', [AuthController::class, 'validateToken']);
+    Route::post('/validate-token', [AdminController::class, 'validateToken']);
 
     Route::middleware('admin')->group(function () {
         Route::post('/create-admin', [AdminController::class, 'create_admin'])->middleware('admin.role:super_admin');
