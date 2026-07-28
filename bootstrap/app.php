@@ -18,6 +18,12 @@ return Application::configure(basePath: dirname(__DIR__))
         // CORS must run early on every request (including OPTIONS preflight).
         $middleware->prepend(\Illuminate\Http\Middleware\HandleCors::class);
 
+        // Deploy curl posts hit these without a session/CSRF cookie; auth is via DEPLOY_KEY.
+        $middleware->validateCsrfTokens(except: [
+            'maintenance/migrate',
+            'maintenance/cache-clear',
+        ]);
+
         $middleware->alias([
             'admin' => \App\Http\Middleware\AdminMiddleware::class,
             'admin.role' => \App\Http\Middleware\AdminRoleMiddleware::class,
