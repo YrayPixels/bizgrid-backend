@@ -9,6 +9,8 @@ use Illuminate\Support\Str;
 
 class AiChatClient
 {
+    private const TRANSIENT_ATTEMPTS = 3;
+
     public function __construct(
         private readonly PlatformAiConfigService $config,
         private readonly AgentExecutionLogService $executionLogs,
@@ -41,11 +43,7 @@ class AiChatClient
             unset($payload['tool_choice']);
         }
 
-        return Http::withToken($apiKey)
-            ->acceptJson()
-            ->connectTimeout(20)
-            ->timeout(180)
-            ->post($this->config->baseUrl($provider).'/chat/completions', $payload);
+        return $this->postChatCompletions($provider, $apiKey, $payload);
     }
 
     /**
@@ -72,13 +70,128 @@ class AiChatClient
         $hasTools = isset($payload['tools']) && is_array($payload['tools']) && count($payload['tools']) > 0;
         if (! $hasTools) {
             unset($payload['tool_choice']);
+        } else {
+            // json_decode(..., true) turns JSON {} into PHP [] — OpenAI then rejects
+            // tool parameters.properties as "[] is not of type 'object'".
+            $payload = $this->normalizeToolSchemas($payload);
         }
 
-        return Http::withToken($apiKey)
-            ->acceptJson()
-            ->connectTimeout(20)
-            ->timeout(180)
-            ->post($this->config->baseUrl($provider).'/chat/completions', $payload);
+        return $this->postChatCompletions($provider, $apiKey, $payload);
+    }
+
+    /**
+     * @param  array<string, mixed>  $payload
+     * @return array<string, mixed>
+     */
+    private function normalizeToolSchemas(array $payload): array
+    {
+        if (! isset($payload['tools']) || ! is_array($payload['tools'])) {
+            return $payload;
+        }
+
+        foreach ($payload['tools'] as $index => $tool) {
+            if (! is_array($tool)) {
+                continue;
+            }
+            $parameters = $tool['function']['parameters'] ?? null;
+            if (is_array($parameters)) {
+                $payload['tools'][$index]['function']['parameters'] = $this->normalizeJsonSchemaObject($parameters);
+            }
+        }
+
+        return $payload;
+    }
+
+    /**
+     * Restore JSON-object semantics lost by associative json_decode for tool schemas.
+     *
+     * @param  array<mixed>  $schema
+     * @return array<mixed>|\stdClass
+     */
+    private function normalizeJsonSchemaObject(array $schema): array|\stdClass
+    {
+        if ($schema === []) {
+            return new \stdClass;
+        }
+
+        $objectFieldKeys = ['properties', 'patternProperties', '$defs', 'definitions', 'dependentSchemas'];
+
+        foreach ($schema as $key => $value) {
+            if (in_array($key, $objectFieldKeys, true)) {
+                if ($value === [] || $value === null) {
+                    $schema[$key] = new \stdClass;
+                } elseif (is_array($value)) {
+                    $props = [];
+                    foreach ($value as $propName => $propSchema) {
+                        $props[$propName] = is_array($propSchema)
+                            ? $this->normalizeJsonSchemaObject($propSchema)
+                            : $propSchema;
+                    }
+                    $schema[$key] = $props === [] ? new \stdClass : $props;
+                }
+                continue;
+            }
+
+            if (in_array($key, ['items', 'not', 'additionalProperties'], true) && is_array($value)) {
+                $schema[$key] = $value === [] ? new \stdClass : $this->normalizeJsonSchemaObject($value);
+                continue;
+            }
+
+            if (in_array($key, ['anyOf', 'oneOf', 'allOf'], true) && is_array($value)) {
+                $schema[$key] = array_map(
+                    fn ($entry) => is_array($entry) ? $this->normalizeJsonSchemaObject($entry) : $entry,
+                    $value,
+                );
+            }
+        }
+
+        return $schema;
+    }
+
+    /**
+     * @param  array<string, mixed>  $payload
+     */
+    private function postChatCompletions(string $provider, string $apiKey, array $payload): Response
+    {
+        $url = $this->config->baseUrl($provider).'/chat/completions';
+        $attempt = 0;
+        $lastException = null;
+
+        while ($attempt < self::TRANSIENT_ATTEMPTS) {
+            $attempt++;
+            try {
+                return Http::withToken($apiKey)
+                    ->acceptJson()
+                    ->connectTimeout(20)
+                    ->timeout(180)
+                    ->post($url, $payload);
+            } catch (\Throwable $e) {
+                $lastException = $e;
+                if (! $this->isTransientTransportError($e) || $attempt >= self::TRANSIENT_ATTEMPTS) {
+                    throw $e;
+                }
+
+                Log::warning('AI chat transient transport error; retrying', [
+                    'attempt' => $attempt,
+                    'provider' => $provider,
+                    'model' => $payload['model'] ?? null,
+                    'message' => Str::limit($e->getMessage(), 300),
+                ]);
+                usleep(250_000 * $attempt);
+            }
+        }
+
+        throw $lastException ?? new \RuntimeException('AI chat request failed.');
+    }
+
+    private function isTransientTransportError(\Throwable $e): bool
+    {
+        $message = $e->getMessage();
+
+        return (bool) preg_match(
+            '/cURL error (28|35|52|56)|SSL|TLS|timed? ?out|Connection reset|Connection refused|Could not resolve|Failed to connect|UND_ERR_SOCKET|ECONNRESET|other side closed/i',
+            $message,
+        );
     }
 
     /**
@@ -136,6 +249,13 @@ class AiChatClient
 
         if (! isset($payload['model']) || ! is_string($payload['model']) || $payload['model'] === '') {
             $payload['model'] = $this->config->chatModel($provider);
+        }
+
+        $hasTools = isset($payload['tools']) && is_array($payload['tools']) && count($payload['tools']) > 0;
+        if (! $hasTools) {
+            unset($payload['tool_choice']);
+        } else {
+            $payload = $this->normalizeToolSchemas($payload);
         }
 
         $payload['stream'] = true;

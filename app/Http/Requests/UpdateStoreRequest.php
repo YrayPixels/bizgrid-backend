@@ -14,6 +14,13 @@ class UpdateStoreRequest extends FormRequest
     {
         return array_merge([
             'business_name' => ['sometimes', 'string', 'max:160'],
+            'slug' => [
+                'sometimes',
+                'string',
+                'max:80',
+                'regex:/^[a-z0-9]+(?:-[a-z0-9]+)*$/',
+            ],
+            'industry' => ['sometimes', 'string', 'max:80'],
             'description' => ['sometimes', 'nullable', 'string', 'max:1000'],
             'contact_email' => ['sometimes', 'nullable', 'email', 'max:255'],
             'contact_phone' => ['sometimes', 'nullable', 'string', 'max:40'],

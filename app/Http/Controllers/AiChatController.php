@@ -96,6 +96,7 @@ class AiChatController extends Controller
 
             return response()->json([
                 'error' => 'Failed to reach AI service.',
+                'detail' => Str::limit($e->getMessage(), 500),
             ], 502);
         }
     }
@@ -124,11 +125,15 @@ class AiChatController extends Controller
             'merchant_id' => $merchant?->id,
         ]);
 
-        $body = $request->validate([
-            'messages' => ['required', 'array', 'min:1'],
-            'model' => ['nullable', 'string'],
-            'temperature' => ['nullable', 'numeric'],
-        ]);
+        // Transparent body (like chat()) so tools/tool_choice survive and empty
+        // JSON objects are not mangled by Laravel request validation.
+        $rawBody = (string) $request->getContent();
+        $body = json_decode($rawBody, true);
+        if (! is_array($body) || empty($body['messages']) || ! is_array($body['messages'])) {
+            return response()->json([
+                'error' => 'messages array is required.',
+            ], 422);
+        }
 
         try {
             $response = $this->aiChat->streamChatCompletions($body);
@@ -162,6 +167,7 @@ class AiChatController extends Controller
                 'status' => 'success',
                 'metadata' => [
                     'message_count' => count($body['messages']),
+                    'tool_count' => isset($body['tools']) && is_array($body['tools']) ? count($body['tools']) : 0,
                     'streaming' => true,
                 ],
             ]);

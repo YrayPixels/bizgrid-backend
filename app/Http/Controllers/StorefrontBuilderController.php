@@ -116,7 +116,7 @@ class StorefrontBuilderController extends Controller
             return response()->json([
                 ...$this->formatSessionPayload($session->fresh(['messages', 'store.merchant'])),
                 'storefront' => $session->store
-                    ? $this->productService->mergeIntoStorefront($session->storefront_snapshot ?? [], $session->store)
+                    ? $this->productService->mergeIntoStorefront($session->storefront_snapshot ?? [], $session->store, activeOnly: true)
                     : $session->storefront_snapshot,
             ]);
         }
@@ -272,7 +272,7 @@ class StorefrontBuilderController extends Controller
                 return response()->json([
                     ...$this->formatSessionPayload($session),
                     'storefront' => $session->store
-                        ? $this->productService->mergeIntoStorefront($session->storefront_snapshot ?? [], $session->store)
+                        ? $this->productService->mergeIntoStorefront($session->storefront_snapshot ?? [], $session->store, activeOnly: true)
                         : $session->storefront_snapshot,
                 ]);
             }
@@ -311,7 +311,7 @@ class StorefrontBuilderController extends Controller
             return response()->json([
                 ...$this->formatSessionPayload($session),
                 'storefront' => $session->store
-                    ? $this->productService->mergeIntoStorefront($session->storefront_snapshot ?? [], $session->store)
+                    ? $this->productService->mergeIntoStorefront($session->storefront_snapshot ?? [], $session->store, activeOnly: true)
                     : $session->storefront_snapshot,
             ]);
         }
@@ -382,7 +382,7 @@ class StorefrontBuilderController extends Controller
         $session->status = 'content_generated';
         $session->save();
 
-        $mergedStorefront = $this->productService->mergeIntoStorefront($storefront, $store);
+        $mergedStorefront = $this->productService->mergeIntoStorefront($storefront, $store, activeOnly: true);
 
         if (! ($data['skip_assistant_message'] ?? false)) {
             $this->appendAssistantMessage(
@@ -464,7 +464,7 @@ class StorefrontBuilderController extends Controller
                 }
                 $session->save();
 
-                $mergedStorefront = $this->productService->mergeIntoStorefront($storefront, $store);
+                $mergedStorefront = $this->productService->mergeIntoStorefront($storefront, $store, activeOnly: true);
 
                 $this->appendAssistantMessage(
                     $session,
@@ -523,7 +523,7 @@ class StorefrontBuilderController extends Controller
         $session->status = 'review_ready';
         $session->save();
 
-        $mergedStorefront = $this->productService->mergeIntoStorefront($storefront, $store);
+        $mergedStorefront = $this->productService->mergeIntoStorefront($storefront, $store, activeOnly: true);
 
         $this->appendAssistantMessage(
             $session,
@@ -569,14 +569,11 @@ class StorefrontBuilderController extends Controller
             $store = $this->createStoreFromProfile($user, $profile);
             $session->store_id = $store->id;
         } elseif ($hasMinimum && $session->store) {
+            // Store name/industry are owned by Settings (and update_store_profile).
+            // Re-applying a stale session profile here was overwriting merchant edits.
             $session->store->fill([
-                'name' => $profile['business_name'] ?? $session->store->name,
                 'description' => $profile['description'] ?? $session->store->description,
                 'brand_color' => $profile['brand_color'] ?? $session->store->brand_color,
-            ])->save();
-            $session->store->merchant?->fill([
-                'business_name' => $profile['business_name'] ?? $session->store->merchant?->business_name,
-                'industry' => $profile['industry'] ?? $session->store->merchant?->industry,
             ])->save();
         }
 
@@ -766,7 +763,7 @@ class StorefrontBuilderController extends Controller
         $session->status = 'content_generated';
         $session->save();
 
-        $mergedStorefront = $this->productService->mergeIntoStorefront($storefront, $store);
+        $mergedStorefront = $this->productService->mergeIntoStorefront($storefront, $store, activeOnly: true);
 
         return [
             'name' => 'generate_draft',
@@ -898,8 +895,14 @@ class StorefrontBuilderController extends Controller
             return;
         }
 
+        // Prefer existing store identity. Only fill blanks from the session profile
+        // so builder generate turns cannot undo Settings → Store details edits.
+        $nextName = filled($store->name)
+            ? $store->name
+            : ($profile['business_name'] ?? $store->name);
+
         $store->fill([
-            'name' => $profile['business_name'] ?? $store->name,
+            'name' => $nextName,
             'description' => $profile['description'] ?? $store->description,
             'brand_color' => $profile['brand_color'] ?? $store->brand_color,
             'business_location' => $profile['business_location'] ?? $store->business_location,
@@ -909,10 +912,24 @@ class StorefrontBuilderController extends Controller
             'physical_store_count' => $profile['physical_store_count'] ?? $store->physical_store_count,
         ])->save();
 
-        $store->merchant?->fill([
-            'business_name' => $profile['business_name'] ?? $store->merchant?->business_name,
-            'industry' => $profile['industry'] ?? $store->merchant?->industry,
-        ])->save();
+        $merchant = $store->merchant;
+        if (! $merchant) {
+            return;
+        }
+
+        $merchantUpdates = [];
+        if (! filled($merchant->business_name) && filled($profile['business_name'] ?? null)) {
+            $merchantUpdates['business_name'] = $profile['business_name'];
+        } elseif (filled($nextName)) {
+            $merchantUpdates['business_name'] = $nextName;
+        }
+        if (! filled($merchant->industry) && filled($profile['industry'] ?? null)) {
+            $merchantUpdates['industry'] = $profile['industry'];
+        }
+
+        if ($merchantUpdates !== []) {
+            $merchant->fill($merchantUpdates)->save();
+        }
     }
 
     private function appendUserMessage(StorefrontBuilderSession $session, string $content): void
@@ -1195,7 +1212,7 @@ class StorefrontBuilderController extends Controller
                 'business_profile' => $profile,
                 'selected_template_id' => $session->selected_template_id,
                 'storefront_snapshot' => $store && is_array($storefrontSnapshot)
-                    ? $this->productService->mergeIntoStorefront($storefrontSnapshot, $store)
+                    ? $this->productService->mergeIntoStorefront($storefrontSnapshot, $store, activeOnly: true)
                     : $storefrontSnapshot,
                 'store' => $store ? $this->formatStore($store) : null,
                 'messages' => $session->messages

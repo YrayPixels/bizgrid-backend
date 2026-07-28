@@ -7,6 +7,7 @@ namespace App\Http\Controllers;
 use App\Http\Controllers\Concerns\StorehauseHelpers;
 use App\Models\Merchant;
 use App\Models\Store;
+use App\Models\StorefrontBuilderSession;
 use App\Models\StorefrontTemplate;
 use App\Services\MerchantUsageEnforcementService;
 use App\Services\PlatformNotificationService;
@@ -144,8 +145,22 @@ class StoreController extends Controller
 
     public function updateMyStore(Request $request): JsonResponse
     {
+        $store = Store::with('merchant')
+            ->whereHas('merchant', fn ($query) => $query->where('owner_user_id', $request->user()->id))
+            ->latest()
+            ->firstOrFail();
+
         $data = $request->validate(array_merge([
             'business_name' => 'sometimes|string|max:160',
+            'slug' => [
+                'sometimes',
+                'string',
+                'max:80',
+                'regex:/^[a-z0-9]+(?:-[a-z0-9]+)*$/',
+                Rule::notIn($this->reservedSubdomains()),
+                Rule::unique('stores', 'slug')->ignore($store->id),
+            ],
+            'industry' => 'sometimes|string|max:80',
             'description' => 'sometimes|nullable|string|max:1000',
             'contact_email' => 'sometimes|nullable|email|max:255',
             'contact_phone' => 'sometimes|nullable|string|max:40',
@@ -168,14 +183,26 @@ class StoreController extends Controller
             'return_policy' => 'sometimes|nullable|string|max:5000',
         ], $this->businessProfileRules(required: false)));
 
-        $store = Store::with('merchant')
-            ->whereHas('merchant', fn ($query) => $query->where('owner_user_id', $request->user()->id))
-            ->latest()
-            ->firstOrFail();
-
         if (array_key_exists('business_name', $data)) {
             $store->name = trim($data['business_name']);
             $store->merchant?->update(['business_name' => $store->name]);
+        }
+
+        if (array_key_exists('industry', $data)) {
+            $store->merchant?->update(['industry' => $data['industry']]);
+        }
+
+        if (array_key_exists('slug', $data)) {
+            $slug = strtolower(trim($data['slug']));
+            $platformDomain = config('storehause.platform_domain', 'bizgrid.shop');
+            $oldSubdomainHost = "{$store->slug}.{$platformDomain}";
+            $newSubdomainHost = "{$slug}.{$platformDomain}";
+
+            $store->slug = $slug;
+
+            if (! filled($store->primary_domain) || $store->primary_domain === $oldSubdomainHost) {
+                $store->primary_domain = $newSubdomainHost;
+            }
         }
 
         if (array_key_exists('description', $data)) {
@@ -230,12 +257,60 @@ class StoreController extends Controller
         }
 
         $store->save();
+        $store->load('merchant');
 
+        $this->syncBuilderSessionsFromStore($store, $request->user()->id, $data);
         $this->invalidateStoreApiCache($store);
+        $this->invalidateUserApiCache((int) $request->user()->id);
+
+        $fresh = $store->fresh('merchant');
 
         return response()->json([
-            'store' => array_merge($this->formatStore($store->fresh('merchant')), $this->publishService->publishMeta($store->fresh('merchant'))),
+            'store' => array_merge($this->formatStore($fresh), $this->publishService->publishMeta($fresh)),
         ]);
+    }
+
+    /**
+     * Keep active builder session profiles aligned with store settings so
+     * later builder turns do not re-apply stale name/industry values.
+     *
+     * @param  array<string, mixed>  $data
+     */
+    private function syncBuilderSessionsFromStore(Store $store, int $userId, array $data): void
+    {
+        $sessions = StorefrontBuilderSession::query()
+            ->where('user_id', $userId)
+            ->whereNotIn('status', ['published'])
+            ->get();
+
+        foreach ($sessions as $session) {
+            $profile = is_array($session->business_profile) ? $session->business_profile : [];
+            $changed = false;
+
+            if (array_key_exists('business_name', $data)) {
+                $profile['business_name'] = $store->name;
+                $changed = true;
+            }
+            if (array_key_exists('industry', $data)) {
+                $profile['industry'] = $store->merchant?->industry ?? $data['industry'];
+                $changed = true;
+            }
+            if (array_key_exists('description', $data)) {
+                $profile['description'] = $store->description;
+                $changed = true;
+            }
+            if (array_key_exists('brand_color', $data)) {
+                $profile['brand_color'] = $store->brand_color;
+                $changed = true;
+            }
+
+            if (! $changed) {
+                continue;
+            }
+
+            $session->business_profile = $profile;
+            $session->save();
+        }
     }
 
     public function uploadStorefrontImage(Request $request, int $storeId): JsonResponse
