@@ -85,6 +85,7 @@ class ApiCacheService
             str_contains($path, 'admin/health') => $map['admin_health'] ?? $default,
             str_contains($path, 'admin/search') => $map['admin_search'] ?? $default,
             str_contains($path, 'admin/notifications') => $map['admin_notifications'] ?? $default,
+            str_contains($path, 'admin/agent-logs') => $map['admin_agent_logs'] ?? $default,
             str_contains($path, 'admin/') => $map['admin_default'] ?? $default,
             default => $default,
         };

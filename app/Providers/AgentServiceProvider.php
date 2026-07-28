@@ -8,6 +8,7 @@ use App\Agents\MarketingAgent;
 use App\Agents\StorefrontCodeAgent;
 use App\Agents\StorefrontWriterAgent;
 use App\Agents\VisionAgent;
+use App\Services\AgentExecutionLogService;
 use App\Services\PromptService;
 use Illuminate\Support\ServiceProvider;
 
@@ -18,6 +19,7 @@ class AgentServiceProvider extends ServiceProvider
      */
     public function register(): void
     {
+        $this->app->singleton(AgentExecutionLogService::class);
         $this->app->singleton(PromptService::class);
         $this->app->singleton(VisionAgent::class);
         $this->app->singleton(StorefrontCodeAgent::class);

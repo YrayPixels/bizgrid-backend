@@ -1,6 +1,7 @@
 <?php
 
 use App\Http\Controllers\AdminAiSettingsController;
+use App\Http\Controllers\AdminAgentLogController;
 use App\Http\Controllers\AdminAnalyticsController;
 use App\Http\Controllers\AiConfigController;
 use App\Http\Controllers\AdminAuditController;
@@ -107,6 +108,10 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::get('/builder/sessions/{id}', [AdminBuilderController::class, 'show']);
 
             Route::get('/audit-logs', [AdminAuditController::class, 'index']);
+
+            Route::get('/agent-logs', [AdminAgentLogController::class, 'index']);
+            Route::get('/agent-logs/stats', [AdminAgentLogController::class, 'stats']);
+            Route::get('/agent-logs/{id}', [AdminAgentLogController::class, 'show']);
 
             Route::get('/ai-settings', [AdminAiSettingsController::class, 'show']);
             Route::patch('/ai-settings', [AdminAiSettingsController::class, 'update']);

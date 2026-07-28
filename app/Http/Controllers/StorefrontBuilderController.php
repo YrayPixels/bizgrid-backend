@@ -10,6 +10,7 @@ use App\Models\StorefrontBuilderMessage;
 use App\Models\StorefrontBuilderSession;
 use App\Models\StorefrontTemplate;
 use App\Models\User;
+use App\Services\AgentExecutionLogService;
 use App\Services\MerchantUsageEnforcementService;
 use App\Services\StorefrontBlockService;
 use App\Services\StorefrontBuilderService;
@@ -34,6 +35,7 @@ class StorefrontBuilderController extends Controller
         private readonly StorefrontBlockService $blockService,
         private readonly WorkbenchProjectStorage $projectStorage,
         private readonly MerchantUsageEnforcementService $enforcement,
+        private readonly AgentExecutionLogService $executionLogs,
     ) {}
 
     public function startSession(Request $request): JsonResponse
@@ -344,6 +346,7 @@ class StorefrontBuilderController extends Controller
         $session = $this->findOwnedSession($request, $sessionId);
         $store = $this->ensureStoreForSession($session, $request->user());
         $this->enforceAiUsage($store);
+        $this->bindExecutionLogContext($request, $session, $store);
 
         if (! empty($data['business_profile']) && is_array($data['business_profile'])) {
             $session->business_profile = $data['business_profile'];
@@ -421,6 +424,7 @@ class StorefrontBuilderController extends Controller
 
         // Enforce AI usage BEFORE streaming (same as generateDraft)
         $this->enforceAiUsage($store);
+        $this->bindExecutionLogContext($request, $session, $store);
 
         return SseStream::response(function ($emit) use ($data, $session, $store) {
             try {
@@ -1268,6 +1272,21 @@ class StorefrontBuilderController extends Controller
 
         $this->enforcement->assertCanUseAi($store->merchant);
         $this->enforcement->consumeAiCredit($store->merchant);
+    }
+
+    private function bindExecutionLogContext(
+        Request $request,
+        StorefrontBuilderSession $session,
+        Store $store,
+    ): void {
+        $store->loadMissing('merchant');
+
+        $this->executionLogs->setContext([
+            'user_id' => $request->user()?->id,
+            'merchant_id' => $store->merchant_id,
+            'store_id' => $store->id,
+            'builder_session_id' => $session->id,
+        ]);
     }
 
     private function invalidateBuilderApiCache(StorefrontBuilderSession $session): void

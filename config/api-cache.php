@@ -40,6 +40,7 @@ return [
         'admin_health' => 30,
         'admin_search' => 30,
         'admin_notifications' => 30,
+        'admin_agent_logs' => 15,
         'admin_default' => 60,
     ],
 

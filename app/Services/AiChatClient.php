@@ -11,6 +11,7 @@ class AiChatClient
 {
     public function __construct(
         private readonly PlatformAiConfigService $config,
+        private readonly AgentExecutionLogService $executionLogs,
     ) {}
 
     public function available(): bool
@@ -86,14 +87,28 @@ class AiChatClient
     public function logUsage(Response $response, string $context, ?string $model = null): void
     {
         $usage = $response->json('usage');
+        $resolvedModel = $model ?? $response->json('model');
+        $provider = $this->config->provider();
 
         Log::info($context, [
-            'provider' => $this->config->provider(),
-            'model' => $model ?? $response->json('model'),
+            'provider' => $provider,
+            'model' => $resolvedModel,
             'prompt_tokens' => $usage['prompt_tokens'] ?? null,
             'completion_tokens' => $usage['completion_tokens'] ?? null,
             'total_tokens' => $usage['total_tokens'] ?? null,
             'status' => $response->status(),
+        ]);
+
+        $this->executionLogs->record([
+            'source' => 'chat',
+            'agent' => 'ai-chat',
+            'title' => $context,
+            'provider' => $provider,
+            'model' => is_string($resolvedModel) ? $resolvedModel : null,
+            'prompt_tokens' => $usage['prompt_tokens'] ?? null,
+            'completion_tokens' => $usage['completion_tokens'] ?? null,
+            'total_tokens' => $usage['total_tokens'] ?? null,
+            'http_status' => $response->status(),
         ]);
     }
 

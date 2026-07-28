@@ -2,6 +2,7 @@
 
 namespace App\Agents;
 
+use App\Services\AgentExecutionLogService;
 use App\Services\AiChatClient;
 use App\Services\PlatformAiConfigService;
 use Illuminate\Support\Facades\Http;
@@ -13,6 +14,7 @@ class VisionAgent
     public function __construct(
         private readonly PlatformAiConfigService $aiConfig,
         private readonly AiChatClient $aiChat,
+        private readonly AgentExecutionLogService $executionLogs,
     ) {}
     /**
      * Analyze a product image using a vision-capable model.
@@ -89,6 +91,17 @@ class VisionAgent
                     'error' => Str::limit((string) $msg, 500),
                 ]);
 
+                $this->executionLogs->record([
+                    'source' => 'vision',
+                    'agent' => 'vision-agent',
+                    'title' => 'Product image analysis failed',
+                    'detail' => Str::limit((string) $msg, 500),
+                    'provider' => 'openai',
+                    'model' => $model,
+                    'http_status' => $response->status(),
+                    'status' => 'error',
+                ]);
+
                 return ['error' => 'Vision model error: '.Str::limit((string) $msg, 200)];
             }
 
@@ -119,6 +132,23 @@ class VisionAgent
                 'completion_tokens' => $usage['completion_tokens'] ?? null,
             ]);
 
+            $this->executionLogs->record([
+                'source' => 'vision',
+                'agent' => 'vision-agent',
+                'title' => 'Product image analyzed',
+                'detail' => $name !== '' ? "Detected: {$name}" : 'Image analyzed',
+                'provider' => 'openai',
+                'model' => $model,
+                'prompt_tokens' => $usage['prompt_tokens'] ?? null,
+                'completion_tokens' => $usage['completion_tokens'] ?? null,
+                'total_tokens' => $usage['total_tokens'] ?? null,
+                'http_status' => $response->status(),
+                'metadata' => [
+                    'product_name' => $name ?: null,
+                    'category' => $category,
+                ],
+            ]);
+
             return [
                 'name' => $name,
                 'price' => $price,
@@ -127,6 +157,14 @@ class VisionAgent
             ];
         } catch (\Throwable $e) {
             Log::warning('VisionAgent: exception', ['message' => $e->getMessage()]);
+
+            $this->executionLogs->record([
+                'source' => 'vision',
+                'agent' => 'vision-agent',
+                'title' => 'Product image analysis exception',
+                'detail' => Str::limit($e->getMessage(), 500),
+                'status' => 'error',
+            ]);
 
             return ['error' => 'Vision service error.'];
         }

@@ -3,6 +3,7 @@
 namespace App\Agents;
 
 use App\Agents\Contracts\AgentInterface;
+use App\Services\AgentExecutionLogService;
 use App\Services\AiChatClient;
 use App\Services\PlatformAiConfigService;
 use Illuminate\Support\Facades\Log;
@@ -213,16 +214,31 @@ abstract class BaseAgent implements AgentInterface
     protected function logCall($response, string $model, float $temperature): void
     {
         $usage = $response->json('usage');
+        $provider = $this->aiConfig()->provider();
 
         Log::info("Agent [{$this->name()}] call", [
             'agent' => $this->name(),
             'prompt_version' => $this->promptVersion(),
+            'provider' => $provider,
             'model' => $model,
             'temperature' => $temperature,
             'prompt_tokens' => $usage['prompt_tokens'] ?? null,
             'completion_tokens' => $usage['completion_tokens'] ?? null,
             'total_tokens' => $usage['total_tokens'] ?? null,
             'status' => $response->status(),
+        ]);
+
+        app(AgentExecutionLogService::class)->record([
+            'source' => 'agent_call',
+            'agent' => $this->name(),
+            'provider' => $provider,
+            'model' => $model,
+            'prompt_version' => $this->promptVersion(),
+            'temperature' => $temperature,
+            'prompt_tokens' => $usage['prompt_tokens'] ?? null,
+            'completion_tokens' => $usage['completion_tokens'] ?? null,
+            'total_tokens' => $usage['total_tokens'] ?? null,
+            'http_status' => $response->status(),
         ]);
     }
 }

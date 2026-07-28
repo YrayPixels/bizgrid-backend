@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Agents\VisionAgent;
+use App\Services\AgentExecutionLogService;
 use App\Services\MerchantUsageEnforcementService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -11,6 +12,7 @@ class VisionController extends Controller
 {
     public function __construct(
         private readonly MerchantUsageEnforcementService $enforcement,
+        private readonly AgentExecutionLogService $executionLogs,
     ) {}
 
     /**
@@ -44,6 +46,11 @@ class VisionController extends Controller
             $this->enforcement->assertCanUseAi($merchant);
             $this->enforcement->consumeAiCredit($merchant);
         }
+
+        $this->executionLogs->setContext([
+            'user_id' => $request->user()?->id,
+            'merchant_id' => $merchant?->id,
+        ]);
 
         $result = $vision->analyzeProductImage($data['image_url'], [
             'business_name' => $data['business_name'] ?? null,

@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Agents\StorefrontCodeAgent;
 use App\Models\Store;
+use App\Services\AgentExecutionLogService;
 use App\Services\MerchantUsageEnforcementService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -12,6 +13,7 @@ class StorefrontCodeController extends Controller
 {
     public function __construct(
         private readonly MerchantUsageEnforcementService $enforcement,
+        private readonly AgentExecutionLogService $executionLogs,
     ) {}
 
     public function generate(Request $request, StorefrontCodeAgent $agent): JsonResponse
@@ -39,6 +41,12 @@ class StorefrontCodeController extends Controller
             $this->enforcement->assertCanUseAi($store->merchant);
             $this->enforcement->consumeAiCredit($store->merchant);
         }
+
+        $this->executionLogs->setContext([
+            'user_id' => $request->user()?->id,
+            'merchant_id' => $store->merchant_id,
+            'store_id' => $store->id,
+        ]);
 
         $result = $agent->generate($store, [
             'style_note' => $data['style_note'] ?? null,

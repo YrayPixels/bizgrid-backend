@@ -2,6 +2,7 @@
 
 namespace App\Support;
 
+use App\Services\AgentExecutionLogService;
 use Symfony\Component\HttpFoundation\StreamedResponse;
 
 class SseStream
@@ -45,6 +46,8 @@ class SseStream
      */
     public static function log($emit, string $agent, string $phase, string $title, string $detail = '', ?array $data = null): void
     {
+        app(AgentExecutionLogService::class)->recordPhase($agent, $phase, $title, $detail, $data);
+
         $emit('log', [
             'type' => 'log',
             'entry' => [

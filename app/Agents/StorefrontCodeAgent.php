@@ -3,6 +3,7 @@
 namespace App\Agents;
 
 use App\Models\Store;
+use App\Services\AgentExecutionLogService;
 use App\Services\AiChatClient;
 use App\Services\PlatformAiConfigService;
 use App\Services\PromptService;
@@ -15,6 +16,7 @@ class StorefrontCodeAgent
         private readonly PromptService $prompts,
         private readonly PlatformAiConfigService $aiConfig,
         private readonly AiChatClient $aiChat,
+        private readonly AgentExecutionLogService $executionLogs,
     ) {}
 
     public function name(): string
@@ -61,6 +63,19 @@ class StorefrontCodeAgent
                     'error' => Str::limit((string) $msg, 500),
                 ]);
 
+                $this->executionLogs->record([
+                    'source' => 'code',
+                    'agent' => $this->name(),
+                    'title' => 'Storefront code generation failed',
+                    'detail' => Str::limit((string) $msg, 500),
+                    'provider' => $this->aiConfig->provider(),
+                    'model' => $model,
+                    'store_id' => $store->id,
+                    'merchant_id' => $store->merchant_id,
+                    'http_status' => $response->status(),
+                    'status' => 'error',
+                ]);
+
                 return ['error' => 'Code generation error: '.Str::limit((string) $msg, 200)];
             }
 
@@ -84,9 +99,36 @@ class StorefrontCodeAgent
                 'completion_tokens' => $usage['completion_tokens'] ?? null,
             ]);
 
+            $this->executionLogs->record([
+                'source' => 'code',
+                'agent' => $this->name(),
+                'title' => 'Storefront code generated',
+                'detail' => 'Generated HTML ('.strlen($html).' bytes)',
+                'provider' => $this->aiConfig->provider(),
+                'model' => $model,
+                'temperature' => 0.7,
+                'prompt_tokens' => $usage['prompt_tokens'] ?? null,
+                'completion_tokens' => $usage['completion_tokens'] ?? null,
+                'total_tokens' => $usage['total_tokens'] ?? null,
+                'http_status' => $response->status(),
+                'store_id' => $store->id,
+                'merchant_id' => $store->merchant_id,
+                'metadata' => ['html_size' => strlen($html)],
+            ]);
+
             return ['html' => $html];
         } catch (\Throwable $e) {
             Log::warning('StorefrontCodeAgent: exception', ['message' => $e->getMessage()]);
+
+            $this->executionLogs->record([
+                'source' => 'code',
+                'agent' => $this->name(),
+                'title' => 'Storefront code generation exception',
+                'detail' => Str::limit($e->getMessage(), 500),
+                'store_id' => $store->id,
+                'merchant_id' => $store->merchant_id,
+                'status' => 'error',
+            ]);
 
             return ['error' => 'Code generation service error.'];
         }

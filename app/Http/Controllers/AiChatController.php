@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Services\AgentExecutionLogService;
 use App\Services\AiChatClient;
 use App\Services\MerchantUsageEnforcementService;
 use App\Services\PlatformAiConfigService;
@@ -17,6 +18,7 @@ class AiChatController extends Controller
         private readonly PlatformAiConfigService $aiConfig,
         private readonly AiChatClient $aiChat,
         private readonly MerchantUsageEnforcementService $enforcement,
+        private readonly AgentExecutionLogService $executionLogs,
     ) {}
 
     /**
@@ -43,6 +45,11 @@ class AiChatController extends Controller
         if ($merchant) {
             $this->enforcement->assertCanUseAi($merchant);
         }
+
+        $this->executionLogs->setContext([
+            'user_id' => $request->user()?->id,
+            'merchant_id' => $merchant?->id,
+        ]);
 
         $rawBody = (string) $request->getContent();
 
@@ -112,6 +119,11 @@ class AiChatController extends Controller
             $this->enforcement->assertCanUseAi($merchant);
         }
 
+        $this->executionLogs->setContext([
+            'user_id' => $request->user()?->id,
+            'merchant_id' => $merchant?->id,
+        ]);
+
         $body = $request->validate([
             'messages' => ['required', 'array', 'min:1'],
             'model' => ['nullable', 'string'],
@@ -122,12 +134,37 @@ class AiChatController extends Controller
             $response = $this->aiChat->streamChatCompletions($body);
 
             if (! $response->successful()) {
+                $this->executionLogs->record([
+                    'source' => 'chat',
+                    'agent' => 'ai-chat',
+                    'title' => 'AI chat stream failed',
+                    'provider' => $this->aiConfig->provider(),
+                    'model' => $body['model'] ?? $this->aiConfig->chatModel(),
+                    'http_status' => $response->status(),
+                    'status' => 'error',
+                    'detail' => $this->aiChat->limitError($this->aiChat->errorMessage($response)),
+                ]);
+
                 return response()->json([
                     'error' => 'AI service returned an error.',
                     'detail' => $this->aiChat->limitError($this->aiChat->errorMessage($response)),
                     'status' => $response->status(),
                 ], 502);
             }
+
+            $this->executionLogs->record([
+                'source' => 'chat',
+                'agent' => 'ai-chat',
+                'title' => 'AI chat stream started',
+                'provider' => $this->aiConfig->provider(),
+                'model' => $body['model'] ?? $this->aiConfig->chatModel(),
+                'http_status' => $response->status(),
+                'status' => 'success',
+                'metadata' => [
+                    'message_count' => count($body['messages']),
+                    'streaming' => true,
+                ],
+            ]);
 
             $stream = $response->toPsrResponse()->getBody();
 
@@ -147,6 +184,14 @@ class AiChatController extends Controller
             ]);
         } catch (\Throwable $e) {
             Log::warning('AI chat stream exception', ['message' => $e->getMessage()]);
+
+            $this->executionLogs->record([
+                'source' => 'chat',
+                'agent' => 'ai-chat',
+                'title' => 'AI chat stream exception',
+                'detail' => Str::limit($e->getMessage(), 500),
+                'status' => 'error',
+            ]);
 
             return response()->json([
                 'error' => 'Failed to reach AI service.',
