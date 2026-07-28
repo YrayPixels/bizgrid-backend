@@ -25,7 +25,10 @@
         </p>
     @elseif ($event === 'add_on_purchased')
         <p style="margin:0 0 16px 0;">
-            Your add-on purchase was successful@if(filled($context['add_on_label'] ?? null)): <strong>{{ $context['add_on_label'] }}</strong>@endif.
+            Your add-on purchase was successful
+            @if (filled($context['add_on_label'] ?? null))
+                : <strong>{{ $context['add_on_label'] }}</strong>
+            @endif.
         </p>
     @else
         <p style="margin:0 0 16px 0;">There is an update to your {{ config('storehause.brand_name', 'Bizgrid') }} billing account.</p>
