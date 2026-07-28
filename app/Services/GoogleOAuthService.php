@@ -46,21 +46,28 @@ class GoogleOAuthService
 
     public function fetchUser(string $state): SocialiteUser
     {
-        // Validate state parameter before exchanging code
+        // Validate state before exchanging the auth code, then consume it.
         $cachedData = Cache::get($this->stateCacheKey($state));
         if (! is_array($cachedData)) {
             throw new \RuntimeException('Invalid or expired OAuth state parameter.');
         }
 
-        return Socialite::driver('google')
+        $user = Socialite::driver('google')
             ->redirectUrl($this->redirectUri())
             ->stateless()
             ->user();
+
+        Cache::forget($this->stateCacheKey($state));
+
+        return $user;
     }
 
-    public function consumeIntent(string $state): ?string
+    /**
+     * Read OAuth intent without consuming state (fetchUser consumes after success).
+     */
+    public function peekIntent(string $state): ?string
     {
-        $payload = Cache::pull($this->stateCacheKey($state));
+        $payload = Cache::get($this->stateCacheKey($state));
 
         if (! is_array($payload)) {
             return null;
@@ -71,6 +78,12 @@ class GoogleOAuthService
         return is_string($intent) && in_array($intent, ['merchant', 'admin'], true)
             ? $intent
             : null;
+    }
+
+    /** @deprecated Use peekIntent + fetchUser (which consumes state). */
+    public function consumeIntent(string $state): ?string
+    {
+        return $this->peekIntent($state);
     }
 
     private function stateCacheKey(string $state): string

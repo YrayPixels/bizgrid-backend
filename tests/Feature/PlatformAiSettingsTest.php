@@ -1,5 +1,6 @@
 <?php
 
+use App\Models\Merchant;
 use App\Models\PlatformSetting;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -104,7 +105,20 @@ it('proxies chat completions through the configured provider', function () {
         ], 200),
     ]);
 
-    $response = $this->postJson('/api/storehause/ai/chat', [
+    $user = User::factory()->create();
+    Merchant::create([
+        'owner_user_id' => $user->id,
+        'business_name' => 'AI Merchant',
+        'slug' => 'ai-merchant-'.uniqid(),
+        'contact_name' => $user->name,
+        'email' => $user->email,
+        'industry' => 'retail',
+        'status' => 'active',
+        'subscription_plan' => 'starter',
+        'subscription_status' => 'active',
+    ]);
+
+    $response = $this->actingAs($user, 'sanctum')->postJson('/api/storehause/ai/chat', [
         'messages' => [
             ['role' => 'user', 'content' => 'Hi'],
         ],
@@ -119,12 +133,25 @@ it('proxies chat completions through the configured provider', function () {
     });
 });
 
-it('exposes public ai config without secrets', function () {
+it('exposes ai config to authenticated merchants without secrets', function () {
     config([
         'ai.providers.openai.api_key' => 'test-openai-key',
     ]);
 
-    $response = $this->getJson('/api/storehause/ai/config');
+    $user = User::factory()->create();
+    Merchant::create([
+        'owner_user_id' => $user->id,
+        'business_name' => 'Config Merchant',
+        'slug' => 'config-merchant-'.uniqid(),
+        'contact_name' => $user->name,
+        'email' => $user->email,
+        'industry' => 'retail',
+        'status' => 'active',
+        'subscription_plan' => 'starter',
+        'subscription_status' => 'active',
+    ]);
+
+    $response = $this->actingAs($user, 'sanctum')->getJson('/api/storehause/ai/config');
 
     $response->assertOk()
         ->assertJsonPath('data.provider', 'openai')

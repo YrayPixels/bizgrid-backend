@@ -46,7 +46,21 @@ return [
         return ! empty($allowed) ? $allowed : ['*'];
     })(),
 
-    'allowed_origins_patterns' => [],
+    'allowed_origins_patterns' => (function () {
+        $patterns = [];
+        $platformDomain = config('storehause.platform_domain');
+        if (filled($platformDomain)) {
+            $escaped = preg_quote((string) $platformDomain, '/');
+            $patterns[] = '#^https?://([a-z0-9-]+\.)?'.$escaped.'$#i';
+        }
+        // Local subdomain storefronts (*.localhost)
+        if (config('app.env') === 'local') {
+            $patterns[] = '#^https?://([a-z0-9-]+\.)?localhost(:\d+)?$#i';
+            $patterns[] = '#^https?://([a-z0-9-]+\.)?127\.0\.0\.1(:\d+)?$#i';
+        }
+
+        return $patterns;
+    })(),
 
     'allowed_headers' => ['*'],
 

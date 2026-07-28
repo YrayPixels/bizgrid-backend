@@ -31,6 +31,10 @@ trait StorehauseHelpers
             abort(404, 'Store not found.');
         }
 
+        if ($request->user() && ! $request->user()->can('update', $store)) {
+            abort(403, 'Unauthorized.');
+        }
+
         return $store;
     }
 

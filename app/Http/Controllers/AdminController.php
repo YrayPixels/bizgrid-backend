@@ -47,13 +47,13 @@ class AdminController extends Controller
                 return response()->json(['message' => 'Admin already exists'], 400);
             }
 
-            $admin = User::create([
-                'name' => $request->name,
-                'email' => $request->email,
-                'password' => Hash::make($password),
-                'is_admin' => true,
-                'admin_role' => $request->input('admin_role', 'support'),
-            ]);
+            $admin = new User;
+            $admin->name = $request->name;
+            $admin->email = $request->email;
+            $admin->password = Hash::make($password);
+            $admin->is_admin = true;
+            $admin->admin_role = $request->input('admin_role', 'support');
+            $admin->save();
 
             Mail::to($admin->email)->send(new AdminCreated($admin, $password));
 

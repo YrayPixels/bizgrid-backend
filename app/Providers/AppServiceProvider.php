@@ -2,8 +2,11 @@
 
 namespace App\Providers;
 
+use App\Models\Store;
+use App\Policies\StorePolicy;
 use App\Services\DnsRecordResolver;
 use App\Services\NativeDnsRecordResolver;
+use Illuminate\Support\Facades\Gate;
 use Illuminate\Support\ServiceProvider;
 
 class AppServiceProvider extends ServiceProvider
@@ -21,6 +24,6 @@ class AppServiceProvider extends ServiceProvider
      */
     public function boot(): void
     {
-        //
+        Gate::policy(Store::class, StorePolicy::class);
     }
 }

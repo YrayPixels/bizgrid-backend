@@ -94,7 +94,7 @@ it('signs in an existing admin via google callback', function () {
 
     $this->get('/api/storehause/auth/google/callback?code=test-code&state='.$state)
         ->assertRedirect()
-        ->assertRedirectContains('http://localhost:5173/?auth_token=');
+        ->assertRedirectContains('http://localhost:5173/?auth_code=');
 });
 
 it('links google to an existing admin email account', function () {
@@ -127,7 +127,7 @@ it('links google to an existing admin email account', function () {
 
     $this->get('/api/storehause/auth/google/callback?code=test-code&state='.$state)
         ->assertRedirect()
-        ->assertRedirectContains('auth_token=');
+        ->assertRedirectContains('auth_code=');
 
     expect(User::where('email', 'admin@example.com')->value('google_id'))->toBe('google-admin-123');
 });

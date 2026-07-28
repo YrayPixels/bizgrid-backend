@@ -20,15 +20,12 @@ class AdminSeeder extends Seeder
             );
         }
 
-        User::updateOrCreate(
-            ['email' => $email],
-            [
-                'name' => 'Bizgrid Admin',
-                'email_verified_at' => now(),
-                'password' => Hash::make($password),
-                'is_admin' => true,
-                'admin_role' => 'super_admin',
-            ],
-        );
+        $admin = User::query()->firstOrNew(['email' => $email]);
+        $admin->name = 'Bizgrid Admin';
+        $admin->email_verified_at = now();
+        $admin->password = Hash::make($password);
+        $admin->is_admin = true;
+        $admin->admin_role = 'super_admin';
+        $admin->save();
     }
 }
