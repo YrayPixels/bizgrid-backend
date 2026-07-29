@@ -8,10 +8,12 @@ use App\Models\Merchant;
 use App\Models\Store;
 use App\Models\StoreDomain;
 use App\Models\StorefrontTemplate;
+use App\Models\StoreLocation;
 use App\Models\StoreOrder;
 use App\Models\StoreProduct;
 use App\Models\StoreVisit;
 use App\Models\User;
+use App\Services\MerchantMembershipService;
 use App\Services\StoreNotificationService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Str;
@@ -22,9 +24,14 @@ trait StorehauseHelpers
     use InvalidatesApiCache;
     protected function findOwnedStore(Request $request, int $storeId): Store
     {
+        $membership = app(MerchantMembershipService::class)->membershipFor($request->user());
+        if (! $membership) {
+            abort(404, 'Store not found.');
+        }
+
         $store = Store::with('merchant')
             ->where('id', $storeId)
-            ->whereHas('merchant', fn ($query) => $query->where('owner_user_id', $request->user()->id))
+            ->where('merchant_id', $membership['merchant']->id)
             ->first();
 
         if (! $store) {
@@ -40,10 +47,7 @@ trait StorehauseHelpers
 
     protected function findOwnedStoreForUser(Request $request): Store
     {
-        $store = Store::with('merchant')
-            ->whereHas('merchant', fn ($query) => $query->where('owner_user_id', $request->user()->id))
-            ->latest()
-            ->first();
+        $store = app(MerchantMembershipService::class)->storeForUser($request->user());
 
         if (! $store) {
             abort(404, 'Store not found.');
@@ -54,14 +58,27 @@ trait StorehauseHelpers
 
     protected function formatUser(User $user, bool $impersonating = false): array
     {
+        $membershipService = app(MerchantMembershipService::class);
+        $membershipMeta = $membershipService->formatMembership($user);
+        $merchant = $membershipService->merchantFor($user);
+        $hasStore = $merchant
+            ? $merchant->stores()->exists()
+            : false;
+
         return [
             'id' => (string) $user->id,
             'name' => $user->name,
             'email' => $user->email,
             'email_verified_at' => $user->email_verified_at?->toIso8601String(),
-            'has_store' => Merchant::where('owner_user_id', $user->id)->whereHas('stores')->exists(),
+            'has_store' => $hasStore,
             'is_admin' => (bool) $user->is_admin,
             'impersonating' => $impersonating,
+            'role' => $membershipMeta['role'],
+            'can_access_admin' => $membershipMeta['can_access_admin'],
+            'can_sell' => $membershipMeta['can_sell'],
+            'can_manage_staff' => $membershipMeta['can_manage_staff'],
+            'default_location_id' => $membershipMeta['default_location_id'],
+            'redirect' => $membershipMeta['redirect'],
         ];
     }
 
@@ -154,6 +171,20 @@ trait StorehauseHelpers
             'tracking_number' => $order->tracking_number,
             'status' => $order->status,
             'payment_status' => $order->payment_status,
+            'payment_method' => $order->payment_method,
+            'payment_reference' => $order->payment_reference,
+            'amount_tendered' => $order->amount_tendered !== null
+                ? (float) $order->amount_tendered
+                : null,
+            'source' => $order->source ?? 'online',
+            'location_id' => $order->location_id ? (string) $order->location_id : null,
+            'location_name' => $order->relationLoaded('location')
+                ? $order->location?->name
+                : null,
+            'cashier_user_id' => $order->cashier_user_id ? (string) $order->cashier_user_id : null,
+            'cashier_name' => $order->relationLoaded('cashier')
+                ? $order->cashier?->name
+                : null,
             'paystack_reference' => $order->paystack_reference,
             'settlement_status' => $order->settlement_status,
             'currency' => $order->currency,
@@ -181,10 +212,37 @@ trait StorehauseHelpers
      *
      * @return array<string, mixed>
      */
-    protected function buildMerchantDashboardPayload(Store $store): array
+    protected function buildMerchantDashboardPayload(Store $store, ?int $locationId = null): array
     {
+        app(MerchantMembershipService::class)->ensureDefaultLocation($store);
+
+        $locations = StoreLocation::query()
+            ->where('store_id', $store->id)
+            ->orderByDesc('is_default')
+            ->orderBy('name')
+            ->get()
+            ->map(fn (StoreLocation $location) => [
+                'id' => (string) $location->id,
+                'name' => $location->name,
+                'is_default' => (bool) $location->is_default,
+            ])
+            ->values()
+            ->all();
+
+        $selectedLocationId = null;
+        if ($locationId !== null) {
+            $exists = collect($locations)->contains(fn (array $row) => (int) $row['id'] === $locationId);
+            if ($exists) {
+                $selectedLocationId = $locationId;
+            }
+        }
+
         $since = now()->subDays(29)->startOfDay();
         $orderQuery = StoreOrder::where('store_id', $store->id);
+        if ($selectedLocationId !== null) {
+            $orderQuery->where('location_id', $selectedLocationId);
+        }
+
         $salesQuery = (clone $orderQuery)
             ->where('status', '!=', 'cancelled')
             ->where('payment_status', '!=', 'refunded');
@@ -300,7 +358,17 @@ trait StorehauseHelpers
             ->values()
             ->all();
 
+        $recentOrdersQuery = StoreOrder::where('store_id', $store->id)
+            ->with(['location', 'cashier'])
+            ->latest('placed_at')
+            ->limit(5);
+        if ($selectedLocationId !== null) {
+            $recentOrdersQuery->where('location_id', $selectedLocationId);
+        }
+
         return [
+            'location_id' => $selectedLocationId !== null ? (string) $selectedLocationId : 'all',
+            'locations' => $locations,
             'metrics' => [
                 'total_orders' => $totalOrders,
                 'pending_orders' => (int) ($statusCounts['pending'] ?? 0),
@@ -330,9 +398,7 @@ trait StorehauseHelpers
                 ['status' => 'shipped', 'label' => 'Shipped', 'count' => (int) ($statusCounts['shipped'] ?? 0)],
                 ['status' => 'delivered', 'label' => 'Delivered', 'count' => (int) ($statusCounts['delivered'] ?? 0)],
             ],
-            'recent_orders' => StoreOrder::where('store_id', $store->id)
-                ->latest('placed_at')
-                ->limit(5)
+            'recent_orders' => $recentOrdersQuery
                 ->get()
                 ->map(fn (StoreOrder $order) => $this->formatOrder($order))
                 ->values(),

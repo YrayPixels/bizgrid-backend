@@ -144,4 +144,9 @@ class Store extends Model
     {
         return $this->hasMany(StoreDomain::class);
     }
+
+    public function locations(): HasMany
+    {
+        return $this->hasMany(StoreLocation::class);
+    }
 }

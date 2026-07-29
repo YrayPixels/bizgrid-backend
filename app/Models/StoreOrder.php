@@ -13,6 +13,9 @@ class StoreOrder extends Model
 
     protected $fillable = [
         'store_id',
+        'source',
+        'location_id',
+        'cashier_user_id',
         'store_customer_id',
         'order_number',
         'invoice_number',
@@ -24,6 +27,9 @@ class StoreOrder extends Model
         'delivery_fee',
         'status',
         'payment_status',
+        'payment_method',
+        'payment_reference',
+        'amount_tendered',
         'paystack_reference',
         'currency',
         'subtotal',
@@ -47,6 +53,7 @@ class StoreOrder extends Model
             'discount_amount' => 'decimal:2',
             'delivery_fee' => 'decimal:2',
             'total_amount' => 'decimal:2',
+            'amount_tendered' => 'decimal:2',
             'items' => 'array',
             'placed_at' => 'datetime',
             'paid_at' => 'datetime',
@@ -58,6 +65,16 @@ class StoreOrder extends Model
     public function store(): BelongsTo
     {
         return $this->belongsTo(Store::class);
+    }
+
+    public function location(): BelongsTo
+    {
+        return $this->belongsTo(StoreLocation::class, 'location_id');
+    }
+
+    public function cashier(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'cashier_user_id');
     }
 
     public function customer(): BelongsTo

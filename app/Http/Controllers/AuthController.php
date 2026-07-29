@@ -11,8 +11,10 @@ use App\Mail\MerchantEmailVerificationCodeEmail;
 use App\Mail\MerchantPasswordResetCodeEmail;
 use App\Mail\MerchantWelcomeEmail;
 use App\Models\Merchant;
+use App\Models\MerchantStaff;
 use App\Models\User;
 use App\Services\GoogleOAuthService;
+use App\Services\MerchantMembershipService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
@@ -28,6 +30,7 @@ class AuthController extends Controller
 
     public function __construct(
         private readonly GoogleOAuthService $googleOAuth,
+        private readonly MerchantMembershipService $membership,
     ) {}
 
     public function register(RegisterRequest $request): JsonResponse
@@ -78,7 +81,31 @@ class AuthController extends Controller
             ]);
         }
 
+        $staff = null;
         $merchant = Merchant::where('owner_user_id', $user->id)->first();
+        if (! $merchant) {
+            $staff = MerchantStaff::query()
+                ->with('merchant')
+                ->where('user_id', $user->id)
+                ->first();
+            if ($staff && $staff->status !== MerchantStaff::STATUS_ACTIVE) {
+                return response()->json([
+                    'message' => 'Your staff account is disabled. Contact your store owner.',
+                ], 403);
+            }
+            $merchant = $staff?->merchant;
+        } else {
+            // Heal staff accounts that accidentally got their own pending merchant.
+            $this->membership->discardOrphanOwnerMerchantForStaff($user);
+            $staff = MerchantStaff::query()
+                ->with('merchant')
+                ->where('user_id', $user->id)
+                ->where('status', MerchantStaff::STATUS_ACTIVE)
+                ->first();
+            if ($staff) {
+                $merchant = $staff->merchant;
+            }
+        }
         if ($merchant && $merchant->status === 'suspended') {
             return response()->json([
                 'message' => 'Your account has been suspended. Please contact support.',
@@ -91,7 +118,7 @@ class AuthController extends Controller
 
         return response()->json([
             'token' => $token,
-            'user' => $this->formatUser($user),
+            'user' => $this->formatUser($user->fresh()),
         ]);
     }
 
@@ -184,9 +211,25 @@ class AuthController extends Controller
             }
         }
 
-        $merchant = Merchant::ensurePendingForUser($user);
+        $staff = MerchantStaff::query()
+            ->with('merchant')
+            ->where('user_id', $user->id)
+            ->first();
+
+        if ($staff && $staff->status !== MerchantStaff::STATUS_ACTIVE) {
+            return $redirectWithError('Your staff account is disabled. Contact your store owner.');
+        }
+
+        // Active staff should join the employer store — never create their own merchant.
+        if ($staff && $staff->status === MerchantStaff::STATUS_ACTIVE) {
+            $this->membership->discardOrphanOwnerMerchantForStaff($user);
+            $merchant = $staff->merchant;
+        } else {
+            $merchant = Merchant::ensurePendingForUser($user);
+        }
+
         $this->invalidateAdminApiCache();
-        if ($merchant->status === 'suspended') {
+        if ($merchant && $merchant->status === 'suspended') {
             return $redirectWithError('Your account has been suspended. Please contact support.');
         }
 
@@ -335,11 +378,11 @@ class AuthController extends Controller
 
     public function me(Request $request): JsonResponse
     {
-        $merchant = Merchant::where('owner_user_id', $request->user()->id)->first();
-        if ($merchant && $merchant->status === 'suspended') {
+        $membership = app(\App\Services\MerchantMembershipService::class)->membershipFor($request->user());
+        if ($membership && $membership['merchant']->status === 'suspended') {
             return response()->json([
                 'message' => 'Your account has been suspended. Please contact support.',
-                'reason' => $merchant->suspension_reason,
+                'reason' => $membership['merchant']->suspension_reason,
             ], 403);
         }
 

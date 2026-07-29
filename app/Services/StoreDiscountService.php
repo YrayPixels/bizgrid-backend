@@ -92,13 +92,26 @@ class StoreDiscountService
      * @param  list<StoreDiscount>  $discounts
      * @return array{unit_price: float, compare_at_price: float|null, discount_label: string|null}
      */
-    public function resolveUnitPrice(StoreProduct $product, array $discounts = [], ?Carbon $at = null): array
+    public function resolveUnitPrice(
+        StoreProduct $product,
+        array $discounts = [],
+        ?Carbon $at = null,
+        ?float $baseUnitPrice = null,
+    ): array
     {
         $at ??= now();
         $regular = (float) $product->price;
         $salePrice = $product->sale_price !== null ? (float) $product->sale_price : null;
-        $unit = ($salePrice !== null && $salePrice >= 0 && $salePrice < $regular) ? $salePrice : $regular;
-        $label = ($salePrice !== null && $salePrice < $regular) ? 'Sale' : null;
+        $unit = $baseUnitPrice !== null
+            ? max(0, $baseUnitPrice)
+            : (($salePrice !== null && $salePrice >= 0 && $salePrice < $regular) ? $salePrice : $regular);
+        $label = $baseUnitPrice !== null
+            ? null
+            : (($salePrice !== null && $salePrice < $regular) ? 'Sale' : null);
+
+        $compareAt = $baseUnitPrice !== null && $baseUnitPrice < $regular
+            ? $regular
+            : (($salePrice !== null && $salePrice < $regular) ? $regular : null);
 
         $bestSeasonal = null;
         $bestPrice = $unit;
@@ -129,9 +142,14 @@ class StoreDiscountService
             $label = $bestSeasonal->name;
         }
 
+        $rounded = round(max(0, $unit), 2);
+        $compare = $compareAt !== null && $rounded < $compareAt
+            ? round($compareAt, 2)
+            : ($rounded < $regular ? round($regular, 2) : null);
+
         return [
-            'unit_price' => round(max(0, $unit), 2),
-            'compare_at_price' => $unit < $regular ? $regular : null,
+            'unit_price' => $rounded,
+            'compare_at_price' => $compare,
             'discount_label' => $label,
         ];
     }
