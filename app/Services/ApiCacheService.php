@@ -221,6 +221,17 @@ class ApiCacheService
             return null;
         }
 
+        // Staff/locations change often from the same session; avoid stale team lists.
+        if (
+            str_ends_with($path, '/staff')
+            || str_contains($path, '/staff/')
+            || str_ends_with($path, '/pos/locations')
+            || str_ends_with($path, '/locations')
+            || str_contains($path, '/locations/')
+        ) {
+            return null;
+        }
+
         return "api:merchant:{$userId}:{$path}{$queryHash}";
     }
 

@@ -123,6 +123,7 @@ class StoreProductController extends Controller
             'images' => 'nullable|array|max:12',
             'images.*' => 'nullable|string|max:2048',
             'sku' => 'nullable|string|max:120',
+            'barcode' => 'nullable|string|max:64',
             'brand' => 'nullable|string|max:120',
             'category' => 'nullable|string|max:120',
             'category_id' => 'nullable|uuid',
@@ -131,12 +132,18 @@ class StoreProductController extends Controller
             'variants' => 'nullable|array',
             'variants.*.name' => 'required_with:variants|string|max:80',
             'variants.*.options' => 'required_with:variants|array|min:1',
-            'variants.*.options.*' => 'string|max:80',
+            'variants.*.options.*' => 'nullable',
             'perks' => 'nullable|array',
             'perks.*' => 'string|max:160',
         ];
 
-        return $request->validate($rules);
+        $validated = $request->validate($rules);
+        if (array_key_exists('variants', $validated)) {
+            $validated['variants'] = app(\App\Services\ProductVariantResolver::class)
+                ->sanitizeForStorage($validated['variants']);
+        }
+
+        return $validated;
     }
 
     private function ownedStore(Request $request): Store

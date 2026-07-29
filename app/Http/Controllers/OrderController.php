@@ -26,13 +26,32 @@ class OrderController extends Controller
     {
         $store = $this->findOwnedStoreForUser($request);
 
-        return response()->json($this->buildMerchantDashboardPayload($store));
+        $locationParam = $request->query('location_id');
+        $locationId = null;
+        if (filled($locationParam) && $locationParam !== 'all') {
+            $locationId = (int) $locationParam;
+            if ($locationId <= 0) {
+                $locationId = null;
+            }
+        }
+
+        return response()->json($this->buildMerchantDashboardPayload($store, $locationId));
     }
 
     public function myOrders(Request $request): JsonResponse
     {
         $store = $this->findOwnedStoreForUser($request);
-        $query = StoreOrder::where('store_id', $store->id)->latest('placed_at');
+        $query = StoreOrder::where('store_id', $store->id)
+            ->with(['location', 'cashier'])
+            ->latest('placed_at');
+
+        if ($request->filled('source') && $request->source !== 'all') {
+            $query->where('source', $request->source);
+        }
+
+        if ($request->filled('location_id') && $request->location_id !== 'all') {
+            $query->where('location_id', (int) $request->location_id);
+        }
 
         if ($request->filled('status') && $request->status !== 'all') {
             $status = $this->orderLifecycle->normalizeFulfillmentStatus((string) $request->status);
@@ -70,7 +89,9 @@ class OrderController extends Controller
     public function myOrder(Request $request, int $orderId): JsonResponse
     {
         $store = $this->findOwnedStoreForUser($request);
-        $order = StoreOrder::where('store_id', $store->id)->findOrFail($orderId);
+        $order = StoreOrder::with(['location', 'cashier'])
+            ->where('store_id', $store->id)
+            ->findOrFail($orderId);
 
         return response()->json([
             'order' => $this->formatOrder($order),

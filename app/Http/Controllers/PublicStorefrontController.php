@@ -14,8 +14,10 @@ use App\Models\StoreVisit;
 use App\Services\AbandonedRecoveryService;
 use App\Services\MerchantUsageEnforcementService;
 use App\Services\OrderInvoiceService;
+use App\Services\OrderPlacementService;
 use App\Services\PaystackService;
 use App\Services\PlatformNotificationService;
+use App\Services\ShippingQuoteService;
 use App\Services\StoreCustomerService;
 use App\Services\StoreNotificationService;
 use App\Services\StoreCategoryService;
@@ -24,6 +26,7 @@ use App\Services\StorefrontBuilderService;
 use App\Services\StorefrontPublishService;
 use App\Services\StoreOrderItemService;
 use App\Services\StoreProductService;
+use App\Services\ProductVariantResolver;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -48,6 +51,9 @@ class PublicStorefrontController extends Controller
         private readonly StoreCustomerService $customers,
         private readonly StoreOrderItemService $orderItems,
         private readonly OrderInvoiceService $invoices,
+        private readonly OrderPlacementService $orderPlacement,
+        private readonly ShippingQuoteService $shippingQuotes,
+        private readonly ProductVariantResolver $variants,
     ) {}
 
     public function listPublished(): JsonResponse
@@ -185,6 +191,8 @@ class PublicStorefrontController extends Controller
             'customer.email' => 'required|email|max:255',
             'customer.phone' => 'required|string|max:40',
             'delivery_address' => 'required|string|max:2000',
+            'delivery_city' => 'nullable|string|max:120',
+            'delivery_state' => 'nullable|string|max:120',
             'delivery_method' => 'nullable|string|in:delivery,pickup',
             'notes' => 'nullable|string|max:1000',
             'callback_url' => 'nullable|url|max:2048',
@@ -213,65 +221,26 @@ class PublicStorefrontController extends Controller
             return response()->json(['message' => 'Delivery is not available for this store.'], 422);
         }
 
-        $deliveryFee = $deliveryMethod === 'delivery'
-            ? (float) ($store->default_delivery_fee ?? 0)
-            : 0.0;
-
-        $products = StoreProduct::query()
-            ->where('store_id', $store->id)
-            ->where('status', 'active')
-            ->get()
-            ->keyBy(fn (StoreProduct $product) => $product->id);
-        $activeDiscounts = $this->discountService->activeModelsForStore($store);
-        $currency = 'NGN';
-        $items = [];
-        $subtotal = 0;
-
-        foreach ($data['items'] as $line) {
-            $product = $products->get((string) $line['product_id']);
-            if (! $product) {
-                return response()->json([
-                    'message' => "Product {$line['product_id']} is no longer available.",
-                ], 422);
-            }
-
-            $quantity = (int) $line['quantity'];
-            if ($product->stock_quantity !== null && $product->stock_quantity < $quantity) {
-                return response()->json([
-                    'message' => "{$product->name} only has {$product->stock_quantity} left in stock.",
-                ], 422);
-            }
-
-            $selectedOptions = $this->normalizeSelectedOptions(
-                is_array($product->variants) ? $product->variants : [],
-                is_array($line['selected_options'] ?? null) ? $line['selected_options'] : [],
-            );
-
-            if ($selectedOptions instanceof JsonResponse) {
-                return $selectedOptions;
-            }
-
-            $priced = $this->discountService->resolveUnitPrice($product, $activeDiscounts);
-            $unitPrice = (float) $priced['unit_price'];
-            $lineTotal = $unitPrice * $quantity;
-            $currency = (string) ($product->currency ?: $currency);
-            $subtotal += $lineTotal;
-            $items[] = [
-                'product_id' => $product->id,
-                'name' => $product->name,
-                'quantity' => $quantity,
-                'unit_price' => $unitPrice,
-                'compare_at_price' => $priced['compare_at_price'],
-                'discount_label' => $priced['discount_label'],
-                'total' => $lineTotal,
-                'currency' => $currency,
-                'image_url' => $product->image_url,
-                'selected_options' => $selectedOptions,
-            ];
+        // Price items first (delivery fee 0) so free-shipping thresholds use merchandise subtotal.
+        $priced = $this->orderPlacement->buildPricedItems($store, $data['items'], 0.0);
+        if ($priced instanceof JsonResponse) {
+            return $priced;
         }
 
-        $cartDiscount = $this->discountService->resolveCartDiscount($subtotal, $activeDiscounts);
-        $discountAmount = (float) $cartDiscount['amount'];
+        $shippingQuote = $this->shippingQuotes->quoteDelivery(
+            $store,
+            $deliveryMethod,
+            (string) $data['delivery_address'],
+            isset($data['delivery_city']) ? (string) $data['delivery_city'] : null,
+            isset($data['delivery_state']) ? (string) $data['delivery_state'] : null,
+            (float) $priced['subtotal'] - (float) $priced['discount_amount'],
+        );
+        $deliveryFee = (float) $shippingQuote['delivery_fee'];
+        $items = $priced['items'];
+        $subtotal = (float) $priced['subtotal'];
+        $discountAmount = (float) $priced['discount_amount'];
+        $cartDiscountLabel = $priced['discount_label'];
+        $currency = (string) $priced['currency'];
         $totalAmount = max(0, round($subtotal - $discountAmount + $deliveryFee, 2));
 
         $store->loadMissing('merchant');
@@ -281,6 +250,13 @@ class PublicStorefrontController extends Controller
 
         $paystackEnabled = $this->paystack->isConfigured();
 
+        $addressParts = array_values(array_filter([
+            trim((string) $data['delivery_address']),
+            isset($data['delivery_city']) ? trim((string) $data['delivery_city']) : null,
+            isset($data['delivery_state']) ? trim((string) $data['delivery_state']) : null,
+        ], fn ($part) => filled($part)));
+        $deliveryAddress = implode(', ', $addressParts);
+
         $lowStockProducts = [];
 
         $order = DB::transaction(function () use (
@@ -289,12 +265,14 @@ class PublicStorefrontController extends Controller
             $items,
             $subtotal,
             $discountAmount,
-            $cartDiscount,
+            $cartDiscountLabel,
             $deliveryFee,
             $deliveryMethod,
+            $deliveryAddress,
             $totalAmount,
             $currency,
             $paystackEnabled,
+            $shippingQuote,
             &$lowStockProducts
         ) {
             $order = StoreOrder::create([
@@ -303,15 +281,18 @@ class PublicStorefrontController extends Controller
                 'customer_name' => trim($data['customer']['first_name'].' '.$data['customer']['last_name']),
                 'customer_email' => strtolower($data['customer']['email']),
                 'customer_phone' => $data['customer']['phone'],
-                'delivery_address' => $data['delivery_address'],
+                'delivery_address' => $deliveryAddress,
                 'delivery_method' => $deliveryMethod,
                 'delivery_fee' => $deliveryFee,
+                'location_id' => $shippingQuote['location_id'],
                 'status' => 'pending',
                 'payment_status' => $paystackEnabled ? 'awaiting_payment' : 'pending',
+                'source' => 'online',
+                'payment_method' => $paystackEnabled ? 'paystack' : null,
                 'currency' => $currency,
                 'subtotal' => $subtotal,
                 'discount_amount' => $discountAmount,
-                'discount_label' => $cartDiscount['label'],
+                'discount_label' => $cartDiscountLabel,
                 'total_amount' => $totalAmount,
                 'items' => $items,
                 'notes' => $data['notes'] ?? null,
@@ -334,7 +315,7 @@ class PublicStorefrontController extends Controller
 
         $this->orderItems->syncForOrder($order, $items);
         $this->customers->upsertFromOrder($store, $order->fresh() ?? $order);
-        $order = $order->fresh() ?? $order;
+        $order = $order->fresh(['location', 'cashier']) ?? $order;
 
         $this->storeNotifications->orderPlaced($store, $order, $paystackEnabled);
 
@@ -357,6 +338,14 @@ class PublicStorefrontController extends Controller
 
         $payload = [
             'order' => $this->formatOrder($order),
+            'shipping' => [
+                'delivery_fee' => $deliveryFee,
+                'location_id' => $shippingQuote['location_id']
+                    ? (string) $shippingQuote['location_id']
+                    : null,
+                'location_name' => $shippingQuote['location_name'],
+                'free_shipping_applied' => $shippingQuote['free_shipping_applied'],
+            ],
         ];
 
         if ($paystackEnabled) {
@@ -688,41 +677,6 @@ class PublicStorefrontController extends Controller
         ], 201);
     }
 
-    /**
-     * @param  list<array{name?: mixed, options?: mixed}>  $variantGroups
-     * @param  array<string, mixed>  $selected
-     * @return array<string, string>|JsonResponse
-     */
-    private function normalizeSelectedOptions(array $variantGroups, array $selected): array|JsonResponse
-    {
-        $normalized = [];
-
-        foreach ($variantGroups as $group) {
-            $name = trim((string) ($group['name'] ?? ''));
-            $options = is_array($group['options'] ?? null)
-                ? array_values(array_filter(array_map(
-                    fn ($option) => trim((string) $option),
-                    $group['options'],
-                ), fn (string $option) => $option !== ''))
-                : [];
-
-            if ($name === '' || $options === []) {
-                continue;
-            }
-
-            $value = trim((string) ($selected[$name] ?? ''));
-            if ($value === '' || ! in_array($value, $options, true)) {
-                return response()->json([
-                    'message' => "Please select a valid {$name} option.",
-                ], 422);
-            }
-
-            $normalized[$name] = $value;
-        }
-
-        return $normalized;
-    }
-
     private function formatProductReview(StoreProductReview $review): array
     {
         return [
@@ -779,6 +733,7 @@ class PublicStorefrontController extends Controller
                     ? (float) $store->default_delivery_fee
                     : 0.0,
                 'fulfilment_promise' => $store->fulfilment_promise,
+                'shipping_locations' => $this->shippingQuotes->formatPublicLocations($store),
             ],
         ];
     }

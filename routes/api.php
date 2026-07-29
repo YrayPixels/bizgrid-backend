@@ -20,11 +20,14 @@ use App\Http\Controllers\AiChatController;
 use App\Http\Controllers\AuthController;
 use App\Http\Controllers\BillingController;
 use App\Http\Controllers\CustomerController;
+use App\Http\Controllers\LocationController;
 use App\Http\Controllers\MarketingController;
 use App\Http\Controllers\OpenTokenController;
 use App\Http\Controllers\OrderController;
 use App\Http\Controllers\PaystackWebhookController;
+use App\Http\Controllers\PosController;
 use App\Http\Controllers\PublicStorefrontController;
+use App\Http\Controllers\StaffController;
 use App\Http\Controllers\StoreCategoryController;
 use App\Http\Controllers\StoreController;
 use App\Http\Controllers\StoreDomainController;
@@ -149,95 +152,120 @@ Route::prefix('storehause')->group(function () {
     Route::post('/webhooks/tiktok', [TikTokWebhookController::class, 'handle'])->middleware('throttle:120,1');
 
     Route::middleware(['auth:sanctum', 'merchant.active', 'api.cache:merchant'])->group(function () {
-        // AI proxies — authenticated merchants only (platform keys must not be public)
-        Route::get('/ai/config', [AiConfigController::class, 'show']);
-        Route::post('/ai/chat', [AiChatController::class, 'chat'])->middleware('throttle:60,1');
-        Route::post('/ai/chat/stream', [AiChatController::class, 'chatStream'])->middleware('throttle:60,1');
-        Route::post('/ai/open-token', [OpenTokenController::class, 'generate'])->middleware('throttle:30,1');
-        Route::post('/ai/vision/product', [VisionController::class, 'analyzeProduct'])->middleware('throttle:30,1');
-
-        Route::get('/billing/subscription', [BillingController::class, 'subscription']);
-        Route::post('/billing/checkout', [BillingController::class, 'checkout'])->middleware('throttle:20,1');
-        Route::post('/billing/topup', [BillingController::class, 'topup'])->middleware('throttle:20,1');
-        Route::post('/billing/portal', [BillingController::class, 'portal'])->middleware('throttle:20,1');
-        Route::post('/ai/storefront-code/generate', [StorefrontCodeController::class, 'generate']);
         Route::get('/auth/me', [AuthController::class, 'me']);
         Route::post('/auth/logout', [AuthController::class, 'logout']);
         Route::post('/auth/verify-email', [AuthController::class, 'verifyEmail'])->middleware('throttle:10,1');
         Route::post('/auth/resend-email-verification', [AuthController::class, 'resendEmailVerification'])->middleware('throttle:5,1');
-        Route::get('/dashboard', [OrderController::class, 'dashboard']);
-        Route::get('/orders', [OrderController::class, 'myOrders']);
-        Route::get('/orders/{orderId}', [OrderController::class, 'myOrder']);
-        Route::get('/orders/{orderId}/invoice', [OrderController::class, 'invoice']);
-        Route::patch('/orders/{orderId}/status', [OrderController::class, 'updateMyOrderStatus']);
-        Route::get('/customers', [CustomerController::class, 'index']);
-        Route::get('/customers/{customerId}', [CustomerController::class, 'show']);
-        Route::patch('/customers/{customerId}', [CustomerController::class, 'update']);
-        Route::post('/stores', [StoreController::class, 'createStore']);
-        Route::get('/stores/me', [StoreController::class, 'myStore']);
-        Route::patch('/stores/me', [StoreController::class, 'updateMyStore']);
-        Route::get('/stores/me/domains', [StoreDomainController::class, 'index']);
-        Route::post('/stores/me/domains', [StoreDomainController::class, 'store']);
-        Route::post('/stores/me/domains/{domainId}/verify', [StoreDomainController::class, 'verify']);
-        Route::patch('/stores/me/domains/{domainId}/primary', [StoreDomainController::class, 'setPrimary']);
-        Route::delete('/stores/me/domains/{domainId}', [StoreDomainController::class, 'destroy']);
-        Route::get('/stores/me/payments', [StorePaymentController::class, 'show']);
-        Route::patch('/stores/me/payments', [StorePaymentController::class, 'update']);
-        Route::post('/stores/{storeId}/images', [StoreController::class, 'uploadStorefrontImage']);
-        Route::post('/stores/{storeId}/publish', [StoreController::class, 'publishStorefront']);
-        Route::post('/ai/storefront/generate', [StoreController::class, 'generateStorefront']);
-        Route::get('/ai/storefront/{storeId}', [StoreController::class, 'getStorefront']);
-        Route::patch('/ai/storefront/{storeId}', [StoreController::class, 'updateStorefront']);
 
-        Route::get('/products', [StoreProductController::class, 'index']);
-        Route::post('/products', [StoreProductController::class, 'store']);
-        Route::post('/products/import', [StoreProductController::class, 'import']);
-        Route::post('/products/{productId}/duplicate', [StoreProductController::class, 'duplicate']);
-        Route::patch('/products/{productId}', [StoreProductController::class, 'update']);
-        Route::delete('/products/{productId}', [StoreProductController::class, 'destroy']);
-
-        Route::get('/discounts', [StoreDiscountController::class, 'index']);
-        Route::post('/discounts', [StoreDiscountController::class, 'store']);
-        Route::patch('/discounts/{discountId}', [StoreDiscountController::class, 'update']);
-        Route::delete('/discounts/{discountId}', [StoreDiscountController::class, 'destroy']);
-
-        Route::get('/categories', [StoreCategoryController::class, 'index']);
-        Route::post('/categories', [StoreCategoryController::class, 'store']);
-        Route::patch('/categories/{categoryId}', [StoreCategoryController::class, 'update']);
-        Route::delete('/categories/{categoryId}', [StoreCategoryController::class, 'destroy']);
-
-        Route::prefix('marketing')->group(function () {
-            Route::get('/status', [MarketingController::class, 'status']);
-            Route::get('/facebook/connect', [MarketingController::class, 'connectFacebook']);
-            Route::delete('/facebook/disconnect', [MarketingController::class, 'disconnectFacebook']);
-            Route::post('/whatsapp/connect', [MarketingController::class, 'connectWhatsApp']);
-            Route::delete('/whatsapp/disconnect', [MarketingController::class, 'disconnectWhatsApp']);
-            Route::post('/tiktok/connect', [MarketingController::class, 'connectTikTok']);
-            Route::delete('/tiktok/disconnect', [MarketingController::class, 'disconnectTikTok']);
-            Route::get('/tiktok/creator/connect', [MarketingController::class, 'connectTikTokCreator']);
-            Route::delete('/tiktok/creator/disconnect', [MarketingController::class, 'disconnectTikTokCreator']);
-            Route::post('/tiktok/publish', [MarketingController::class, 'publishTikTokVideo']);
-            Route::patch('/messaging/settings', [MarketingController::class, 'updateMessagingSettings']);
-            Route::get('/conversations', [MarketingController::class, 'conversations']);
-            Route::post('/chat', [MarketingController::class, 'chat']);
-            Route::get('/posts', [MarketingController::class, 'posts']);
-            Route::get('/abandoned', [MarketingController::class, 'abandoned']);
-            Route::post('/abandoned/draft-message', [MarketingController::class, 'draftAbandonedMessage']);
-            Route::post('/abandoned/send', [MarketingController::class, 'sendAbandonedMessage']);
+        // Mobile staff sell channel — owners, managers, cashiers
+        Route::middleware('merchant.capability:sell')->prefix('pos')->group(function () {
+            Route::get('/catalog', [PosController::class, 'catalog']);
+            Route::get('/lookup', [PosController::class, 'lookup'])->middleware('throttle:120,1');
+            Route::get('/payment-info', [PosController::class, 'paymentInfo']);
+            Route::post('/orders', [PosController::class, 'placeOrder'])->middleware('throttle:60,1');
+            Route::get('/orders', [PosController::class, 'orders']);
+            Route::get('/orders/{orderId}', [PosController::class, 'showOrder']);
+            Route::get('/locations', [LocationController::class, 'index']);
         });
 
-        Route::prefix('storefront-builder')->group(function () {
-            Route::post('/sessions', [StorefrontBuilderController::class, 'startSession']);
-            Route::get('/sessions/current', [StorefrontBuilderController::class, 'currentSession']);
-            Route::post('/sessions/{sessionId}/messages', [StorefrontBuilderController::class, 'sendMessage']);
-            Route::put('/sessions/{sessionId}/snapshot', [StorefrontBuilderController::class, 'saveSnapshot']);
-            Route::put('/sessions/{sessionId}/project', [StorefrontBuilderController::class, 'saveProject']);
-            Route::get('/sessions/{sessionId}/project', [StorefrontBuilderController::class, 'getProject']);
-            Route::post('/sessions/{sessionId}/clear', [StorefrontBuilderController::class, 'clearMessages']);
-            Route::post('/sessions/{sessionId}/select-template', [StorefrontBuilderController::class, 'selectTemplate']);
-            Route::post('/sessions/{sessionId}/generate', [StorefrontBuilderController::class, 'generateDraft']);
-            Route::post('/sessions/{sessionId}/generate-stream', [StorefrontBuilderController::class, 'generateDraftStream']);
-            Route::post('/sessions/{sessionId}/edit', [StorefrontBuilderController::class, 'applyEdit']);
+        // Staff + location management — owners and managers
+        Route::middleware('merchant.capability:manage_staff')->group(function () {
+            Route::get('/staff', [StaffController::class, 'index']);
+            Route::post('/staff', [StaffController::class, 'store']);
+            Route::patch('/staff/{staffId}', [StaffController::class, 'update']);
+            Route::post('/locations', [LocationController::class, 'store']);
+            Route::patch('/locations/{locationId}', [LocationController::class, 'update']);
+            Route::delete('/locations/{locationId}', [LocationController::class, 'destroy']);
+        });
+
+        // Full merchant admin — owners and managers (cashiers blocked)
+        Route::middleware('merchant.capability:admin')->group(function () {
+            // AI proxies — authenticated merchants only (platform keys must not be public)
+            Route::get('/ai/config', [AiConfigController::class, 'show']);
+            Route::post('/ai/chat', [AiChatController::class, 'chat'])->middleware('throttle:60,1');
+            Route::post('/ai/chat/stream', [AiChatController::class, 'chatStream'])->middleware('throttle:60,1');
+            Route::post('/ai/open-token', [OpenTokenController::class, 'generate'])->middleware('throttle:30,1');
+            Route::post('/ai/vision/product', [VisionController::class, 'analyzeProduct'])->middleware('throttle:30,1');
+
+            Route::get('/billing/subscription', [BillingController::class, 'subscription']);
+            Route::post('/billing/checkout', [BillingController::class, 'checkout'])->middleware('throttle:20,1');
+            Route::post('/billing/topup', [BillingController::class, 'topup'])->middleware('throttle:20,1');
+            Route::post('/billing/portal', [BillingController::class, 'portal'])->middleware('throttle:20,1');
+            Route::post('/ai/storefront-code/generate', [StorefrontCodeController::class, 'generate']);
+            Route::get('/dashboard', [OrderController::class, 'dashboard']);
+            Route::get('/orders', [OrderController::class, 'myOrders']);
+            Route::get('/orders/{orderId}', [OrderController::class, 'myOrder']);
+            Route::get('/orders/{orderId}/invoice', [OrderController::class, 'invoice']);
+            Route::patch('/orders/{orderId}/status', [OrderController::class, 'updateMyOrderStatus']);
+            Route::get('/customers', [CustomerController::class, 'index']);
+            Route::get('/customers/{customerId}', [CustomerController::class, 'show']);
+            Route::patch('/customers/{customerId}', [CustomerController::class, 'update']);
+            Route::post('/stores', [StoreController::class, 'createStore']);
+            Route::get('/stores/me', [StoreController::class, 'myStore']);
+            Route::patch('/stores/me', [StoreController::class, 'updateMyStore']);
+            Route::get('/stores/me/domains', [StoreDomainController::class, 'index']);
+            Route::post('/stores/me/domains', [StoreDomainController::class, 'store']);
+            Route::post('/stores/me/domains/{domainId}/verify', [StoreDomainController::class, 'verify']);
+            Route::patch('/stores/me/domains/{domainId}/primary', [StoreDomainController::class, 'setPrimary']);
+            Route::delete('/stores/me/domains/{domainId}', [StoreDomainController::class, 'destroy']);
+            Route::get('/stores/me/payments', [StorePaymentController::class, 'show']);
+            Route::patch('/stores/me/payments', [StorePaymentController::class, 'update']);
+            Route::post('/stores/{storeId}/images', [StoreController::class, 'uploadStorefrontImage']);
+            Route::post('/stores/{storeId}/publish', [StoreController::class, 'publishStorefront']);
+            Route::post('/ai/storefront/generate', [StoreController::class, 'generateStorefront']);
+            Route::get('/ai/storefront/{storeId}', [StoreController::class, 'getStorefront']);
+            Route::patch('/ai/storefront/{storeId}', [StoreController::class, 'updateStorefront']);
+
+            Route::get('/products', [StoreProductController::class, 'index']);
+            Route::post('/products', [StoreProductController::class, 'store']);
+            Route::post('/products/import', [StoreProductController::class, 'import']);
+            Route::post('/products/{productId}/duplicate', [StoreProductController::class, 'duplicate']);
+            Route::patch('/products/{productId}', [StoreProductController::class, 'update']);
+            Route::delete('/products/{productId}', [StoreProductController::class, 'destroy']);
+
+            Route::get('/discounts', [StoreDiscountController::class, 'index']);
+            Route::post('/discounts', [StoreDiscountController::class, 'store']);
+            Route::patch('/discounts/{discountId}', [StoreDiscountController::class, 'update']);
+            Route::delete('/discounts/{discountId}', [StoreDiscountController::class, 'destroy']);
+
+            Route::get('/categories', [StoreCategoryController::class, 'index']);
+            Route::post('/categories', [StoreCategoryController::class, 'store']);
+            Route::patch('/categories/{categoryId}', [StoreCategoryController::class, 'update']);
+            Route::delete('/categories/{categoryId}', [StoreCategoryController::class, 'destroy']);
+
+            Route::prefix('marketing')->group(function () {
+                Route::get('/status', [MarketingController::class, 'status']);
+                Route::get('/facebook/connect', [MarketingController::class, 'connectFacebook']);
+                Route::delete('/facebook/disconnect', [MarketingController::class, 'disconnectFacebook']);
+                Route::post('/whatsapp/connect', [MarketingController::class, 'connectWhatsApp']);
+                Route::delete('/whatsapp/disconnect', [MarketingController::class, 'disconnectWhatsApp']);
+                Route::post('/tiktok/connect', [MarketingController::class, 'connectTikTok']);
+                Route::delete('/tiktok/disconnect', [MarketingController::class, 'disconnectTikTok']);
+                Route::get('/tiktok/creator/connect', [MarketingController::class, 'connectTikTokCreator']);
+                Route::delete('/tiktok/creator/disconnect', [MarketingController::class, 'disconnectTikTokCreator']);
+                Route::post('/tiktok/publish', [MarketingController::class, 'publishTikTokVideo']);
+                Route::patch('/messaging/settings', [MarketingController::class, 'updateMessagingSettings']);
+                Route::get('/conversations', [MarketingController::class, 'conversations']);
+                Route::post('/chat', [MarketingController::class, 'chat']);
+                Route::get('/posts', [MarketingController::class, 'posts']);
+                Route::get('/abandoned', [MarketingController::class, 'abandoned']);
+                Route::post('/abandoned/draft-message', [MarketingController::class, 'draftAbandonedMessage']);
+                Route::post('/abandoned/send', [MarketingController::class, 'sendAbandonedMessage']);
+            });
+
+            Route::prefix('storefront-builder')->group(function () {
+                Route::post('/sessions', [StorefrontBuilderController::class, 'startSession']);
+                Route::get('/sessions/current', [StorefrontBuilderController::class, 'currentSession']);
+                Route::post('/sessions/{sessionId}/messages', [StorefrontBuilderController::class, 'sendMessage']);
+                Route::put('/sessions/{sessionId}/snapshot', [StorefrontBuilderController::class, 'saveSnapshot']);
+                Route::put('/sessions/{sessionId}/project', [StorefrontBuilderController::class, 'saveProject']);
+                Route::get('/sessions/{sessionId}/project', [StorefrontBuilderController::class, 'getProject']);
+                Route::post('/sessions/{sessionId}/clear', [StorefrontBuilderController::class, 'clearMessages']);
+                Route::post('/sessions/{sessionId}/select-template', [StorefrontBuilderController::class, 'selectTemplate']);
+                Route::post('/sessions/{sessionId}/generate', [StorefrontBuilderController::class, 'generateDraft']);
+                Route::post('/sessions/{sessionId}/generate-stream', [StorefrontBuilderController::class, 'generateDraftStream']);
+                Route::post('/sessions/{sessionId}/edit', [StorefrontBuilderController::class, 'applyEdit']);
+            });
         });
     });
 });

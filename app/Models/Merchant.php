@@ -69,6 +69,16 @@ class Merchant extends Model
         return $this->hasMany(Store::class);
     }
 
+    public function staff(): HasMany
+    {
+        return $this->hasMany(MerchantStaff::class);
+    }
+
+    public function staffInvites(): HasMany
+    {
+        return $this->hasMany(MerchantStaffInvite::class);
+    }
+
     public function hasCompletedOnboarding(): bool
     {
         if (array_key_exists('stores_count', $this->attributes)) {

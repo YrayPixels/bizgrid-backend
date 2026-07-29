@@ -59,4 +59,9 @@ class User extends Authenticatable
     {
         return $this->hasOne(Merchant::class, 'owner_user_id');
     }
+
+    public function staffMembership(): HasOne
+    {
+        return $this->hasOne(MerchantStaff::class, 'user_id');
+    }
 }

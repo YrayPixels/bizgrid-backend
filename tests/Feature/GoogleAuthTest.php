@@ -247,6 +247,87 @@ it('rejects password login for google-only accounts', function () {
     ])->assertStatus(422);
 });
 
+it('logs staff google sign-in into the employer store without creating a merchant', function () {
+    Mail::fake();
+    $state = seedMerchantGoogleOAuthState();
+
+    $owner = User::factory()->create([
+        'email' => 'owner@example.com',
+        'password' => 'secret12345',
+    ]);
+    $merchant = \App\Models\Merchant::create([
+        'owner_user_id' => $owner->id,
+        'business_name' => 'Owner Store',
+        'slug' => 'owner-store',
+        'contact_name' => 'Owner',
+        'email' => 'owner@example.com',
+        'status' => 'active',
+        'subscription_plan' => 'starter',
+        'subscription_status' => 'trialing',
+    ]);
+
+    $cashier = User::factory()->create([
+        'email' => 'google@example.com',
+        'password' => 'secret12345',
+        'google_id' => null,
+        'email_verified_at' => now(),
+    ]);
+
+    \App\Models\MerchantStaff::create([
+        'merchant_id' => $merchant->id,
+        'user_id' => $cashier->id,
+        'role' => \App\Models\MerchantStaff::ROLE_CASHIER,
+        'status' => \App\Models\MerchantStaff::STATUS_ACTIVE,
+    ]);
+
+    // Simulate the previous bug: an orphan pending merchant already exists for the cashier.
+    \App\Models\Merchant::create([
+        'owner_user_id' => $cashier->id,
+        'business_name' => 'Google Merchant',
+        'slug' => 'google-merchant-orphan',
+        'contact_name' => 'Cashier',
+        'email' => 'google@example.com',
+        'status' => 'pending',
+        'subscription_plan' => 'starter',
+        'subscription_status' => 'trialing',
+    ]);
+
+    Socialite::shouldReceive('driver')
+        ->once()
+        ->with('google')
+        ->andReturnSelf();
+
+    Socialite::shouldReceive('redirectUrl')
+        ->once()
+        ->andReturnSelf();
+
+    Socialite::shouldReceive('stateless')
+        ->once()
+        ->andReturnSelf();
+
+    Socialite::shouldReceive('user')
+        ->once()
+        ->andReturn(fakeGoogleUser());
+
+    $this->get('/api/storehause/auth/google/callback?code=test-code&state='.$state)
+        ->assertRedirect()
+        ->assertRedirectContains('auth_code=');
+
+    $cashier->refresh();
+    expect($cashier->google_id)->toBe('google-user-123');
+    expect(\App\Models\Merchant::where('owner_user_id', $cashier->id)->exists())->toBeFalse();
+    expect(\App\Models\Merchant::where('email', 'google@example.com')->where('owner_user_id', $cashier->id)->exists())->toBeFalse();
+
+    $membership = app(\App\Services\MerchantMembershipService::class)->formatMembership($cashier);
+    expect($membership['role'])->toBe('cashier')
+        ->and($membership['can_sell'])->toBeTrue()
+        ->and($membership['can_access_admin'])->toBeFalse()
+        ->and($membership['redirect'])->toBe('/sell')
+        ->and($membership['merchant_id'])->toBe((string) $merchant->id);
+
+    Mail::assertNothingSent();
+});
+
 it('rejects google callback with missing oauth state', function () {
     $this->get('/api/storehause/auth/google/callback?code=test-code')
         ->assertRedirect()

@@ -27,6 +27,7 @@ class StoreProduct extends Model
         'image_url',
         'images',
         'sku',
+        'barcode',
         'brand',
         'category',
         'category_id',

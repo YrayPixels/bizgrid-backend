@@ -123,6 +123,7 @@ class StoreProductService
             'image_url' => $product->image_url,
             'images' => $product->images,
             'sku' => $product->sku,
+            'barcode' => $product->barcode,
             'brand' => $product->brand,
             'category' => $product->category,
             'category_id' => $product->category_id,
@@ -156,6 +157,7 @@ class StoreProductService
             'image_url' => $product->image_url,
             'images' => $product->images,
             'sku' => $product->sku,
+            'barcode' => null,
             'brand' => $product->brand,
             'category_id' => $product->category_id,
             'stock_quantity' => $product->stock_quantity,
@@ -328,6 +330,7 @@ class StoreProductService
             'image_url' => $product->image_url,
             'images' => $this->formatImages($product),
             'sku' => $product->sku,
+            'barcode' => $product->barcode,
             'brand' => $product->brand,
             'category' => $product->categoryRelation?->name ?? $product->category,
             'category_id' => $product->category_id,
@@ -335,7 +338,7 @@ class StoreProductService
             'status' => $product->status,
             'in_stock' => $this->isInStock($product),
             'low_stock' => $this->isLowStock($product),
-            'variants' => $product->variants,
+            'variants' => app(ProductVariantResolver::class)->normalizeGroups($product->variants),
             'perks' => $product->perks,
         ];
     }
@@ -385,6 +388,9 @@ class StoreProductService
             'sku' => isset($data['sku']) && trim((string) $data['sku']) !== ''
                 ? trim((string) $data['sku'])
                 : null,
+            'barcode' => isset($data['barcode']) && trim((string) $data['barcode']) !== ''
+                ? trim((string) $data['barcode'])
+                : null,
             'brand' => isset($data['brand']) && trim((string) $data['brand']) !== ''
                 ? trim((string) $data['brand'])
                 : null,
@@ -397,7 +403,9 @@ class StoreProductService
                 'archived' => 'archived',
                 default => 'active',
             },
-            'variants' => $data['variants'] ?? null,
+            'variants' => array_key_exists('variants', $data)
+                ? app(ProductVariantResolver::class)->sanitizeForStorage($data['variants'])
+                : null,
             'perks' => $data['perks'] ?? null,
             'sort_order' => isset($data['sort_order']) ? (int) $data['sort_order'] : 0,
         ];

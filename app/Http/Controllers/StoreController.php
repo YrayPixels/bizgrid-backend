@@ -47,6 +47,17 @@ class StoreController extends Controller
         ], $this->businessProfileRules(required: true)));
 
         $user = $request->user();
+
+        $staffMembership = \App\Models\MerchantStaff::query()
+            ->where('user_id', $user->id)
+            ->where('status', \App\Models\MerchantStaff::STATUS_ACTIVE)
+            ->exists();
+        if ($staffMembership) {
+            return response()->json([
+                'message' => 'Staff accounts cannot create a store. Ask the owner to manage the store.',
+            ], 403);
+        }
+
         $existingStore = Store::whereHas('merchant', fn ($query) => $query->where('owner_user_id', $user->id))->first();
 
         if ($existingStore) {
@@ -116,6 +127,8 @@ class StoreController extends Controller
             ['merchant_id' => $merchant->id],
         );
 
+        app(\App\Services\MerchantMembershipService::class)->ensureDefaultLocation($store);
+
         $this->invalidateUserApiCache($user->id);
         $this->invalidateStoreApiCache($store);
         $this->invalidateAdminApiCache();
@@ -127,16 +140,7 @@ class StoreController extends Controller
 
     public function myStore(Request $request): JsonResponse
     {
-        $store = Store::with('merchant')
-            ->whereHas('merchant', fn ($query) => $query->where('owner_user_id', $request->user()->id))
-            ->latest()
-            ->first();
-
-        if (! $store) {
-            return response()->json([
-                'message' => 'Store not found.',
-            ], 404);
-        }
+        $store = $this->findOwnedStoreForUser($request);
 
         return response()->json([
             'store' => array_merge($this->formatStore($store), $this->publishService->publishMeta($store)),
@@ -145,10 +149,7 @@ class StoreController extends Controller
 
     public function updateMyStore(Request $request): JsonResponse
     {
-        $store = Store::with('merchant')
-            ->whereHas('merchant', fn ($query) => $query->where('owner_user_id', $request->user()->id))
-            ->latest()
-            ->firstOrFail();
+        $store = $this->findOwnedStoreForUser($request);
 
         $data = $request->validate(array_merge([
             'business_name' => 'sometimes|string|max:160',
