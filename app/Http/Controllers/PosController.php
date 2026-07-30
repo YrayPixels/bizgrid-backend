@@ -66,6 +66,7 @@ class PosController extends Controller
                 'id' => (string) $store->id,
                 'name' => $store->name,
                 'currency' => 'NGN',
+                'logo_url' => $store->logo_url,
             ],
             'categories' => $categories,
             'products' => $products,
@@ -102,6 +103,7 @@ class PosController extends Controller
                 'id' => (string) $store->id,
                 'name' => $store->name,
                 'currency' => 'NGN',
+                'logo_url' => $store->logo_url,
             ],
             'categories' => $categories,
             'products' => collect($paginator->items())
