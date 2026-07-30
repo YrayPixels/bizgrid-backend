@@ -72,6 +72,51 @@ class PosController extends Controller
         ]);
     }
 
+    /**
+     * Full active catalog for offline POS cache (paginated).
+     */
+    public function catalogSync(Request $request): JsonResponse
+    {
+        $store = $this->findOwnedStoreForUser($request);
+        $page = max(1, (int) $request->query('page', 1));
+        $perPage = min(500, max(50, (int) $request->query('per_page', 200)));
+
+        $paginator = StoreProduct::query()
+            ->where('store_id', $store->id)
+            ->where('status', 'active')
+            ->orderBy('name')
+            ->paginate($perPage, ['*'], 'page', $page);
+
+        $categories = StoreCategory::query()
+            ->where('store_id', $store->id)
+            ->orderBy('name')
+            ->get()
+            ->map(fn (StoreCategory $category) => [
+                'id' => (string) $category->id,
+                'name' => $category->name,
+            ])
+            ->values();
+
+        return response()->json([
+            'store' => [
+                'id' => (string) $store->id,
+                'name' => $store->name,
+                'currency' => 'NGN',
+            ],
+            'categories' => $categories,
+            'products' => collect($paginator->items())
+                ->map(fn (StoreProduct $product) => $this->formatPosProduct($product))
+                ->values(),
+            'meta' => [
+                'current_page' => $paginator->currentPage(),
+                'last_page' => $paginator->lastPage(),
+                'per_page' => $paginator->perPage(),
+                'total' => $paginator->total(),
+                'synced_at' => now()->toIso8601String(),
+            ],
+        ]);
+    }
+
     public function lookup(Request $request): JsonResponse
     {
         $store = $this->findOwnedStoreForUser($request);
@@ -199,7 +244,23 @@ class PosController extends Controller
             'customer_phone' => 'nullable|string|max:40',
             'customer_email' => 'nullable|email|max:255',
             'notes' => 'nullable|string|max:1000',
+            'client_order_id' => 'nullable|uuid',
+            'placed_at' => 'nullable|date',
         ]);
+
+        if (! empty($data['client_order_id'])) {
+            $existing = StoreOrder::query()
+                ->with(['location', 'cashier'])
+                ->where('store_id', $store->id)
+                ->where('client_order_id', $data['client_order_id'])
+                ->first();
+            if ($existing) {
+                return response()->json([
+                    'order' => $this->formatOrder($existing),
+                    'idempotent' => true,
+                ]);
+            }
+        }
 
         if ($data['payment_method'] === 'bank_transfer') {
             $configured = filled($store->payout_account_name)

@@ -160,6 +160,7 @@ Route::prefix('storehause')->group(function () {
         // Mobile staff sell channel — owners, managers, cashiers
         Route::middleware('merchant.capability:sell')->prefix('pos')->group(function () {
             Route::get('/catalog', [PosController::class, 'catalog']);
+            Route::get('/catalog/sync', [PosController::class, 'catalogSync']);
             Route::get('/lookup', [PosController::class, 'lookup'])->middleware('throttle:120,1');
             Route::get('/payment-info', [PosController::class, 'paymentInfo']);
             Route::post('/orders', [PosController::class, 'placeOrder'])->middleware('throttle:60,1');

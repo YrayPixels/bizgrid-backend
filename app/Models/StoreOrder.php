@@ -13,6 +13,7 @@ class StoreOrder extends Model
 
     protected $fillable = [
         'store_id',
+        'client_order_id',
         'source',
         'location_id',
         'cashier_user_id',

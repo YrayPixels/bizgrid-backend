@@ -157,6 +157,9 @@ trait StorehauseHelpers
 
         return [
             'id' => (string) $order->id,
+            'client_order_id' => $order->client_order_id
+                ? (string) $order->client_order_id
+                : null,
             'order_number' => $order->order_number,
             'invoice_number' => $order->invoice_number,
             'store_customer_id' => $order->store_customer_id

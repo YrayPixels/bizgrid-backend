@@ -166,6 +166,7 @@ class OrderPlacementService
         ) {
             $order = StoreOrder::query()->create([
                 'store_id' => $store->id,
+                'client_order_id' => $data['client_order_id'] ?? null,
                 'source' => 'pos',
                 'location_id' => $location->id,
                 'cashier_user_id' => $cashier->id,
@@ -188,7 +189,9 @@ class OrderPlacementService
                 'total_amount' => $built['total_amount'],
                 'items' => $built['items'],
                 'notes' => $data['notes'] ?? null,
-                'placed_at' => now(),
+                'placed_at' => ! empty($data['placed_at'])
+                    ? \Illuminate\Support\Carbon::parse((string) $data['placed_at'])
+                    : now(),
                 'paid_at' => now(),
                 'shipped_at' => now(),
                 'settlement_status' => null,
