@@ -40,12 +40,26 @@ jobs:
             deploy/
             release.zip
 
-      # 5️⃣ Run migrations + seed storefront templates (after files are uploaded)
+      # 5️⃣ Run migrations (after files are uploaded)
       - name: Run migrations
         run: |
-          curl -f -sS -X POST "https://business.yraytestings.com.ng/maintenance/migrate?key=${{ secrets.DEPLOY_KEY }}"
+          response="$(curl -sS -w "\n%{http_code}" -X POST "https://business.yraytestings.com.ng/maintenance/migrate?key=${{ secrets.DEPLOY_KEY }}")"
+          http_code="$(printf '%s\n' "$response" | tail -n1)"
+          body="$(printf '%s\n' "$response" | sed '$d')"
+          printf '%s\n' "$body"
+          if [ "$http_code" != "200" ]; then
+            echo "Migrate failed with HTTP ${http_code}"
+            exit 1
+          fi
 
       # 6️⃣ Clear and rebuild Laravel caches
       - name: Clear Laravel cache
         run: |
-          curl -f -sS -X POST "https://business.yraytestings.com.ng/maintenance/cache-clear?key=${{ secrets.DEPLOY_KEY }}"
+          response="$(curl -sS -w "\n%{http_code}" -X POST "https://business.yraytestings.com.ng/maintenance/cache-clear?key=${{ secrets.DEPLOY_KEY }}")"
+          http_code="$(printf '%s\n' "$response" | tail -n1)"
+          body="$(printf '%s\n' "$response" | sed '$d')"
+          printf '%s\n' "$body"
+          if [ "$http_code" != "200" ]; then
+            echo "Cache clear failed with HTTP ${http_code}"
+            exit 1
+          fi
