@@ -98,10 +98,11 @@ class StoreProductService
     /** @param array<string, mixed> $data */
     public function createForStore(Store $store, array $data): StoreProduct
     {
+        $id = $this->resolveProductId($data['id'] ?? null);
         $product = StoreProduct::create([
-            ...$this->normalizedAttributes($store, $data),
+            ...$this->normalizedAttributes($store, $data, $id),
             'store_id' => $store->id,
-            'id' => $this->resolveProductId($data['id'] ?? null),
+            'id' => $id,
         ]);
 
         $this->syncCount($store);
@@ -134,7 +135,7 @@ class StoreProductService
             'sort_order' => $product->sort_order,
         ], $data);
 
-        $product->fill($this->normalizedAttributes($product->store, $merged));
+        $product->fill($this->normalizedAttributes($product->store, $merged, $product->id));
         $product->save();
         $this->syncCount($product->store);
 
@@ -347,26 +348,19 @@ class StoreProductService
     private function upsertFromPayload(Store $store, array $payload, int $sortOrder): StoreProduct
     {
         $id = $this->resolveProductId($payload['id'] ?? null);
-        $name = trim((string) ($payload['name'] ?? ''));
-        $slug = $this->uniqueSlug(
-            $store,
-            ! empty($payload['slug']) ? Str::slug((string) $payload['slug']) : Str::slug($name),
-            $id,
-        );
 
         return StoreProduct::updateOrCreate(
             ['id' => $id],
             [
-                ...$this->normalizedAttributes($store, $payload),
+                ...$this->normalizedAttributes($store, $payload, $id),
                 'store_id' => $store->id,
-                'slug' => $slug,
                 'sort_order' => $sortOrder,
             ],
         );
     }
 
     /** @param array<string, mixed> $data */
-    private function normalizedAttributes(Store $store, array $data): array
+    private function normalizedAttributes(Store $store, array $data, string $ignoreId = ''): array
     {
         $name = trim((string) ($data['name'] ?? ''));
         $slugInput = ! empty($data['slug']) ? Str::slug((string) $data['slug']) : Str::slug($name);
@@ -376,7 +370,7 @@ class StoreProductService
         $imageFields = $this->normalizeImageFields($data);
 
         return [
-            'slug' => $slugInput !== '' ? $slugInput : 'product',
+            'slug' => $this->uniqueSlug($store, $slugInput !== '' ? $slugInput : 'product', $ignoreId),
             'name' => $name,
             'description' => (string) ($data['description'] ?? ''),
             'price' => (float) ($data['price'] ?? 0),

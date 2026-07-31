@@ -103,6 +103,38 @@ it('creates and lists products without touching storefront content', function ()
     expect(StoreProduct::where('store_id', $store->id)->count())->toBe(1);
 });
 
+it('auto-suffixes colliding product slugs on create', function () {
+    $user = User::factory()->create();
+    $store = createMerchantStore($user);
+
+    StoreProduct::create([
+        'id' => (string) Str::uuid(),
+        'store_id' => $store->id,
+        'slug' => 'belt',
+        'name' => 'Belt',
+        'description' => 'Existing belt.',
+        'price' => 10000,
+        'currency' => 'NGN',
+        'status' => 'active',
+    ]);
+
+    $create = $this->actingAs($user, 'sanctum')
+        ->postJson('/api/storehause/products', [
+            'name' => 'Belt',
+            'slug' => 'belt',
+            'description' => 'Another belt.',
+            'price' => 15000,
+            'currency' => 'NGN',
+            'status' => 'active',
+        ]);
+
+    $create->assertCreated()
+        ->assertJsonPath('product.name', 'Belt')
+        ->assertJsonPath('product.slug', 'belt-2');
+
+    expect(StoreProduct::where('store_id', $store->id)->count())->toBe(2);
+});
+
 it('merges products into public storefront responses', function () {
     $user = User::factory()->create();
     $store = createMerchantStore($user);
