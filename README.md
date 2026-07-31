@@ -66,3 +66,4 @@ Maintenance endpoints (protected by `DEPLOY_KEY`):
 
 - `POST /maintenance/migrate?key=...`
 - `POST /maintenance/cache-clear?key=...`
+- `POST /maintenance/mail-test?key=...&to=you@example.com` — sends a raw SMTP test and returns the active mail config / error

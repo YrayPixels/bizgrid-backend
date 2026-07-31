@@ -62,3 +62,48 @@ Route::post('/maintenance/cache-clear', function () {
         ], 500);
     }
 });
+
+Route::post('/maintenance/mail-test', function () {
+    $key = request()->header('X-Deploy-Key') ?: request()->input('key');
+    if ($key !== config('app.deploy_key')) {
+        abort(403, 'Unauthorized');
+    }
+
+    $to = request()->input('to') ?: config('mail.from.address');
+    if (! is_string($to) || ! filter_var($to, FILTER_VALIDATE_EMAIL)) {
+        return response()->json([
+            'message' => 'Provide a valid ?to=email@example.com',
+        ], 422);
+    }
+
+    $config = [
+        'mailer' => config('mail.default'),
+        'scheme' => config('mail.mailers.smtp.scheme'),
+        'host' => config('mail.mailers.smtp.host'),
+        'port' => config('mail.mailers.smtp.port'),
+        'username_set' => filled(config('mail.mailers.smtp.username')),
+        'from_address' => config('mail.from.address'),
+        'from_name' => config('mail.from.name'),
+        'to' => $to,
+    ];
+
+    try {
+        Illuminate\Support\Facades\Mail::raw(
+            'Bizgrid mail test at '.now()->toIso8601String()."\n\nIf you received this, SMTP delivery is working.",
+            function ($message) use ($to) {
+                $message->to($to)->subject('Bizgrid mail test');
+            }
+        );
+
+        return response()->json([
+            'message' => 'Test email accepted by the mailer',
+            'config' => $config,
+        ]);
+    } catch (\Throwable $e) {
+        return response()->json([
+            'message' => 'Test email failed',
+            'error' => $e->getMessage(),
+            'config' => $config,
+        ], 500);
+    }
+});

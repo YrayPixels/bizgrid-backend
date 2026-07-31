@@ -36,10 +36,23 @@ class AdminHealthController extends Controller
         $lastWebhook = BillingWebhookEvent::query()->latest('id')->first();
         $mailer = (string) config('mail.default', 'log');
         $fromAddress = (string) config('mail.from.address', '');
+        $scheme = config('mail.mailers.smtp.scheme');
+        $host = (string) config('mail.mailers.smtp.host', '');
+        $port = (int) config('mail.mailers.smtp.port', 0);
         $mailLooksBroken = $mailer === 'log'
             || $fromAddress === ''
             || str_contains($fromAddress, 'example.com')
-            || str_contains($fromAddress, 'hello@example');
+            || str_contains($fromAddress, 'hello@example')
+            || ($mailer === 'smtp' && $port === 465 && blank($scheme));
+
+        $warning = null;
+        if ($mailer === 'log') {
+            $warning = 'MAIL_MAILER is log — emails are written to the app log, not inboxes.';
+        } elseif (str_contains($fromAddress, 'example.com') || str_contains($fromAddress, 'hello@example')) {
+            $warning = 'MAIL_FROM_ADDRESS still looks like a placeholder.';
+        } elseif ($mailer === 'smtp' && $port === 465 && blank($scheme)) {
+            $warning = 'Port 465 requires MAIL_SCHEME=smtps. Without it, delivery often never reaches the mail server.';
+        }
 
         return response()->json([
             'success' => true,
@@ -53,12 +66,14 @@ class AdminHealthController extends Controller
                 ],
                 'mail' => [
                     'mailer' => $mailer,
+                    'scheme' => $scheme,
+                    'host' => $host,
+                    'port' => $port,
+                    'username_set' => filled(config('mail.mailers.smtp.username')),
                     'from_address' => $fromAddress,
                     'from_name' => config('mail.from.name'),
                     'ok' => ! $mailLooksBroken,
-                    'warning' => $mailLooksBroken
-                        ? 'Mail is not configured for real delivery. Merchants will not receive verification codes.'
-                        : null,
+                    'warning' => $warning,
                 ],
                 'billing' => [
                     'dodo_configured' => filled(config('dodopayments.api_key')),

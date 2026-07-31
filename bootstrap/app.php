@@ -22,6 +22,7 @@ return Application::configure(basePath: dirname(__DIR__))
         $middleware->validateCsrfTokens(except: [
             'maintenance/migrate',
             'maintenance/cache-clear',
+            'maintenance/mail-test',
         ]);
 
         $middleware->alias([
