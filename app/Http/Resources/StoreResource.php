@@ -25,7 +25,7 @@ class StoreResource extends JsonResource
             'description' => $this->description ?? '',
             'brand_color' => $this->brand_color ?? '#0E7C66',
             'logo_url' => $this->logo_url,
-            'contact_email' => $this->contact_email ?? $this->merchant?->email,
+            'contact_email' => $this->contact_email ?? $this->merchant?->owner?->email,
             'contact_phone' => $this->contact_phone,
             'business_location' => $this->business_location,
             'weekly_orders' => $this->weekly_orders,

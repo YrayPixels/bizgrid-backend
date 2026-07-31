@@ -17,16 +17,17 @@ class AdminExportController extends Controller
 
         return response()->streamDownload(function () {
             $handle = fopen('php://output', 'w');
-            fputcsv($handle, ['id', 'business_name', 'email', 'status', 'plan', 'stores', 'created_at']);
+            fputcsv($handle, ['id', 'business_name', 'owner_email', 'status', 'plan', 'stores', 'created_at']);
 
-            Merchant::withCount('stores')
+            Merchant::with(['owner:id,email'])
+                ->withCount('stores')
                 ->orderBy('id')
                 ->chunk(100, function ($merchants) use ($handle) {
                     foreach ($merchants as $m) {
                         fputcsv($handle, [
                             $m->id,
                             $m->business_name,
-                            $m->email,
+                            $m->owner?->email,
                             $m->status,
                             $m->subscription_plan,
                             $m->stores_count,

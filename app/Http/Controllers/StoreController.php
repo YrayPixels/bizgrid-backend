@@ -78,8 +78,6 @@ class StoreController extends Controller
             [
                 'business_name' => $data['business_name'],
                 'slug' => $this->uniqueMerchantSlug($data['business_name']),
-                'contact_name' => $user->name,
-                'email' => $user->email,
                 'industry' => $data['industry'],
                 'status' => 'active',
                 'activated_at' => now(),
@@ -90,8 +88,6 @@ class StoreController extends Controller
 
         $merchant->fill([
             'business_name' => $data['business_name'],
-            'contact_name' => $user->name,
-            'email' => $user->email,
             'industry' => $data['industry'],
         ])->save();
 
@@ -123,7 +119,7 @@ class StoreController extends Controller
         $this->notifications->notify(
             'merchant.signup',
             'New merchant: '.$merchant->business_name,
-            $merchant->email,
+            $user->email,
             ['merchant_id' => $merchant->id],
         );
 

@@ -105,7 +105,7 @@ class StoreNotificationService
     public function billingEvent(Merchant $merchant, string $event, array $context = []): void
     {
         $merchant->loadMissing('owner');
-        $recipient = $merchant->owner?->email ?: $merchant->email;
+        $recipient = $merchant->owner?->email;
 
         if (! filled($recipient)) {
             return;
@@ -120,7 +120,6 @@ class StoreNotificationService
 
         $email = $store->notification_email
             ?: $store->contact_email
-            ?: $store->merchant?->email
             ?: $store->merchant?->owner?->email;
 
         return filled($email) ? (string) $email : null;

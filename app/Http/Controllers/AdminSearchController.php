@@ -21,11 +21,16 @@ class AdminSearchController extends Controller
         }
 
         $merchants = Merchant::query()
-            ->where('business_name', 'like', "%{$q}%")
-            ->orWhere('email', 'like', "%{$q}%")
-            ->orWhere('contact_name', 'like', "%{$q}%")
+            ->with('owner:id,name,email')
+            ->where(function ($query) use ($q) {
+                $query->where('business_name', 'like', "%{$q}%")
+                    ->orWhereHas('owner', function ($ownerQuery) use ($q) {
+                        $ownerQuery->where('name', 'like', "%{$q}%")
+                            ->orWhere('email', 'like', "%{$q}%");
+                    });
+            })
             ->limit(5)
-            ->get(['id', 'business_name', 'email', 'status']);
+            ->get(['id', 'business_name', 'owner_user_id', 'status']);
 
         $orders = StoreOrder::query()
             ->where('order_number', 'like', "%{$q}%")
@@ -57,7 +62,7 @@ class AdminSearchController extends Controller
                     'type' => 'merchant',
                     'id' => $m->id,
                     'label' => $m->business_name,
-                    'meta' => $m->email,
+                    'meta' => $m->owner?->email,
                     'href' => "/merchants/{$m->id}",
                 ]),
                 'orders' => $orders->map(fn ($o) => [

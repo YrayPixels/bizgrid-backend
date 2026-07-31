@@ -67,7 +67,7 @@ class AdminOrderController extends Controller
     public function show(int $id): JsonResponse
     {
         $order = StoreOrder::query()
-            ->with(['store:id,name,slug,merchant_id', 'store.merchant:id,business_name,email'])
+            ->with(['store:id,name,slug,merchant_id', 'store.merchant:id,business_name,owner_user_id', 'store.merchant.owner:id,name,email'])
             ->find($id);
 
         if (! $order) {

@@ -259,8 +259,6 @@ it('logs staff google sign-in into the employer store without creating a merchan
         'owner_user_id' => $owner->id,
         'business_name' => 'Owner Store',
         'slug' => 'owner-store',
-        'contact_name' => 'Owner',
-        'email' => 'owner@example.com',
         'status' => 'active',
         'subscription_plan' => 'starter',
         'subscription_status' => 'trialing',
@@ -285,8 +283,6 @@ it('logs staff google sign-in into the employer store without creating a merchan
         'owner_user_id' => $cashier->id,
         'business_name' => 'Google Merchant',
         'slug' => 'google-merchant-orphan',
-        'contact_name' => 'Cashier',
-        'email' => 'google@example.com',
         'status' => 'pending',
         'subscription_plan' => 'starter',
         'subscription_status' => 'trialing',
@@ -316,7 +312,6 @@ it('logs staff google sign-in into the employer store without creating a merchan
     $cashier->refresh();
     expect($cashier->google_id)->toBe('google-user-123');
     expect(\App\Models\Merchant::where('owner_user_id', $cashier->id)->exists())->toBeFalse();
-    expect(\App\Models\Merchant::where('email', 'google@example.com')->where('owner_user_id', $cashier->id)->exists())->toBeFalse();
 
     $membership = app(\App\Services\MerchantMembershipService::class)->formatMembership($cashier);
     expect($membership['role'])->toBe('cashier')

@@ -41,8 +41,8 @@ class StaffController extends Controller
             'data' => $staff,
             'owner' => [
                 'id' => (string) $merchant->owner_user_id,
-                'name' => $merchant->owner?->name ?? $merchant->contact_name,
-                'email' => $merchant->owner?->email ?? $merchant->email,
+                'name' => $merchant->owner?->name,
+                'email' => $merchant->owner?->email,
                 'role' => 'owner',
             ],
         ]);

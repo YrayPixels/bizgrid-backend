@@ -20,8 +20,6 @@ function createCustomerTestStore(User $user): Store
         'owner_user_id' => $user->id,
         'business_name' => 'Customer Store',
         'slug' => 'customer-store',
-        'contact_name' => $user->name,
-        'email' => $user->email,
         'industry' => 'other',
         'status' => 'active',
         'subscription_plan' => 'starter',

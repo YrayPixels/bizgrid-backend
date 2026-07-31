@@ -32,7 +32,7 @@ it('registers a new merchant account', function () {
     expect($response->json('token'))->toBeString()->not->toBeEmpty();
     expect(User::where('email', 'merchant@example.com')->exists())->toBeTrue();
 
-    $merchant = Merchant::where('email', 'merchant@example.com')->first();
+    $merchant = Merchant::where('owner_user_id', User::where('email', 'merchant@example.com')->value('id'))->first();
     expect($merchant)->not->toBeNull()
         ->and($merchant->status)->toBe('pending')
         ->and($merchant->business_name)->toBe('Test Merchant')

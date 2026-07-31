@@ -68,7 +68,7 @@ class StorefrontWriterAgent extends BaseAgent
                         'business_name' => $store->name,
                         'industry' => $store->merchant?->industry ?? 'other',
                         'description' => $store->description,
-                        'contact_email' => $store->merchant?->email,
+                        'contact_email' => $store->contact_email ?? $store->merchant?->owner?->email,
                         'template_id' => $templateId,
                     ],
                     'base_storefront' => $baseStorefront,

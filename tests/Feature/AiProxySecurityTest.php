@@ -14,7 +14,6 @@ function createMerchantWithStore(User $user, array $merchantOverrides = []): arr
         'owner_user_id' => $user->id,
         'business_name' => 'Test Store',
         'slug' => 'test-store-'.uniqid(),
-        'contact_name' => $user->name,
         'email' => $user->email,
         'industry' => 'retail',
         'status' => 'active',

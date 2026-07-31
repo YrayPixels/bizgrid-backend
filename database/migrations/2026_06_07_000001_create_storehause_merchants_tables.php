@@ -14,9 +14,6 @@ return new class extends Migration
                 $table->foreignId('owner_user_id')->nullable()->constrained('users')->nullOnDelete();
                 $table->string('business_name', 160);
                 $table->string('slug', 180)->unique();
-                $table->string('contact_name', 120)->nullable();
-                $table->string('email')->nullable()->index();
-                $table->string('phone', 40)->nullable();
                 $table->string('industry', 80)->nullable();
                 $table->string('status', 30)->default('pending')->index();
                 $table->string('subscription_plan', 60)->default('starter');

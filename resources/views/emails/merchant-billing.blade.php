@@ -5,7 +5,7 @@
 
 @section('content')
     @php($notifications = app(\App\Services\StoreNotificationService::class))
-    <p style="margin:0 0 16px 0;">Hi {{ $merchant->contact_name ?? $merchant->business_name }},</p>
+    <p style="margin:0 0 16px 0;">Hi {{ $merchant->owner?->name ?? $merchant->business_name }},</p>
 
     @if ($event === 'subscription_active')
         <p style="margin:0 0 16px 0;">

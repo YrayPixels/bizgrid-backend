@@ -823,8 +823,6 @@ class StorefrontBuilderController extends Controller
             [
                 'business_name' => $businessName,
                 'slug' => $this->uniqueMerchantSlug($businessName),
-                'contact_name' => $user->name,
-                'email' => $user->email,
                 'industry' => $industry,
                 'status' => 'active',
                 'activated_at' => now(),
@@ -835,8 +833,6 @@ class StorefrontBuilderController extends Controller
 
         $merchant->fill([
             'business_name' => $businessName,
-            'contact_name' => $user->name,
-            'email' => $user->email,
             'industry' => $industry,
         ])->save();
 
@@ -1246,7 +1242,7 @@ class StorefrontBuilderController extends Controller
             'description' => $store->description ?? '',
             'brand_color' => $store->brand_color ?? '#0E7C66',
             'logo_url' => $store->logo_url,
-            'contact_email' => $store->contact_email ?? $store->merchant?->email,
+            'contact_email' => $store->contact_email ?? $store->merchant?->owner?->email,
             'contact_phone' => $store->contact_phone,
             'storefront_template_id' => $store->storefront_template_id ?? StorefrontTemplate::DEFAULT_ID,
             'subdomain' => $store->slug,

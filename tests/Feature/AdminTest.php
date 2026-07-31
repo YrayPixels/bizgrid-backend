@@ -126,7 +126,7 @@ it('lists incomplete onboarding merchants for admin', function () {
         ->assertOk()
         ->assertJsonPath('success', true)
         ->assertJsonPath('meta.total', 1)
-        ->assertJsonPath('data.0.email', 'incomplete@example.com')
+        ->assertJsonPath('data.0.owner.email', 'incomplete@example.com')
         ->assertJsonPath('data.0.onboarding_completed', false)
         ->assertJsonPath('data.0.status', 'pending');
 
@@ -149,4 +149,61 @@ it('requires is_admin flag for admin-created users', function () {
 
     $newAdmin = User::where('email', 'newadmin@example.com')->first();
     expect($newAdmin->is_admin)->toBeTrue();
+});
+
+it('allows admin to manually verify a merchant owner email', function () {
+    $admin = User::factory()->create(['is_admin' => true]);
+    $owner = User::factory()->unverified()->create([
+        'email' => 'merchant-owner@example.com',
+        'verification_code' => 'hashed-code',
+        'verification_code_expires_at' => now()->addHour(),
+    ]);
+
+    $merchant = \App\Models\Merchant::create([
+        'owner_user_id' => $owner->id,
+        'business_name' => 'Unverified Co',
+        'slug' => 'unverified-co',
+        'status' => 'pending',
+        'subscription_plan' => 'starter',
+        'subscription_status' => 'trialing',
+    ]);
+
+    $this->actingAs($admin, 'sanctum')
+        ->patchJson("/api/admin/merchants/{$merchant->id}", [
+            'verify_owner_email' => true,
+        ])
+        ->assertOk()
+        ->assertJsonPath('success', true)
+        ->assertJsonPath('message', 'Owner email verified')
+        ->assertJsonPath('data.owner.email', 'merchant-owner@example.com');
+
+    $owner->refresh();
+    expect($owner->email_verified_at)->not->toBeNull()
+        ->and($owner->verification_code)->toBeNull()
+        ->and($owner->verification_code_expires_at)->toBeNull();
+});
+
+it('allows admin to update merchant profile fields', function () {
+    $admin = User::factory()->create(['is_admin' => true]);
+    $owner = User::factory()->create();
+
+    $merchant = \App\Models\Merchant::create([
+        'owner_user_id' => $owner->id,
+        'business_name' => 'Old Name',
+        'slug' => 'old-name',
+        'industry' => 'retail',
+        'status' => 'active',
+        'subscription_plan' => 'starter',
+        'subscription_status' => 'trialing',
+    ]);
+
+    $this->actingAs($admin, 'sanctum')
+        ->patchJson("/api/admin/merchants/{$merchant->id}", [
+            'business_name' => 'New Name',
+            'industry' => 'fashion',
+        ])
+        ->assertOk()
+        ->assertJsonPath('success', true)
+        ->assertJsonPath('data.business_name', 'New Name')
+        ->assertJsonPath('data.industry', 'fashion');
 });

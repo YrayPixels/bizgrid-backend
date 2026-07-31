@@ -26,7 +26,7 @@ class StorefrontBuilderService
         $industry = $store->merchant?->industry ?? 'other';
         $industryLabel = Str::headline(str_replace('_', ' ', $industry));
         $description = $store->description ?: "{$businessName} helps customers discover quality {$industryLabel} products and services.";
-        $contactEmail = $store->merchant?->email;
+        $contactEmail = $store->contact_email ?? $store->merchant?->owner?->email;
         $templateId = $this->resolveStorefrontTemplate($store);
         $isBeauty = $templateId === 'beauty';
         $isCosmetics = $templateId === 'cosmetics';
@@ -136,7 +136,7 @@ class StorefrontBuilderService
                     'title' => 'Contact us',
                     'body' => 'Have a question about an order or product? Reach out and our team will get back to you shortly.',
                     'email' => $contactEmail,
-                    'phone' => $store->merchant?->phone,
+                    'phone' => $store->contact_phone,
                     'source' => 'ai_generated',
                 ],
                 'faq' => [

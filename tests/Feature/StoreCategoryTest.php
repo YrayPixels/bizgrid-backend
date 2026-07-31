@@ -16,8 +16,6 @@ function createCategoryStore(User $user): Store
         'owner_user_id' => $user->id,
         'business_name' => 'Glow Rituals',
         'slug' => 'glow-rituals',
-        'contact_name' => $user->name,
-        'email' => $user->email,
         'industry' => 'beauty_and_skincare',
         'status' => 'active',
         'subscription_plan' => 'starter',

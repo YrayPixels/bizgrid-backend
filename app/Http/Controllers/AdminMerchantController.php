@@ -27,7 +27,7 @@ class AdminMerchantController extends Controller
     ) {}
     public function index(Request $request): JsonResponse
     {
-        $query = Merchant::with(['owner:id,name,email'])
+        $query = Merchant::with(['owner:id,name,email,email_verified_at'])
             ->withCount('stores')
             ->withSum('stores as gross_revenue', 'gross_revenue')
             ->withSum('stores as products_count', 'products_count')
@@ -54,9 +54,6 @@ class AdminMerchantController extends Controller
             $search = $request->search;
             $query->where(function ($q) use ($search) {
                 $q->where('business_name', 'like', "%{$search}%")
-                    ->orWhere('contact_name', 'like', "%{$search}%")
-                    ->orWhere('email', 'like', "%{$search}%")
-                    ->orWhere('phone', 'like', "%{$search}%")
                     ->orWhere('industry', 'like', "%{$search}%")
                     ->orWhereHas('owner', function ($ownerQuery) use ($search) {
                         $ownerQuery->where('name', 'like', "%{$search}%")
@@ -104,7 +101,7 @@ class AdminMerchantController extends Controller
 
     public function show(int $id): JsonResponse
     {
-        $merchant = Merchant::with(['owner:id,name,email', 'stores'])
+        $merchant = Merchant::with(['owner:id,name,email,email_verified_at', 'stores'])
             ->withCount('stores')
             ->withSum('stores as gross_revenue', 'gross_revenue')
             ->withSum('stores as products_count', 'products_count')
@@ -121,6 +118,86 @@ class AdminMerchantController extends Controller
         return response()->json([
             'success' => true,
             'data' => $this->formatMerchant($merchant, true),
+        ]);
+    }
+
+    public function update(Request $request, int $id): JsonResponse
+    {
+        $validator = Validator::make($request->all(), [
+            'business_name' => 'sometimes|string|max:255',
+            'industry' => 'sometimes|nullable|string|max:120',
+            'verify_owner_email' => 'sometimes|boolean',
+        ]);
+
+        if ($validator->fails()) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Validation failed',
+                'errors' => $validator->errors(),
+            ], 422);
+        }
+
+        $merchant = Merchant::with('owner')->find($id);
+        if (! $merchant) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Merchant not found',
+            ], 404);
+        }
+
+        $data = $validator->validated();
+        $profileFields = ['business_name', 'industry'];
+        $changed = [];
+
+        foreach ($profileFields as $field) {
+            if (array_key_exists($field, $data)) {
+                $merchant->{$field} = $data[$field];
+                $changed[$field] = $data[$field];
+            }
+        }
+
+        if ($changed !== []) {
+            $merchant->save();
+        }
+
+        $ownerEmailVerified = false;
+        if (! empty($data['verify_owner_email'])) {
+            if (! $merchant->owner) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Merchant has no owner account to verify',
+                ], 422);
+            }
+
+            if (! $merchant->owner->email_verified_at) {
+                $merchant->owner->email_verified_at = now();
+                $merchant->owner->verification_code = null;
+                $merchant->owner->verification_code_expires_at = null;
+                $merchant->owner->save();
+            }
+            $ownerEmailVerified = true;
+            $changed['verify_owner_email'] = true;
+            $this->invalidateUserApiCache((int) $merchant->owner->id);
+        }
+
+        if ($changed === []) {
+            return response()->json([
+                'success' => false,
+                'message' => 'No updates provided',
+            ], 422);
+        }
+
+        $this->audit->log($request, 'merchant.updated', 'merchant', $merchant->id, $changed);
+
+        $this->invalidateAdminApiCache();
+        $this->invalidateMerchantApiCache($merchant->id);
+
+        return response()->json([
+            'success' => true,
+            'message' => $ownerEmailVerified && count($changed) === 1
+                ? 'Owner email verified'
+                : 'Merchant updated',
+            'data' => $this->formatMerchant($this->reloadMerchant($merchant), true),
         ]);
     }
 
@@ -176,16 +253,10 @@ class AdminMerchantController extends Controller
             $this->invalidateStoreApiCache($store);
         }
 
-        $merchant->load(['owner:id,name,email', 'stores']);
-        $merchant->loadCount('stores');
-        $merchant->loadSum('stores as gross_revenue', 'gross_revenue');
-        $merchant->loadSum('stores as products_count', 'products_count');
-        $merchant->loadSum('stores as orders_count', 'orders_count');
-
         return response()->json([
             'success' => true,
             'message' => 'Merchant status updated',
-            'data' => $this->formatMerchant($merchant, true),
+            'data' => $this->formatMerchant($this->reloadMerchant($merchant), true),
         ]);
     }
 
@@ -343,9 +414,6 @@ class AdminMerchantController extends Controller
             'owner_user_id' => $merchant->owner_user_id,
             'business_name' => $merchant->business_name,
             'slug' => $merchant->slug,
-            'contact_name' => $merchant->contact_name,
-            'email' => $merchant->email,
-            'phone' => $merchant->phone,
             'industry' => $merchant->industry,
             'status' => $merchant->status,
             'subscription_plan' => $merchant->subscription_plan,
@@ -366,6 +434,7 @@ class AdminMerchantController extends Controller
                 'id' => $merchant->owner->id,
                 'name' => $merchant->owner->name,
                 'email' => $merchant->owner->email,
+                'email_verified_at' => $merchant->owner->email_verified_at?->toIso8601String(),
             ] : null,
             'created_at' => $merchant->created_at?->toIso8601String(),
             'updated_at' => $merchant->updated_at?->toIso8601String(),
@@ -393,6 +462,17 @@ class AdminMerchantController extends Controller
         }
 
         return $data;
+    }
+
+    private function reloadMerchant(Merchant $merchant): Merchant
+    {
+        $merchant->load(['owner:id,name,email,email_verified_at', 'stores']);
+        $merchant->loadCount('stores');
+        $merchant->loadSum('stores as gross_revenue', 'gross_revenue');
+        $merchant->loadSum('stores as products_count', 'products_count');
+        $merchant->loadSum('stores as orders_count', 'orders_count');
+
+        return $merchant;
     }
 
     public function notes(int $id): JsonResponse

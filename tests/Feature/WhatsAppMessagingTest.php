@@ -28,8 +28,6 @@ function createWhatsAppStore(): array
         'owner_user_id' => $user->id,
         'business_name' => 'Glow Market',
         'slug' => 'glow-market',
-        'contact_name' => $user->name,
-        'email' => $user->email,
         'industry' => 'beauty_and_skincare',
         'status' => 'active',
         'whatsapp_included_remaining' => 10,

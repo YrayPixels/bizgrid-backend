@@ -16,6 +16,8 @@ it('creates new merchants as active when a store is created', function () {
         'email_verified_at' => now(),
     ]);
 
+    Merchant::ensurePendingForUser($user);
+
     $this->actingAs($user, 'sanctum')
         ->postJson('/api/storehause/stores', [
             'business_name' => 'Fresh Goods',
@@ -46,8 +48,6 @@ it('promotes an existing pending merchant to active on store creation', function
         'owner_user_id' => $user->id,
         'business_name' => 'Pending Co',
         'slug' => 'pending-co',
-        'contact_name' => $user->name,
-        'email' => $user->email,
         'industry' => 'retail',
         'status' => 'pending',
         'subscription_plan' => 'starter',
@@ -81,8 +81,6 @@ it('does not unsuspend a suspended merchant via ensureActive', function () {
         'owner_user_id' => $user->id,
         'business_name' => 'Suspended Co',
         'slug' => 'suspended-co',
-        'contact_name' => $user->name,
-        'email' => $user->email,
         'industry' => 'retail',
         'status' => 'suspended',
         'suspended_at' => now(),

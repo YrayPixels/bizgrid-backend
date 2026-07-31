@@ -16,7 +16,6 @@ function createSettingsStore(User $user, array $overrides = [], array $merchantO
         'owner_user_id' => $user->id,
         'business_name' => 'Glow Rituals',
         'slug' => $slug,
-        'contact_name' => $user->name,
         'email' => $user->email,
         'industry' => 'beauty_and_skincare',
         'status' => 'active',

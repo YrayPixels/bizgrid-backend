@@ -113,7 +113,7 @@ trait StorehauseHelpers
             'description' => $store->description ?? '',
             'brand_color' => $store->brand_color ?? '#0E7C66',
             'logo_url' => $store->logo_url,
-            'contact_email' => $store->contact_email ?? $store->merchant?->email,
+            'contact_email' => $store->contact_email ?? $store->merchant?->owner?->email,
             'contact_phone' => $store->contact_phone,
             'business_location' => $store->business_location,
             'weekly_orders' => $store->weekly_orders,
