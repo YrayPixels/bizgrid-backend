@@ -34,6 +34,12 @@ class AdminHealthController extends Controller
         }
 
         $lastWebhook = BillingWebhookEvent::query()->latest('id')->first();
+        $mailer = (string) config('mail.default', 'log');
+        $fromAddress = (string) config('mail.from.address', '');
+        $mailLooksBroken = $mailer === 'log'
+            || $fromAddress === ''
+            || str_contains($fromAddress, 'example.com')
+            || str_contains($fromAddress, 'hello@example');
 
         return response()->json([
             'success' => true,
@@ -44,6 +50,15 @@ class AdminHealthController extends Controller
                 'tables' => [
                     'merchants' => Schema::hasTable('merchants') ? Merchant::count() : null,
                     'orders' => Schema::hasTable('store_orders') ? StoreOrder::count() : null,
+                ],
+                'mail' => [
+                    'mailer' => $mailer,
+                    'from_address' => $fromAddress,
+                    'from_name' => config('mail.from.name'),
+                    'ok' => ! $mailLooksBroken,
+                    'warning' => $mailLooksBroken
+                        ? 'Mail is not configured for real delivery. Merchants will not receive verification codes.'
+                        : null,
                 ],
                 'billing' => [
                     'dodo_configured' => filled(config('dodopayments.api_key')),

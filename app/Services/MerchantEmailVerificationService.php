@@ -40,11 +40,20 @@ class MerchantEmailVerificationService
             Log::warning('Failed to send merchant email verification code', [
                 'user_id' => $user->id,
                 'email' => $user->email,
+                'mailer' => $mailer,
+                'from' => config('mail.from.address'),
                 'error' => $e->getMessage(),
             ]);
 
             return false;
         }
+
+        Log::info('Merchant email verification code dispatched', [
+            'user_id' => $user->id,
+            'email' => $user->email,
+            'mailer' => $mailer,
+            'from' => config('mail.from.address'),
+        ]);
 
         if (app()->environment('local')) {
             Log::info('Merchant email verification code', ['email' => $user->email, 'code' => $code]);
