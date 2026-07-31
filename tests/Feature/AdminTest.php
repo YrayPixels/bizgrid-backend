@@ -207,3 +207,31 @@ it('allows admin to update merchant profile fields', function () {
         ->assertJsonPath('data.business_name', 'New Name')
         ->assertJsonPath('data.industry', 'fashion');
 });
+it('allows admin to resend merchant owner verification email', function () {
+    \Illuminate\Support\Facades\Mail::fake();
+
+    $admin = User::factory()->create(['is_admin' => true]);
+    $owner = User::factory()->unverified()->create([
+        'email' => 'needs-code@example.com',
+    ]);
+
+    $merchant = \App\Models\Merchant::create([
+        'owner_user_id' => $owner->id,
+        'business_name' => 'Needs Code Co',
+        'slug' => 'needs-code-co',
+        'status' => 'pending',
+        'subscription_plan' => 'starter',
+        'subscription_status' => 'trialing',
+    ]);
+
+    $this->actingAs($admin, 'sanctum')
+        ->patchJson("/api/admin/merchants/{$merchant->id}", [
+            'resend_owner_verification_email' => true,
+        ])
+        ->assertOk()
+        ->assertJsonPath('success', true)
+        ->assertJsonPath('message', 'Verification email resent to owner');
+
+    \Illuminate\Support\Facades\Mail::assertSent(\App\Mail\MerchantEmailVerificationCodeEmail::class);
+    expect($owner->fresh()->verification_code)->not->toBeNull();
+});

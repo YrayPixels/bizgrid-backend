@@ -7,13 +7,13 @@ namespace App\Http\Controllers;
 use App\Http\Controllers\Concerns\StorehauseHelpers;
 use App\Http\Requests\LoginRequest;
 use App\Http\Requests\RegisterRequest;
-use App\Mail\MerchantEmailVerificationCodeEmail;
 use App\Mail\MerchantPasswordResetCodeEmail;
 use App\Mail\MerchantWelcomeEmail;
 use App\Models\Merchant;
 use App\Models\MerchantStaff;
 use App\Models\User;
 use App\Services\GoogleOAuthService;
+use App\Services\MerchantEmailVerificationService;
 use App\Services\MerchantMembershipService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
@@ -31,6 +31,7 @@ class AuthController extends Controller
     public function __construct(
         private readonly GoogleOAuthService $googleOAuth,
         private readonly MerchantMembershipService $membership,
+        private readonly MerchantEmailVerificationService $emailVerification,
     ) {}
 
     public function register(RegisterRequest $request): JsonResponse
@@ -56,7 +57,7 @@ class AuthController extends Controller
             ]);
         }
 
-        $this->sendEmailVerificationCode($user);
+        $verificationSent = $this->emailVerification->sendCode($user);
 
         $tokenResult = $user->createToken('storehause');
         $tokenResult->accessToken->expires_at = now()->addDays(30);
@@ -66,6 +67,7 @@ class AuthController extends Controller
         return response()->json([
             'token' => $token,
             'user' => $this->formatUser($user->fresh()),
+            'email_verification_sent' => $verificationSent,
         ], 201);
     }
 
@@ -366,13 +368,23 @@ class AuthController extends Controller
             return response()->json([
                 'message' => 'Email already verified.',
                 'user' => $this->formatUser($user),
+                'email_verification_sent' => true,
             ]);
         }
 
-        $this->sendEmailVerificationCode($user);
+        $sent = $this->emailVerification->sendCode($user);
+
+        if (! $sent) {
+            return response()->json([
+                'message' => 'We could not send the verification email. Please try again in a moment or contact support.',
+                'code' => 'mail_send_failed',
+                'email_verification_sent' => false,
+            ], 503);
+        }
 
         return response()->json([
             'message' => 'Verification code sent.',
+            'email_verification_sent' => true,
         ]);
     }
 
@@ -437,27 +449,5 @@ class AuthController extends Controller
         $tokenResult->accessToken->save();
 
         return $tokenResult->plainTextToken;
-    }
-
-    private function sendEmailVerificationCode(User $user): void
-    {
-        $code = (string) random_int(100000, 999999);
-        $user->verification_code = Hash::make($code);
-        $user->verification_code_expires_at = now()->addMinutes(15);
-        $user->save();
-
-        try {
-            Mail::to($user->email)->send(new MerchantEmailVerificationCodeEmail($user, $code));
-        } catch (\Throwable $e) {
-            Log::warning('Failed to send merchant email verification code', [
-                'user_id' => $user->id,
-                'email' => $user->email,
-                'error' => $e->getMessage(),
-            ]);
-        }
-
-        if (config('app.env') === 'local') {
-            Log::info('Merchant email verification code', ['email' => $user->email, 'code' => $code]);
-        }
     }
 }

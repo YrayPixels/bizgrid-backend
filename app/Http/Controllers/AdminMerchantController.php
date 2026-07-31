@@ -11,6 +11,7 @@ use App\Models\MerchantNote;
 use App\Models\StoreOrder;
 use App\Models\AdminAuditLog;
 use App\Services\AdminAuditService;
+use App\Services\MerchantEmailVerificationService;
 use App\Services\MerchantUsageService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -24,6 +25,7 @@ class AdminMerchantController extends Controller
     public function __construct(
         private readonly AdminAuditService $audit,
         private readonly MerchantUsageService $usage,
+        private readonly MerchantEmailVerificationService $emailVerification,
     ) {}
     public function index(Request $request): JsonResponse
     {
@@ -127,6 +129,7 @@ class AdminMerchantController extends Controller
             'business_name' => 'sometimes|string|max:255',
             'industry' => 'sometimes|nullable|string|max:120',
             'verify_owner_email' => 'sometimes|boolean',
+            'resend_owner_verification_email' => 'sometimes|boolean',
         ]);
 
         if ($validator->fails()) {
@@ -180,6 +183,35 @@ class AdminMerchantController extends Controller
             $this->invalidateUserApiCache((int) $merchant->owner->id);
         }
 
+        $verificationResent = false;
+        if (! empty($data['resend_owner_verification_email'])) {
+            if (! $merchant->owner) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Merchant has no owner account',
+                ], 422);
+            }
+
+            if ($merchant->owner->email_verified_at) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Owner email is already verified',
+                ], 422);
+            }
+
+            $sent = $this->emailVerification->sendCode($merchant->owner);
+            if (! $sent) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Could not send verification email. Check mail configuration.',
+                    'code' => 'mail_send_failed',
+                ], 503);
+            }
+
+            $verificationResent = true;
+            $changed['resend_owner_verification_email'] = true;
+        }
+
         if ($changed === []) {
             return response()->json([
                 'success' => false,
@@ -192,11 +224,16 @@ class AdminMerchantController extends Controller
         $this->invalidateAdminApiCache();
         $this->invalidateMerchantApiCache($merchant->id);
 
+        $message = 'Merchant updated';
+        if ($verificationResent) {
+            $message = 'Verification email resent to owner';
+        } elseif ($ownerEmailVerified && count($changed) === 1) {
+            $message = 'Owner email verified';
+        }
+
         return response()->json([
             'success' => true,
-            'message' => $ownerEmailVerified && count($changed) === 1
-                ? 'Owner email verified'
-                : 'Merchant updated',
+            'message' => $message,
             'data' => $this->formatMerchant($this->reloadMerchant($merchant), true),
         ]);
     }

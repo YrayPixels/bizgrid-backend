@@ -51,11 +51,28 @@ it('does not auto-verify email on registration', function () {
         'name' => 'Test Merchant',
         'email' => 'merchant@example.com',
         'password' => 'secret12345',
-    ]);
+    ])
+        ->assertCreated()
+        ->assertJsonPath('email_verification_sent', true);
 
     $user = User::where('email', 'merchant@example.com')->first();
     expect($user->email_verified_at)->toBeNull();
     Mail::assertSent(\App\Mail\MerchantEmailVerificationCodeEmail::class);
+});
+
+it('returns mail failure when resending verification fails', function () {
+    $this->mock(\App\Services\MerchantEmailVerificationService::class, function ($mock) {
+        $mock->shouldReceive('sendCode')->once()->andReturn(false);
+    });
+
+    $user = User::factory()->unverified()->create();
+    Merchant::ensurePendingForUser($user);
+
+    $this->actingAs($user, 'sanctum')
+        ->postJson('/api/storehause/auth/resend-email-verification')
+        ->assertStatus(503)
+        ->assertJsonPath('code', 'mail_send_failed')
+        ->assertJsonPath('email_verification_sent', false);
 });
 
 it('verifies merchant email with a code', function () {
