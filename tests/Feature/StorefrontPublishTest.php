@@ -76,7 +76,12 @@ it('lists only published storefronts for sitemap indexing', function () {
         ->assertOk()
         ->assertJsonCount(1, 'data')
         ->assertJsonPath('data.0.slug', 'glow-rituals')
-        ->assertJsonPath('data.0.business_name', 'Glow Rituals');
+        ->assertJsonPath('data.0.business_name', 'Glow Rituals')
+        ->assertJsonPath('data.0.industry', 'beauty_and_skincare')
+        ->assertJsonPath('data.0.brand_color', '#0E7C66')
+        ->assertJsonPath('data.0.description', 'Organic skincare for busy professionals.')
+        ->assertJsonPath('data.0.logo_url', null)
+        ->assertJsonPath('data.0.banner_url', null);
 });
 
 it('publishes a draft storefront and exposes it publicly', function () {

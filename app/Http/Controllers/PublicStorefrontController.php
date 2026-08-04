@@ -59,19 +59,47 @@ class PublicStorefrontController extends Controller
     public function listPublished(): JsonResponse
     {
         $stores = Store::query()
+            ->with('merchant:id,industry')
             ->where('status', 'published')
             ->whereNotNull('published_json')
             ->orderByDesc('published_at')
-            ->get(['slug', 'name', 'published_at', 'status', 'published_json']);
+            ->get([
+                'id',
+                'merchant_id',
+                'slug',
+                'name',
+                'description',
+                'brand_color',
+                'logo_url',
+                'published_at',
+                'status',
+                'published_json',
+            ]);
 
         return response()->json([
             'data' => $stores
                 ->filter(fn (Store $store) => $this->publishService->isPublished($store))
-                ->map(fn (Store $store) => [
-                    'slug' => $store->slug,
-                    'business_name' => $store->name,
-                    'published_at' => $store->published_at?->toIso8601String(),
-                ])
+                ->map(function (Store $store) {
+                    $published = is_array($store->published_json) ? $store->published_json : [];
+                    $banner = data_get($published, 'media.hero_image_url');
+                    $tagline = data_get($published, 'hero.subheadline')
+                        ?? data_get($published, 'seo.description')
+                        ?? null;
+                    $description = filled($store->description)
+                        ? (string) $store->description
+                        : (is_string($tagline) && trim($tagline) !== '' ? trim($tagline) : null);
+
+                    return [
+                        'slug' => $store->slug,
+                        'business_name' => $store->name,
+                        'published_at' => $store->published_at?->toIso8601String(),
+                        'logo_url' => filled($store->logo_url) ? (string) $store->logo_url : null,
+                        'banner_url' => is_string($banner) && trim($banner) !== '' ? trim($banner) : null,
+                        'brand_color' => filled($store->brand_color) ? (string) $store->brand_color : '#0E7C66',
+                        'industry' => $store->merchant?->industry ?? 'other',
+                        'description' => $description,
+                    ];
+                })
                 ->values(),
         ]);
     }
