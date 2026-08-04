@@ -34,11 +34,13 @@ jobs:
           local-dir: ./
           server-dir: /
           exclude: |
-            .git*
-            node_modules/
+            **/.git*
+            **/.git*/**
+            **/node_modules/**
             storage/
             deploy/
             release.zip
+            public/storehause/uploads/**
 
       # 5️⃣ Run migrations (after files are uploaded)
       - name: Run migrations
