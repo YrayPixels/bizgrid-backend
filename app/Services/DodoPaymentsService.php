@@ -52,8 +52,8 @@ class DodoPaymentsService
 
     public function formatSubscription(Merchant $merchant): array
     {
-        $this->usage->seedTrialAllowances($merchant);
-
+        // formatUsage() below rolls the billing period if a new month has started,
+        // which also seeds allowances for a merchant who never had them granted.
         $planKey = $merchant->subscription_plan ?: $this->usage->defaultPlanKey();
         $plan = $this->usage->planConfig($planKey);
         $feePercent = (float) ($plan['transaction_fee_percent'] ?? 0);

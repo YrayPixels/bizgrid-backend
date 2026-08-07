@@ -30,7 +30,9 @@ function createWhatsAppStore(): array
         'slug' => 'glow-market',
         'industry' => 'beauty_and_skincare',
         'status' => 'active',
-        'whatsapp_included_remaining' => 10,
+        // WhatsApp sending needs a plan that includes units; the free plan has none.
+        'subscription_plan' => 'growth',
+        'subscription_status' => 'active',
     ]);
 
     $store = Store::create([

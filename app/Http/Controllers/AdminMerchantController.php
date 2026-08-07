@@ -314,8 +314,8 @@ class AdminMerchantController extends Controller
     public function updateBilling(Request $request, int $id): JsonResponse
     {
         $validator = Validator::make($request->all(), [
-            'subscription_plan' => 'sometimes|in:starter,growth,scale',
-            'subscription_status' => 'sometimes|in:trial,active,past_due,cancelled',
+            'subscription_plan' => 'sometimes|in:'.implode(',', array_keys(config('dodopayments.plans', []))),
+            'subscription_status' => 'sometimes|in:'.implode(',', Merchant::SUBSCRIPTION_STATUSES),
             'sms_purchased_balance' => 'sometimes|integer|min:0',
             'whatsapp_purchased_balance' => 'sometimes|integer|min:0',
             'ai_purchased_credits' => 'sometimes|integer|min:0',

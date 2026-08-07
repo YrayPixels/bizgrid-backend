@@ -40,10 +40,29 @@ class MerchantUsageService
         $currentMonth = now()->startOfMonth();
 
         if (! $periodStart || $periodStart->lt($currentMonth)) {
+            // A new billing period: reset metered usage and regrant the plan's
+            // included messaging units. Driven by the stored period marker so it is
+            // idempotent — repeat calls within the same month change nothing.
             $merchant->monthly_processed_ngn = 0;
             $merchant->monthly_usage_period_start = $currentMonth->toDateString();
+            $this->applyIncludedAllowances($merchant);
             $merchant->save();
         }
+    }
+
+    /**
+     * Reset included messaging units to the plan's monthly allowance.
+     *
+     * Purchased top-up balances are deliberately untouched: merchants paid for those
+     * separately and they roll over. Unused included units do not roll over.
+     */
+    private function applyIncludedAllowances(Merchant $merchant): void
+    {
+        $plan = $this->planConfig($merchant->subscription_plan ?: $this->defaultPlanKey());
+        $included = $plan['included_monthly'] ?? [];
+
+        $merchant->sms_included_remaining = (int) ($included['sms_units'] ?? 0);
+        $merchant->whatsapp_included_remaining = (int) ($included['whatsapp_units'] ?? 0);
     }
 
     public function ensureDailyAiReset(Merchant $merchant): void
@@ -60,25 +79,19 @@ class MerchantUsageService
         }
     }
 
+    /**
+     * Immediately regrant allowances and start a fresh period.
+     *
+     * For events that change entitlements mid-month — activation, plan change, admin
+     * action — where the merchant should get the new plan's units straight away.
+     * Routine monthly refills go through ensureMonthlyPeriod() instead.
+     */
     public function grantMonthlyAllowances(Merchant $merchant): void
     {
-        $plan = $this->planConfig($merchant->subscription_plan ?: $this->defaultPlanKey());
-        $included = $plan['included_monthly'] ?? [];
-
-        $merchant->sms_included_remaining = (int) ($included['sms_units'] ?? 0);
-        $merchant->whatsapp_included_remaining = (int) ($included['whatsapp_units'] ?? 0);
+        $this->applyIncludedAllowances($merchant);
         $merchant->monthly_processed_ngn = 0;
         $merchant->monthly_usage_period_start = now()->startOfMonth()->toDateString();
         $merchant->save();
-    }
-
-    public function seedTrialAllowances(Merchant $merchant): void
-    {
-        if ($merchant->sms_included_remaining > 0 || $merchant->whatsapp_included_remaining > 0) {
-            return;
-        }
-
-        $this->grantMonthlyAllowances($merchant);
     }
 
     public function formatUsage(Merchant $merchant): array
@@ -186,13 +199,45 @@ class MerchantUsageService
         $merchant->save();
     }
 
+    /**
+     * NOTE: no SMS send path exists yet, so nothing calls these today. They mirror the
+     * WhatsApp pair so that whatever ships the first SMS send only has to call them —
+     * without this, granted SMS units would be spent without ever being decremented.
+     */
+    public function canSendSms(Merchant $merchant): bool
+    {
+        $this->ensureMonthlyPeriod($merchant);
+
+        return ((int) $merchant->sms_included_remaining + (int) $merchant->sms_purchased_balance) > 0;
+    }
+
+    public function consumeSmsUnit(Merchant $merchant): void
+    {
+        $this->ensureMonthlyPeriod($merchant);
+
+        // Included units burn down first so purchased top-ups survive the month roll.
+        if ((int) $merchant->sms_included_remaining > 0) {
+            $merchant->sms_included_remaining = (int) $merchant->sms_included_remaining - 1;
+        } elseif ((int) $merchant->sms_purchased_balance > 0) {
+            $merchant->sms_purchased_balance = (int) $merchant->sms_purchased_balance - 1;
+        }
+
+        $merchant->save();
+    }
+
     public function canSendWhatsapp(Merchant $merchant): bool
     {
+        // Roll the period first, otherwise a merchant whose new month has started
+        // reads as out of units until something else happens to refresh them.
+        $this->ensureMonthlyPeriod($merchant);
+
         return ((int) $merchant->whatsapp_included_remaining + (int) $merchant->whatsapp_purchased_balance) > 0;
     }
 
     public function consumeWhatsappUnit(Merchant $merchant): void
     {
+        $this->ensureMonthlyPeriod($merchant);
+
         if ((int) $merchant->whatsapp_included_remaining > 0) {
             $merchant->whatsapp_included_remaining = (int) $merchant->whatsapp_included_remaining - 1;
         } elseif ((int) $merchant->whatsapp_purchased_balance > 0) {

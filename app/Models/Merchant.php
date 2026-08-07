@@ -12,6 +12,15 @@ class Merchant extends Model
 {
     use HasFactory;
 
+    /**
+     * The subscription statuses the system actually writes.
+     *
+     * `trialing` and `on_hold` are the canonical spellings — Dodo's webhooks use them
+     * and so does DodoPaymentsService. Admin previously offered `trial` and `past_due`,
+     * which nothing else in the system ever produced or understood.
+     */
+    public const SUBSCRIPTION_STATUSES = ['trialing', 'active', 'on_hold', 'cancelled'];
+
     protected $fillable = [
         'owner_user_id',
         'business_name',
