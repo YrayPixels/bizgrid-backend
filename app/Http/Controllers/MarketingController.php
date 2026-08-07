@@ -215,6 +215,18 @@ class MarketingController extends Controller
         ]);
     }
 
+    public function performance(Request $request): JsonResponse
+    {
+        $store = $this->findOwnedStoreForUser($request);
+        $data = $request->validate([
+            'window_days' => 'nullable|integer|min:7|max:365',
+        ]);
+
+        return response()->json(
+            $this->marketing->performanceSummary($store, (int) ($data['window_days'] ?? 90)),
+        );
+    }
+
     public function scheduledPosts(Request $request): JsonResponse
     {
         $store = $this->findOwnedStoreForUser($request);

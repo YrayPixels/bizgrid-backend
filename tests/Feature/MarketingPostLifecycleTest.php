@@ -282,8 +282,6 @@ it('does not expose publish tools to the marketing agent', function () {
     $agent = app(\App\Agents\MarketingAgent::class);
 
     $reflection = new ReflectionMethod($agent, 'marketingToolDefinitions');
-    $reflection->setAccessible(true);
-
     $tools = $reflection->invoke($agent, ['instagram' => true, 'ads' => true], false);
     $names = array_map(fn (array $tool): string => $tool['function']['name'], $tools);
 
@@ -440,8 +438,87 @@ it('refuses to launch an ad campaign with no destination link', function () {
 
     $this->actingAs($user)
         ->postJson("/api/storehause/marketing/ads/campaigns/{$campaign->id}/launch")
-        ->assertStatus(422);
+        ->assertStatus(422)
+        ->assertJsonPath('message', 'Add a destination link — ads have to send people somewhere.');
 
     Http::assertNothingSent();
-    expect($campaign->fresh()->status)->toBe('failed');
+    // Nothing reached Meta, so this is still an unfinished draft rather than a
+    // failed launch — and stays editable.
+    expect($campaign->fresh()->status)->toBe('draft');
+});
+
+it('rolls up performance across published posts and campaigns', function () {
+    ['user' => $user, 'store' => $store] = createLifecycleStore();
+    $connection = connectPage($store);
+
+    draftFor($store, [
+        'social_connection_id' => $connection->id,
+        'status' => 'published',
+        'published_at' => now()->subDay(),
+        'insights' => ['reach' => 1000, 'reactions' => 40, 'comments' => 5, 'shares' => 5, 'clicks' => 20],
+        'insights_synced_at' => now()->subHour(),
+    ]);
+
+    draftFor($store, [
+        'provider' => 'instagram',
+        'social_connection_id' => $connection->id,
+        'status' => 'published',
+        'published_at' => now()->subDays(2),
+        'image_url' => 'https://cdn.example.test/a.jpg',
+        'insights' => ['reach' => 500, 'reactions' => 10, 'comments' => 2, 'saved' => 3],
+        'insights_synced_at' => now()->subHour(),
+    ]);
+
+    // Outside the window, so it must not be counted.
+    draftFor($store, [
+        'social_connection_id' => $connection->id,
+        'status' => 'published',
+        'published_at' => now()->subDays(200),
+        'insights' => ['reach' => 99999, 'reactions' => 9999],
+        'insights_synced_at' => now()->subHour(),
+    ]);
+
+    StoreAdCampaign::create([
+        'store_id' => $store->id,
+        'name' => 'Live campaign',
+        'status' => 'active',
+        'daily_budget_minor' => 500000,
+        'currency' => 'NGN',
+        'external_campaign_id' => 'camp-1',
+        'metrics' => ['impressions' => 8000, 'clicks' => 120, 'spend' => 4500.0],
+        'metrics_synced_at' => now(),
+    ]);
+
+    $response = $this->actingAs($user)
+        ->getJson('/api/storehause/marketing/performance')
+        ->assertOk();
+
+    $response->assertJsonPath('totals.posts', 2)
+        ->assertJsonPath('totals.reach', 1500)
+        // 40+5+5 on facebook, 10+2+3 on instagram
+        ->assertJsonPath('totals.engagement', 65)
+        ->assertJsonPath('totals.clicks', 20)
+        ->assertJsonPath('ads.active_campaigns', 1)
+        ->assertJsonPath('ads.impressions', 8000);
+
+    expect($response->json('by_channel'))->toHaveCount(2);
+    // Best performer first so the merchant sees what to repeat.
+    expect($response->json('top_posts.0.provider'))->toBe('facebook');
+});
+
+it('reports posts as awaiting their first insights sync', function () {
+    ['user' => $user, 'store' => $store] = createLifecycleStore();
+    $connection = connectPage($store);
+
+    draftFor($store, [
+        'social_connection_id' => $connection->id,
+        'status' => 'published',
+        'published_at' => now()->subMinutes(5),
+    ]);
+
+    $this->actingAs($user)
+        ->getJson('/api/storehause/marketing/performance')
+        ->assertOk()
+        ->assertJsonPath('totals.posts', 1)
+        ->assertJsonPath('awaiting_first_sync', true);
 });

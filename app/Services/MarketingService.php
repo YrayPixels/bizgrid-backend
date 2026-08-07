@@ -7,6 +7,7 @@ namespace App\Services;
 use App\Agents\AgentRegistry;
 use App\Models\SocialPost;
 use App\Models\Store;
+use App\Models\StoreAdCampaign;
 use App\Models\StoreProduct;
 use App\Models\StoreSocialConnection;
 
@@ -133,6 +134,105 @@ class MarketingService
             ->get()
             ->map(fn (SocialPost $post): array => $this->posts->format($post))
             ->all();
+    }
+
+    /**
+     * Rolled-up performance across every published post and live campaign, so
+     * the merchant can answer "is this working?" without opening posts one by
+     * one. Aggregated in PHP rather than SQL because insights live in a JSON
+     * column and the per-store volume is small.
+     *
+     * @return array<string, mixed>
+     */
+    public function performanceSummary(Store $store, int $windowDays = 90): array
+    {
+        $posts = SocialPost::query()
+            ->where('store_id', $store->id)
+            ->where('status', SocialPostService::STATUS_PUBLISHED)
+            ->where('published_at', '>=', now()->subDays($windowDays))
+            ->orderByDesc('published_at')
+            ->limit(200)
+            ->get();
+
+        $totals = ['posts' => 0, 'reach' => 0, 'engagement' => 0, 'clicks' => 0];
+        $byChannel = [];
+        $lastSynced = null;
+
+        foreach ($posts as $post) {
+            $insights = is_array($post->insights) ? $post->insights : [];
+            $engagement = (int) ($insights['reactions'] ?? 0)
+                + (int) ($insights['comments'] ?? 0)
+                + (int) ($insights['shares'] ?? 0)
+                + (int) ($insights['saved'] ?? 0);
+
+            $reach = (int) ($insights['reach'] ?? 0);
+            $clicks = (int) ($insights['clicks'] ?? 0);
+
+            $totals['posts']++;
+            $totals['reach'] += $reach;
+            $totals['engagement'] += $engagement;
+            $totals['clicks'] += $clicks;
+
+            $provider = (string) $post->provider;
+            $byChannel[$provider] ??= ['provider' => $provider, 'posts' => 0, 'reach' => 0, 'engagement' => 0];
+            $byChannel[$provider]['posts']++;
+            $byChannel[$provider]['reach'] += $reach;
+            $byChannel[$provider]['engagement'] += $engagement;
+
+            if ($post->insights_synced_at !== null
+                && ($lastSynced === null || $post->insights_synced_at->gt($lastSynced))) {
+                $lastSynced = $post->insights_synced_at;
+            }
+        }
+
+        // Best performers first — this is the list that tells a merchant what
+        // to make more of.
+        $ranked = $posts
+            ->filter(fn (SocialPost $post): bool => is_array($post->insights) && $post->insights !== [])
+            ->sortByDesc(function (SocialPost $post): int {
+                $insights = $post->insights;
+
+                return (int) ($insights['reactions'] ?? 0)
+                    + (int) ($insights['comments'] ?? 0)
+                    + (int) ($insights['shares'] ?? 0)
+                    + (int) ($insights['saved'] ?? 0)
+                    + (int) ($insights['clicks'] ?? 0);
+            })
+            ->take(5)
+            ->map(fn (SocialPost $post): array => $this->posts->format($post))
+            ->values()
+            ->all();
+
+        $campaigns = StoreAdCampaign::query()
+            ->where('store_id', $store->id)
+            ->whereNotNull('external_campaign_id')
+            ->get();
+
+        $adTotals = ['spend' => 0.0, 'impressions' => 0, 'clicks' => 0, 'active_campaigns' => 0, 'currency' => null];
+
+        foreach ($campaigns as $campaign) {
+            $metrics = is_array($campaign->metrics) ? $campaign->metrics : [];
+            $adTotals['spend'] += (float) ($metrics['spend'] ?? 0);
+            $adTotals['impressions'] += (int) ($metrics['impressions'] ?? 0);
+            $adTotals['clicks'] += (int) ($metrics['clicks'] ?? 0);
+            $adTotals['currency'] ??= $campaign->currency;
+
+            if ($campaign->status === 'active') {
+                $adTotals['active_campaigns']++;
+            }
+        }
+
+        return [
+            'window_days' => $windowDays,
+            'totals' => $totals,
+            'by_channel' => array_values($byChannel),
+            'top_posts' => $ranked,
+            'ads' => $adTotals,
+            'last_synced_at' => $lastSynced?->toIso8601String(),
+            // Numbers only exist once the hourly sync has run against a
+            // published post; say so rather than showing a misleading zero.
+            'awaiting_first_sync' => $totals['posts'] > 0 && $lastSynced === null,
+        ];
     }
 
     /**
