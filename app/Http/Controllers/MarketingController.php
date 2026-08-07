@@ -9,6 +9,8 @@ use App\Models\SocialPost;
 use App\Models\Store;
 use App\Models\StoreAdCampaign;
 use App\Services\AbandonedRecoveryService;
+use App\Services\AudienceInsightsService;
+use App\Services\BestTimeToPostService;
 use App\Services\FacebookService;
 use App\Services\InstagramService;
 use App\Services\MarketingService;
@@ -38,6 +40,8 @@ class MarketingController extends Controller
         private readonly SocialPostService $posts,
         private readonly MetaAdsService $ads,
         private readonly MerchantUsageEnforcementService $enforcement,
+        private readonly AudienceInsightsService $audience,
+        private readonly BestTimeToPostService $bestTime,
     ) {}
 
     public function status(Request $request): JsonResponse
@@ -224,6 +228,40 @@ class MarketingController extends Controller
 
         return response()->json(
             $this->marketing->performanceSummary($store, (int) ($data['window_days'] ?? 90)),
+        );
+    }
+
+    public function audience(Request $request): JsonResponse
+    {
+        $store = $this->findOwnedStoreForUser($request);
+
+        return response()->json($this->audience->summaryForStore($store));
+    }
+
+    public function refreshAudience(Request $request): JsonResponse
+    {
+        $store = $this->findOwnedStoreForUser($request);
+        $result = $this->audience->refreshForStore($store);
+
+        $this->invalidateMarketingApiCache($store);
+
+        return response()->json([
+            'message' => $result['captured'] > 0
+                ? 'Audience insights refreshed.'
+                : 'Meta has no demographics to share for this account yet.',
+            ...$this->audience->summaryForStore($store),
+        ]);
+    }
+
+    public function bestTimeToPost(Request $request): JsonResponse
+    {
+        $store = $this->findOwnedStoreForUser($request);
+        $data = $request->validate([
+            'provider' => 'nullable|string|in:facebook,instagram,tiktok_creator',
+        ]);
+
+        return response()->json(
+            $this->bestTime->suggestionsForStore($store, $data['provider'] ?? null),
         );
     }
 

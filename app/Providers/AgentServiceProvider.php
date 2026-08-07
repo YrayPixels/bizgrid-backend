@@ -5,6 +5,7 @@ namespace App\Providers;
 use App\Agents\AgentRegistry;
 use App\Agents\CustomerCommerceAgent;
 use App\Agents\MarketingAgent;
+use App\Agents\SentimentAgent;
 use App\Agents\StorefrontCodeAgent;
 use App\Agents\StorefrontWriterAgent;
 use App\Agents\VisionAgent;
@@ -29,6 +30,7 @@ class AgentServiceProvider extends ServiceProvider
 
             $registry->register('marketing-agent', MarketingAgent::class);
             $registry->register('customer-commerce-agent', CustomerCommerceAgent::class);
+            $registry->register('sentiment-agent', SentimentAgent::class);
             $registry->register('storefront-writer', StorefrontWriterAgent::class);
 
             return $registry;

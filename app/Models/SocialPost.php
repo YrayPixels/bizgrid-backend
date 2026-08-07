@@ -25,6 +25,8 @@ class SocialPost extends Model
         'metadata',
         'insights',
         'insights_synced_at',
+        'sentiment',
+        'sentiment_synced_at',
         'attempts',
         'error_message',
         'published_at',
@@ -37,8 +39,10 @@ class SocialPost extends Model
             'scheduled_for' => 'datetime',
             'approved_at' => 'datetime',
             'insights_synced_at' => 'datetime',
+            'sentiment_synced_at' => 'datetime',
             'metadata' => 'array',
             'insights' => 'array',
+            'sentiment' => 'array',
             'attempts' => 'integer',
         ];
     }

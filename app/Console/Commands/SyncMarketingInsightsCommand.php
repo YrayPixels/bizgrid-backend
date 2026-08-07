@@ -5,11 +5,14 @@ declare(strict_types=1);
 namespace App\Console\Commands;
 
 use App\Models\SocialPost;
+use App\Models\Store;
 use App\Models\StoreAdCampaign;
 use App\Models\StoreSocialConnection;
+use App\Services\AudienceInsightsService;
 use App\Services\FacebookService;
 use App\Services\InstagramService;
 use App\Services\MetaAdsService;
+use App\Services\PostSentimentService;
 use App\Services\SocialTokenHealthService;
 use Illuminate\Console\Command;
 
@@ -17,7 +20,9 @@ class SyncMarketingInsightsCommand extends Command
 {
     protected $signature = 'storehause:sync-marketing-insights
                             {--limit=100 : Maximum posts to refresh in one run}
-                            {--skip-tokens : Skip the connection health pass}';
+                            {--skip-tokens : Skip the connection health pass}
+                            {--skip-sentiment : Skip the comment sentiment pass}
+                            {--skip-audience : Skip the audience demographics pass}';
 
     protected $description = 'Refresh engagement numbers for published posts, ad campaign metrics, and social token health';
 
@@ -26,6 +31,8 @@ class SyncMarketingInsightsCommand extends Command
         InstagramService $instagram,
         MetaAdsService $ads,
         SocialTokenHealthService $tokens,
+        PostSentimentService $sentiment,
+        AudienceInsightsService $audience,
     ): int {
         $limit = max(1, (int) $this->option('limit'));
 
@@ -95,6 +102,45 @@ class SyncMarketingInsightsCommand extends Command
         if (! $this->option('skip-tokens')) {
             $health = $tokens->refreshAll();
             $this->info("Checked {$health['checked']} connection(s): {$health['expiring']} expiring, {$health['invalid']} invalid.");
+        }
+
+        if (! $this->option('skip-sentiment')) {
+            $analyzed = 0;
+
+            foreach ($sentiment->pendingPosts() as $post) {
+                if ($sentiment->analyze($post) !== null) {
+                    $analyzed++;
+                }
+            }
+
+            $this->info("Read sentiment on {$analyzed} post(s).");
+        }
+
+        if (! $this->option('skip-audience')) {
+            $captured = 0;
+
+            // Demographics move slowly and each store costs two Graph calls, so
+            // this runs daily rather than on every hourly tick.
+            $stores = Store::query()
+                ->whereHas('socialConnections', fn ($query) => $query->whereIn('provider', ['facebook', 'instagram']))
+                ->limit(100)
+                ->get();
+
+            foreach ($stores as $store) {
+                $recent = \App\Models\StoreAudienceSnapshot::query()
+                    ->where('store_id', $store->id)
+                    ->where('captured_at', '>=', now()->subDay())
+                    ->exists();
+
+                if ($recent) {
+                    continue;
+                }
+
+                $result = $audience->refreshForStore($store);
+                $captured += $result['captured'];
+            }
+
+            $this->info("Captured audience demographics for {$captured} channel(s).");
         }
 
         return self::SUCCESS;

@@ -253,6 +253,9 @@ Route::prefix('storehause')->group(function () {
                 Route::post('/chat', [MarketingController::class, 'chat']);
 
                 Route::get('/performance', [MarketingController::class, 'performance']);
+                Route::get('/audience', [MarketingController::class, 'audience']);
+                Route::post('/audience/refresh', [MarketingController::class, 'refreshAudience']);
+                Route::get('/best-time', [MarketingController::class, 'bestTimeToPost']);
                 Route::get('/posts', [MarketingController::class, 'posts']);
                 Route::get('/posts/scheduled', [MarketingController::class, 'scheduledPosts']);
                 Route::post('/posts', [MarketingController::class, 'createPost']);

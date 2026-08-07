@@ -146,11 +146,23 @@ class MarketingService
      */
     public function performanceSummary(Store $store, int $windowDays = 90): array
     {
+        $windowStart = now()->subDays($windowDays);
+
         $posts = SocialPost::query()
             ->where('store_id', $store->id)
             ->where('status', SocialPostService::STATUS_PUBLISHED)
-            ->where('published_at', '>=', now()->subDays($windowDays))
+            ->where('published_at', '>=', $windowStart)
             ->orderByDesc('published_at')
+            ->limit(200)
+            ->get();
+
+        // The equivalent window immediately before this one, so the dashboard's
+        // "vs last period" badges reflect a real comparison instead of a
+        // decorative number.
+        $previousPosts = SocialPost::query()
+            ->where('store_id', $store->id)
+            ->where('status', SocialPostService::STATUS_PUBLISHED)
+            ->whereBetween('published_at', [$windowStart->copy()->subDays($windowDays), $windowStart])
             ->limit(200)
             ->get();
 
@@ -222,9 +234,19 @@ class MarketingService
             }
         }
 
+        $previousTotals = $this->totalsFor($previousPosts);
+
         return [
             'window_days' => $windowDays,
             'totals' => $totals,
+            'previous_totals' => $previousTotals,
+            'deltas' => [
+                'posts' => $this->percentChange($previousTotals['posts'], $totals['posts']),
+                'reach' => $this->percentChange($previousTotals['reach'], $totals['reach']),
+                'engagement' => $this->percentChange($previousTotals['engagement'], $totals['engagement']),
+                'clicks' => $this->percentChange($previousTotals['clicks'], $totals['clicks']),
+            ],
+            'has_comparison' => $previousTotals['posts'] > 0,
             'by_channel' => array_values($byChannel),
             'top_posts' => $ranked,
             'ads' => $adTotals,
@@ -233,6 +255,42 @@ class MarketingService
             // published post; say so rather than showing a misleading zero.
             'awaiting_first_sync' => $totals['posts'] > 0 && $lastSynced === null,
         ];
+    }
+
+    /**
+     * @param  \Illuminate\Support\Collection<int, SocialPost>  $posts
+     * @return array{posts: int, reach: int, engagement: int, clicks: int}
+     */
+    private function totalsFor($posts): array
+    {
+        $totals = ['posts' => 0, 'reach' => 0, 'engagement' => 0, 'clicks' => 0];
+
+        foreach ($posts as $post) {
+            $insights = is_array($post->insights) ? $post->insights : [];
+
+            $totals['posts']++;
+            $totals['reach'] += (int) ($insights['reach'] ?? 0);
+            $totals['clicks'] += (int) ($insights['clicks'] ?? 0);
+            $totals['engagement'] += (int) ($insights['reactions'] ?? 0)
+                + (int) ($insights['comments'] ?? 0)
+                + (int) ($insights['shares'] ?? 0)
+                + (int) ($insights['saved'] ?? 0);
+        }
+
+        return $totals;
+    }
+
+    /**
+     * Growth from one period to the next. Returns null rather than a bogus
+     * "+100%" when there is no baseline to compare against.
+     */
+    private function percentChange(int $previous, int $current): ?float
+    {
+        if ($previous <= 0) {
+            return null;
+        }
+
+        return round((($current - $previous) / $previous) * 100, 1);
     }
 
     /**
