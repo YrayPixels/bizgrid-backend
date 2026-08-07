@@ -5,7 +5,6 @@ declare(strict_types=1);
 namespace App\Services;
 
 use App\Agents\AgentRegistry;
-use App\Jobs\PollTikTokPublishStatus;
 use App\Models\SocialPost;
 use App\Models\Store;
 use App\Models\StoreProduct;
@@ -16,10 +15,14 @@ class MarketingService
     public function __construct(
         private readonly AgentRegistry $registry,
         private readonly FacebookService $facebook,
+        private readonly InstagramService $instagram,
         private readonly WhatsAppService $whatsapp,
         private readonly TikTokMessagingService $tiktok,
         private readonly TikTokContentPostingService $tiktokContent,
         private readonly InboundMessagingService $inboundMessaging,
+        private readonly SocialPostService $posts,
+        private readonly MetaAdsService $ads,
+        private readonly SocialTokenHealthService $tokenHealth,
     ) {}
 
     /**
@@ -28,24 +31,33 @@ class MarketingService
      *     assistant_message: string,
      *     tool_calls: list<array{name: string, arguments: array<string, mixed>}>,
      *     tool_results: list<array<string, mixed>>,
-     *     post?: array<string, mixed>|null
+     *     post?: array<string, mixed>|null,
+     *     campaign?: array<string, mixed>|null
      * }|null
      */
     public function handleChatTurn(Store $store, string $message, array $recentMessages = []): ?array
     {
-        $connections = $store->socialConnections()->where('provider', 'facebook')->get();
-        $facebookConnected = $connections->isNotEmpty();
+        $facebookConnections = $store->socialConnections()->where('provider', 'facebook')->get();
+        $instagramConnection = $this->instagram->findConnection($store->id);
         $tiktokCreator = $this->tiktokContent->findCreatorConnection($store->id);
+        $adAccount = $this->ads->findAdAccount($store->id);
 
         $plan = $this->registry->execute('marketing-agent', [
             'message' => $message,
-            'session' => [
-                'recent_messages' => $recentMessages,
-            ],
+            'session' => ['recent_messages' => $recentMessages],
             'store' => $this->buildStoreContext($store),
-            'facebook_connected' => $facebookConnected,
-            'tiktok_creator_connected' => $tiktokCreator !== null,
-            'connected_pages' => $connections->map(fn (StoreSocialConnection $connection): array => [
+            'connected_channels' => [
+                'facebook' => $facebookConnections->isNotEmpty(),
+                'instagram' => $instagramConnection !== null,
+                'tiktok' => $tiktokCreator !== null,
+            ],
+            'instagram_connected' => $instagramConnection !== null,
+            'ads_enabled' => $this->ads->isConfigured() && $adAccount !== null,
+            'ad_account' => $adAccount ? [
+                'name' => $adAccount->page_name,
+                'currency' => $adAccount->metadata['currency'] ?? null,
+            ] : null,
+            'connected_pages' => $facebookConnections->map(fn (StoreSocialConnection $connection): array => [
                 'id' => $connection->page_id,
                 'name' => $connection->page_name,
             ])->values()->all(),
@@ -62,6 +74,7 @@ class MarketingService
 
         $toolResults = [];
         $latestPost = null;
+        $latestCampaign = null;
 
         foreach ($plan['tool_calls'] ?? [] as $toolCall) {
             $result = $this->executeToolCall($store, $toolCall);
@@ -70,6 +83,14 @@ class MarketingService
             if (isset($result['post']) && is_array($result['post'])) {
                 $latestPost = $result['post'];
             }
+
+            if (isset($result['posts']) && is_array($result['posts']) && $result['posts'] !== []) {
+                $latestPost = end($result['posts']) ?: null;
+            }
+
+            if (isset($result['campaign']) && is_array($result['campaign'])) {
+                $latestCampaign = $result['campaign'];
+            }
         }
 
         return [
@@ -77,20 +98,40 @@ class MarketingService
             'tool_calls' => $plan['tool_calls'] ?? [],
             'tool_results' => $toolResults,
             'post' => $latestPost,
+            'campaign' => $latestCampaign,
         ];
     }
 
     /**
      * @return list<array<string, mixed>>
      */
-    public function listPosts(Store $store, int $limit = 20): array
+    public function listPosts(Store $store, int $limit = 20, ?string $status = null): array
     {
         return SocialPost::query()
             ->where('store_id', $store->id)
+            ->when($status !== null, fn ($query) => $query->where('status', $status))
             ->latest()
             ->limit($limit)
             ->get()
-            ->map(fn (SocialPost $post): array => $this->formatPost($post))
+            ->map(fn (SocialPost $post): array => $this->posts->format($post))
+            ->all();
+    }
+
+    /**
+     * Upcoming scheduled posts, ordered by when they will go out — this is the
+     * content calendar the merchant plans against.
+     *
+     * @return list<array<string, mixed>>
+     */
+    public function listScheduled(Store $store, int $limit = 50): array
+    {
+        return SocialPost::query()
+            ->where('store_id', $store->id)
+            ->where('status', SocialPostService::STATUS_SCHEDULED)
+            ->orderBy('scheduled_for')
+            ->limit($limit)
+            ->get()
+            ->map(fn (SocialPost $post): array => $this->posts->format($post))
             ->all();
     }
 
@@ -108,12 +149,22 @@ class MarketingService
             ->latest()
             ->first();
         $tiktokCreator = $this->tiktokContent->findCreatorConnection($store->id);
+        $instagramConnection = $this->instagram->findConnection($store->id);
+        $adAccount = $this->ads->findAdAccount($store->id);
 
         return [
             'facebook' => [
                 'configured' => $this->facebook->isConfigured(),
                 'connected' => $store->socialConnections()->where('provider', 'facebook')->exists(),
                 'pages' => $this->facebook->listConnections($store),
+            ],
+            'instagram' => [
+                'configured' => $this->instagram->isConfigured(),
+                'connected' => $instagramConnection !== null,
+                'username' => $instagramConnection?->page_name,
+                'account_id' => $instagramConnection?->page_id,
+                'linked_page' => $instagramConnection?->metadata['facebook_page_name'] ?? null,
+                'capabilities' => $this->instagram->capabilities(),
             ],
             'whatsapp' => [
                 'configured' => $this->whatsapp->isConfigured(),
@@ -139,7 +190,17 @@ class MarketingService
                 'open_id' => $tiktokCreator?->page_id,
                 'capabilities' => $this->tiktokContent->contentCapabilities(),
             ],
+            'ads' => [
+                'configured' => $this->ads->isConfigured(),
+                'connected' => $adAccount !== null,
+                'account_name' => $adAccount?->page_name,
+                'account_id' => $adAccount?->page_id,
+                'currency' => $adAccount?->metadata['currency'] ?? null,
+                'capabilities' => $this->ads->capabilities(),
+            ],
+            'connection_warnings' => $this->tokenHealth->warningsForStore($store),
             'recent_posts' => $this->formatRecentPosts($store),
+            'scheduled_posts' => $this->listScheduled($store, 10),
             'recent_conversations' => $this->inboundMessaging->listConversations($store, 8),
         ];
     }
@@ -163,45 +224,28 @@ class MarketingService
     }
 
     /**
+     * Direct TikTok publish from the dashboard form. This is a merchant action,
+     * not an agent one, so it publishes straight away.
+     *
      * @return array{ok: bool, post?: array<string, mixed>, error?: string}
      */
     public function publishTikTokVideo(Store $store, string $videoUrl, string $caption): array
     {
         $connection = $this->tiktokContent->findCreatorConnection($store->id);
+
         if (! $connection) {
             return ['ok' => false, 'error' => 'Connect your TikTok creator account before publishing.'];
         }
 
-        $post = SocialPost::create([
-            'store_id' => $store->id,
-            'social_connection_id' => $connection->id,
+        $post = $this->posts->createDraft($store, [
             'provider' => 'tiktok_creator',
             'post_type' => 'video',
-            'status' => 'publishing',
+            'social_connection_id' => $connection->id,
             'message' => $caption,
             'video_url' => $videoUrl,
         ]);
 
-        try {
-            $result = $this->tiktokContent->publishVideo($connection, $post, $videoUrl, $caption);
-            PollTikTokPublishStatus::dispatch($result['post']->id, $connection->id);
-
-            return [
-                'ok' => true,
-                'post' => $this->formatPost($result['post']),
-            ];
-        } catch (\Throwable $e) {
-            $post->update([
-                'status' => 'failed',
-                'error_message' => $e->getMessage(),
-            ]);
-
-            return [
-                'ok' => false,
-                'error' => $e->getMessage(),
-                'post' => $this->formatPost($post->fresh()),
-            ];
-        }
+        return $this->posts->publishNow($post);
     }
 
     /**
@@ -210,19 +254,11 @@ class MarketingService
      */
     private function executeToolCall(Store $store, array $toolCall): array
     {
-        $facebookConnections = $store->socialConnections()->where('provider', 'facebook')->get();
-
         return match ($toolCall['name']) {
-            'draft_social_post' => $this->draftPost($store, $facebookConnections->first(), $toolCall['arguments'], 'facebook', 'text'),
-            'draft_tiktok_video' => $this->draftPost(
-                $store,
-                $this->tiktokContent->findCreatorConnection($store->id),
-                $toolCall['arguments'],
-                'tiktok_creator',
-                'video',
-            ),
-            'publish_to_facebook' => $this->publishFacebookPost($store, $facebookConnections, $toolCall['arguments']),
-            'publish_to_tiktok' => $this->publishTikTokFromTool($store, $toolCall['arguments']),
+            'draft_social_post' => $this->draftSocialPost($store, $toolCall['arguments']),
+            'draft_campaign_series' => $this->draftSeries($store, $toolCall['arguments']),
+            'draft_tiktok_video' => $this->draftTikTokVideo($store, $toolCall['arguments']),
+            'draft_ad_campaign' => $this->draftAdCampaign($store, $toolCall['arguments']),
             'suggest_product_promotion' => [
                 'ok' => true,
                 'promotion_angle' => $toolCall['arguments']['promotion_angle'] ?? '',
@@ -240,91 +276,47 @@ class MarketingService
      * @param  array<string, mixed>  $arguments
      * @return array<string, mixed>
      */
-    private function draftPost(
-        Store $store,
-        ?StoreSocialConnection $connection,
-        array $arguments,
-        string $provider,
-        string $postType,
-    ): array {
-        $post = SocialPost::create([
-            'store_id' => $store->id,
-            'social_connection_id' => $connection?->id,
+    private function draftSocialPost(Store $store, array $arguments): array
+    {
+        $channel = (string) ($arguments['channel'] ?? 'facebook');
+        $provider = $channel === 'instagram' ? 'instagram' : 'facebook';
+
+        $imageUrl = $this->trimmedString($arguments['image_url'] ?? null);
+        $linkUrl = $this->trimmedString($arguments['link_url'] ?? null);
+        $metadata = array_filter([
+            'topic' => $this->trimmedString($arguments['topic'] ?? null),
+            'suggested_schedule' => $arguments['scheduled_for'] ?? null,
+            'source' => 'agent',
+        ]);
+
+        // A product reference beats whatever URL the model typed: it gives us a
+        // real image and a canonical product link straight from the catalogue.
+        $product = $this->resolveProduct($store, $arguments['product_id'] ?? null);
+
+        if ($product !== null) {
+            $imageUrl ??= $product['image_url'];
+            $linkUrl ??= $product['url'];
+            $metadata['product_id'] = $product['id'];
+            $metadata['product_name'] = $product['name'];
+        }
+
+        $post = $this->posts->createDraft($store, [
             'provider' => $provider,
-            'post_type' => $postType,
-            'status' => 'draft',
-            'message' => (string) ($arguments['message'] ?? $arguments['caption'] ?? ''),
-            'link_url' => filled($arguments['link_url'] ?? null) ? (string) $arguments['link_url'] : null,
-            'video_url' => filled($arguments['video_url'] ?? null) ? (string) $arguments['video_url'] : null,
-        ]);
-
-        return [
-            'ok' => true,
-            'post' => $this->formatPost($post),
-        ];
-    }
-
-    /**
-     * @param  \Illuminate\Support\Collection<int, StoreSocialConnection>  $connections
-     * @param  array<string, mixed>  $arguments
-     * @return array<string, mixed>
-     */
-    private function publishFacebookPost(Store $store, $connections, array $arguments): array
-    {
-        if ($connections->isEmpty()) {
-            return ['ok' => false, 'error' => 'Connect a Facebook Page before publishing.'];
-        }
-
-        $pageId = isset($arguments['page_id']) && is_string($arguments['page_id'])
-            ? $arguments['page_id']
-            : null;
-
-        $connection = $pageId
-            ? $connections->firstWhere('page_id', $pageId)
-            : $connections->first();
-
-        if (! $connection instanceof StoreSocialConnection) {
-            return ['ok' => false, 'error' => 'The selected Facebook Page is not connected.'];
-        }
-
-        $message = (string) ($arguments['message'] ?? '');
-        $linkUrl = filled($arguments['link_url'] ?? null) ? (string) $arguments['link_url'] : null;
-
-        $post = SocialPost::create([
-            'store_id' => $store->id,
-            'social_connection_id' => $connection->id,
-            'provider' => 'facebook',
-            'post_type' => 'text',
-            'status' => 'publishing',
-            'message' => $message,
+            'post_type' => $imageUrl !== null ? 'image' : 'text',
+            'message' => (string) ($arguments['message'] ?? ''),
             'link_url' => $linkUrl,
+            'image_url' => $imageUrl,
+            'metadata' => $metadata,
         ]);
-
-        try {
-            $result = $this->facebook->publishFeedPost($connection, $message, $linkUrl);
-            $post->update([
-                'status' => 'published',
-                'external_post_id' => $result['post_id'],
-                'published_at' => now(),
-                'error_message' => null,
-            ]);
-        } catch (\Throwable $e) {
-            $post->update([
-                'status' => 'failed',
-                'error_message' => $e->getMessage(),
-            ]);
-
-            return [
-                'ok' => false,
-                'error' => $e->getMessage(),
-                'post' => $this->formatPost($post->fresh()),
-            ];
-        }
 
         return [
             'ok' => true,
-            'post' => $this->formatPost($post->fresh()),
-            'external_url' => $result['url'] ?? null,
+            'post' => $this->posts->format($post),
+            // Instagram cannot post without an image; flag it now rather than
+            // letting the merchant hit a publish error later.
+            'warning' => $provider === 'instagram' && $imageUrl === null
+                ? 'Add an image before this Instagram post can be published.'
+                : null,
         ];
     }
 
@@ -332,20 +324,132 @@ class MarketingService
      * @param  array<string, mixed>  $arguments
      * @return array<string, mixed>
      */
-    private function publishTikTokFromTool(Store $store, array $arguments): array
+    private function draftSeries(Store $store, array $arguments): array
     {
-        $videoUrl = (string) ($arguments['video_url'] ?? '');
-        $caption = (string) ($arguments['caption'] ?? $arguments['message'] ?? '');
+        $drafted = [];
 
-        if ($videoUrl === '' || $caption === '') {
-            return ['ok' => false, 'error' => 'TikTok posts require a public video URL and caption.'];
+        foreach ((array) ($arguments['posts'] ?? []) as $postArguments) {
+            if (! is_array($postArguments)) {
+                continue;
+            }
+
+            $result = $this->draftSocialPost($store, $postArguments);
+
+            if (($result['ok'] ?? false) && isset($result['post'])) {
+                $drafted[] = $result['post'];
+            }
         }
 
-        $result = $this->publishTikTokVideo($store, $videoUrl, $caption);
+        return [
+            'ok' => $drafted !== [],
+            'posts' => $drafted,
+            'count' => count($drafted),
+        ];
+    }
 
-        return $result['ok']
-            ? ['ok' => true, 'post' => $result['post'] ?? null]
-            : ['ok' => false, 'error' => $result['error'] ?? 'Publish failed.', 'post' => $result['post'] ?? null];
+    /**
+     * @param  array<string, mixed>  $arguments
+     * @return array<string, mixed>
+     */
+    private function draftTikTokVideo(Store $store, array $arguments): array
+    {
+        $post = $this->posts->createDraft($store, [
+            'provider' => 'tiktok_creator',
+            'post_type' => 'video',
+            'message' => (string) ($arguments['caption'] ?? ''),
+            'video_url' => $this->trimmedString($arguments['video_url'] ?? null),
+            'metadata' => ['source' => 'agent'],
+        ]);
+
+        return ['ok' => true, 'post' => $this->posts->format($post)];
+    }
+
+    /**
+     * @param  array<string, mixed>  $arguments
+     * @return array<string, mixed>
+     */
+    private function draftAdCampaign(Store $store, array $arguments): array
+    {
+        if (! $this->ads->isConfigured()) {
+            return ['ok' => false, 'error' => 'Paid ads are not enabled on this platform yet.'];
+        }
+
+        // The agent speaks in whole naira; Meta counts in kobo.
+        $budgetMajor = (float) ($arguments['daily_budget_major'] ?? 0);
+
+        $campaign = $this->ads->createDraft($store, [
+            'name' => (string) ($arguments['name'] ?? 'Untitled campaign'),
+            'objective' => (string) ($arguments['objective'] ?? 'OUTCOME_TRAFFIC'),
+            'daily_budget_minor' => (int) round($budgetMajor * 100),
+            'targeting' => [
+                'countries' => $arguments['countries'] ?? ['NG'],
+                'age_min' => $arguments['age_min'] ?? 18,
+                'age_max' => $arguments['age_max'] ?? 65,
+            ],
+            'creative' => [
+                'message' => (string) ($arguments['message'] ?? ''),
+                'headline' => (string) ($arguments['headline'] ?? ''),
+                'description' => (string) ($arguments['description'] ?? ''),
+                'link_url' => (string) ($arguments['link_url'] ?? ''),
+                'image_url' => (string) ($arguments['image_url'] ?? ''),
+                'call_to_action' => (string) ($arguments['call_to_action'] ?? 'SHOP_NOW'),
+            ],
+        ]);
+
+        return [
+            'ok' => true,
+            'campaign' => $this->ads->format($campaign),
+            'notice' => 'Draft only — this campaign will not spend anything until you launch and turn it on.',
+        ];
+    }
+
+    /**
+     * @return array{id: string, name: string, url: string, image_url: ?string}|null
+     */
+    private function resolveProduct(Store $store, mixed $productId): ?array
+    {
+        if (! is_string($productId) && ! is_int($productId)) {
+            return null;
+        }
+
+        $product = StoreProduct::query()
+            ->where('store_id', $store->id)
+            ->find($productId);
+
+        if (! $product instanceof StoreProduct) {
+            return null;
+        }
+
+        return [
+            'id' => (string) $product->id,
+            'name' => (string) $product->name,
+            'url' => $this->storefrontUrl($store).'/products/'.$product->slug,
+            'image_url' => $this->productImage($product),
+        ];
+    }
+
+    private function productImage(StoreProduct $product): ?string
+    {
+        $direct = $this->trimmedString($product->image_url);
+
+        if ($direct !== null) {
+            return $direct;
+        }
+
+        foreach ((array) ($product->images ?? []) as $image) {
+            $candidate = $this->trimmedString(is_array($image) ? ($image['url'] ?? null) : $image);
+
+            if ($candidate !== null) {
+                return $candidate;
+            }
+        }
+
+        return null;
+    }
+
+    private function storefrontUrl(Store $store): string
+    {
+        return 'https://'.$store->slug.'.'.config('storehause.platform_domain', 'bizgrid.shop');
     }
 
     /**
@@ -354,20 +458,23 @@ class MarketingService
     private function buildStoreContext(Store $store): array
     {
         $store->loadMissing('merchant');
-        $platformDomain = config('storehause.platform_domain', 'bizgrid.shop');
-        $storefrontUrl = 'https://'.$store->slug.'.'.$platformDomain;
+        $storefrontUrl = $this->storefrontUrl($store);
 
         $products = StoreProduct::query()
             ->where('store_id', $store->id)
             ->where('status', 'active')
             ->latest()
-            ->limit(6)
-            ->get(['name', 'price', 'currency', 'slug'])
+            ->limit(10)
+            ->get(['id', 'name', 'price', 'currency', 'slug', 'image_url', 'images'])
             ->map(fn (StoreProduct $product): array => [
+                // The id is what the agent passes back as product_id so we can
+                // attach the real image and link rather than trusting free text.
+                'id' => (string) $product->id,
                 'name' => $product->name,
                 'price' => (float) $product->price,
                 'currency' => $product->currency,
                 'url' => $storefrontUrl.'/products/'.$product->slug,
+                'has_image' => $this->productImage($product) !== null,
             ])
             ->all();
 
@@ -388,30 +495,20 @@ class MarketingService
         return SocialPost::query()
             ->where('store_id', $store->id)
             ->latest()
-            ->limit(5)
+            ->limit(8)
             ->get()
-            ->map(fn (SocialPost $post): array => $this->formatPost($post))
+            ->map(fn (SocialPost $post): array => $this->posts->format($post))
             ->all();
     }
 
-    /**
-     * @return array<string, mixed>
-     */
-    private function formatPost(SocialPost $post): array
+    private function trimmedString(mixed $value): ?string
     {
-        return [
-            'id' => (string) $post->id,
-            'provider' => $post->provider,
-            'post_type' => $post->post_type ?? 'text',
-            'status' => $post->status,
-            'message' => $post->message,
-            'link_url' => $post->link_url,
-            'video_url' => $post->video_url,
-            'external_post_id' => $post->external_post_id,
-            'publish_id' => $post->publish_id,
-            'error_message' => $post->error_message,
-            'published_at' => $post->published_at?->toIso8601String(),
-            'created_at' => $post->created_at?->toIso8601String(),
-        ];
+        if (! is_string($value)) {
+            return null;
+        }
+
+        $trimmed = trim($value);
+
+        return $trimmed === '' ? null : $trimmed;
     }
 }

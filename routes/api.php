@@ -246,10 +246,30 @@ Route::prefix('storehause')->group(function () {
                 Route::get('/tiktok/creator/connect', [MarketingController::class, 'connectTikTokCreator']);
                 Route::delete('/tiktok/creator/disconnect', [MarketingController::class, 'disconnectTikTokCreator']);
                 Route::post('/tiktok/publish', [MarketingController::class, 'publishTikTokVideo']);
+                Route::post('/instagram/connect', [MarketingController::class, 'connectInstagram']);
+                Route::delete('/instagram/disconnect', [MarketingController::class, 'disconnectInstagram']);
                 Route::patch('/messaging/settings', [MarketingController::class, 'updateMessagingSettings']);
                 Route::get('/conversations', [MarketingController::class, 'conversations']);
                 Route::post('/chat', [MarketingController::class, 'chat']);
+
                 Route::get('/posts', [MarketingController::class, 'posts']);
+                Route::get('/posts/scheduled', [MarketingController::class, 'scheduledPosts']);
+                Route::post('/posts', [MarketingController::class, 'createPost']);
+                Route::patch('/posts/{postId}', [MarketingController::class, 'updatePost']);
+                Route::delete('/posts/{postId}', [MarketingController::class, 'deletePost']);
+                Route::post('/posts/{postId}/publish', [MarketingController::class, 'publishPost']);
+                Route::post('/posts/{postId}/schedule', [MarketingController::class, 'schedulePost']);
+                Route::post('/posts/{postId}/unschedule', [MarketingController::class, 'unschedulePost']);
+
+                Route::get('/ads/accounts', [MarketingController::class, 'adAccounts']);
+                Route::post('/ads/account', [MarketingController::class, 'selectAdAccount']);
+                Route::delete('/ads/account', [MarketingController::class, 'disconnectAdAccount']);
+                Route::get('/ads/campaigns', [MarketingController::class, 'campaigns']);
+                Route::post('/ads/campaigns', [MarketingController::class, 'createCampaign']);
+                Route::patch('/ads/campaigns/{campaignId}', [MarketingController::class, 'updateCampaign']);
+                Route::delete('/ads/campaigns/{campaignId}', [MarketingController::class, 'archiveCampaign']);
+                Route::post('/ads/campaigns/{campaignId}/launch', [MarketingController::class, 'launchCampaign']);
+                Route::post('/ads/campaigns/{campaignId}/state', [MarketingController::class, 'setCampaignState']);
                 Route::get('/abandoned', [MarketingController::class, 'abandoned']);
                 Route::post('/abandoned/draft-message', [MarketingController::class, 'draftAbandonedMessage']);
                 Route::post('/abandoned/send', [MarketingController::class, 'sendAbandonedMessage']);
