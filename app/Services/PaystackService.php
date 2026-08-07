@@ -174,13 +174,20 @@ class PaystackService
 
             $store = Store::query()->lockForUpdate()->find($order->store_id);
             if ($store) {
+                // The platform fee is collected on top of the merchant's amount, so
+                // store revenue and plan usage are measured net of it.
+                $merchantAmount = round(
+                    (float) $order->total_amount - (float) ($order->platform_fee_amount ?? 0),
+                    2,
+                );
+
                 $store->increment('orders_count');
-                $store->increment('gross_revenue', (float) $order->total_amount);
+                $store->increment('gross_revenue', $merchantAmount);
 
                 $store->loadMissing('merchant');
                 if ($store->merchant) {
                     app(MerchantUsageEnforcementService::class)
-                        ->recordOrderProcessing($store->merchant, (float) $order->total_amount);
+                        ->recordOrderProcessing($store->merchant, $merchantAmount);
                 }
             }
         });

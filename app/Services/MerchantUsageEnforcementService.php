@@ -12,6 +12,7 @@ class MerchantUsageEnforcementService
 {
     public function __construct(
         private readonly MerchantUsageService $usage,
+        private readonly PlatformFeeService $platformFee,
     ) {}
 
     public function merchantForUser(int $userId): ?Merchant
@@ -35,7 +36,7 @@ class MerchantUsageEnforcementService
         $this->usage->ensureDailyAiReset($merchant);
         $merchant->refresh();
 
-        $dailyLimit = (int) config('dodopayments.ai_daily_credits', 5);
+        $dailyLimit = $this->usage->aiDailyLimit($merchant->subscription_plan ?: $this->usage->defaultPlanKey());
         $usedToday = (int) $merchant->ai_credits_used_today;
         $purchased = (int) $merchant->ai_purchased_credits;
 
@@ -49,7 +50,7 @@ class MerchantUsageEnforcementService
         $this->usage->ensureDailyAiReset($merchant);
         $merchant->refresh();
 
-        $dailyLimit = (int) config('dodopayments.ai_daily_credits', 5);
+        $dailyLimit = $this->usage->aiDailyLimit($merchant->subscription_plan ?: $this->usage->defaultPlanKey());
 
         if ((int) $merchant->ai_credits_used_today < $dailyLimit) {
             $merchant->ai_credits_used_today = (int) $merchant->ai_credits_used_today + 1;
@@ -66,7 +67,7 @@ class MerchantUsageEnforcementService
         $this->usage->ensureMonthlyPeriod($merchant);
         $merchant->refresh();
 
-        $plan = $this->usage->planConfig($merchant->subscription_plan ?: 'starter');
+        $plan = $this->usage->planConfig($merchant->subscription_plan ?: $this->usage->defaultPlanKey());
         $cap = $plan['caps']['monthly_processing_ngn'] ?? null;
 
         if ($cap === null) {
@@ -76,6 +77,18 @@ class MerchantUsageEnforcementService
         $projected = (float) $merchant->monthly_processed_ngn + $amountNgn;
         if ($projected > $cap) {
             $this->deny('Monthly order processing limit reached for this merchant plan.');
+        }
+    }
+
+    /**
+     * Channels the platform does not process (POS, cash, bank transfer) are gated to
+     * paid plans — the free plan's service fee can only be collected from payments
+     * that flow through the platform.
+     */
+    public function assertCanUseOfflinePayments(Merchant $merchant): void
+    {
+        if (! $this->platformFee->allowsOfflinePayments($merchant)) {
+            $this->deny('In-person and cash payments require a paid plan. Upgrade to sell offline.');
         }
     }
 

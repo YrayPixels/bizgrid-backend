@@ -10,9 +10,26 @@ use Illuminate\Support\Carbon;
 
 class MerchantUsageService
 {
+    public function defaultPlanKey(): string
+    {
+        return (string) config('dodopayments.default_plan', 'starter');
+    }
+
     public function planConfig(string $planKey): array
     {
-        return config("dodopayments.plans.{$planKey}", config('dodopayments.plans.starter', []));
+        $default = config('dodopayments.plans.'.$this->defaultPlanKey(), []);
+
+        return config("dodopayments.plans.{$planKey}", $default);
+    }
+
+    /**
+     * Daily AI allowance for a plan, falling back to the platform-wide default.
+     */
+    public function aiDailyLimit(string $planKey): int
+    {
+        $plan = $this->planConfig($planKey);
+
+        return (int) ($plan['ai_daily_credits'] ?? config('dodopayments.ai_daily_credits', 5));
     }
 
     public function ensureMonthlyPeriod(Merchant $merchant): void
@@ -45,7 +62,7 @@ class MerchantUsageService
 
     public function grantMonthlyAllowances(Merchant $merchant): void
     {
-        $plan = $this->planConfig($merchant->subscription_plan ?: 'starter');
+        $plan = $this->planConfig($merchant->subscription_plan ?: $this->defaultPlanKey());
         $included = $plan['included_monthly'] ?? [];
 
         $merchant->sms_included_remaining = (int) ($included['sms_units'] ?? 0);
@@ -70,11 +87,11 @@ class MerchantUsageService
         $this->ensureDailyAiReset($merchant);
         $merchant->refresh();
 
-        $planKey = $merchant->subscription_plan ?: 'starter';
+        $planKey = $merchant->subscription_plan ?: $this->defaultPlanKey();
         $plan = $this->planConfig($planKey);
         $caps = $plan['caps'] ?? [];
         $included = $plan['included_monthly'] ?? [];
-        $dailyAiLimit = (int) config('dodopayments.ai_daily_credits', 5);
+        $dailyAiLimit = $this->aiDailyLimit($planKey);
 
         $storeCount = $merchant->stores()->count();
         $customerCount = $this->countCustomers($merchant);
@@ -202,16 +219,28 @@ class MerchantUsageService
     {
         $caps = $plan['caps'] ?? [];
         $included = $plan['included_monthly'] ?? [];
-        $dailyAi = (int) config('dodopayments.ai_daily_credits', 5);
+        $dailyAi = (int) ($plan['ai_daily_credits'] ?? config('dodopayments.ai_daily_credits', 5));
+        $feePercent = (float) ($plan['transaction_fee_percent'] ?? 0);
 
         return [
+            ['label' => 'Service fee', 'value' => $this->formatFeeLabel($feePercent)],
             ['label' => 'Monthly processing', 'value' => $this->formatNgnCapLabel($caps['monthly_processing_ngn'] ?? null)],
             ['label' => 'Storefronts', 'value' => $this->formatCountCapLabel($caps['max_stores'] ?? null)],
             ['label' => 'Customers', 'value' => $this->formatCountCapLabel($caps['max_customers'] ?? null, 'Unlimited')],
             ['label' => 'SMS units', 'value' => number_format((int) ($included['sms_units'] ?? 0)).'/mo'],
             ['label' => 'WhatsApp units', 'value' => number_format((int) ($included['whatsapp_units'] ?? 0)).'/mo'],
             ['label' => 'AI queries', 'value' => "{$dailyAi}/day"],
+            ['label' => 'In-person / POS', 'value' => ($caps['offline_payments'] ?? true) ? 'Included' : 'Not available'],
         ];
+    }
+
+    private function formatFeeLabel(float $percent): string
+    {
+        if ($percent <= 0) {
+            return 'None';
+        }
+
+        return rtrim(rtrim(number_format($percent, 2, '.', ''), '0'), '.').'% per online order';
     }
 
     private function formatNgnCap(float $used, ?int $cap): string

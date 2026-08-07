@@ -51,7 +51,8 @@ it('returns subscription and plan catalog for the signed in merchant', function 
         ->assertJsonPath('subscription.plan', 'growth')
         ->assertJsonPath('subscription.status', 'active')
         ->assertJsonPath('subscription.plan_name', 'Growth')
-        ->assertJsonCount(3, 'plans');
+        ->assertJsonPath('subscription.transaction_fee_percent', 0)
+        ->assertJsonCount(4, 'plans');
 });
 
 it('creates a dodo checkout session for a selected plan', function () {

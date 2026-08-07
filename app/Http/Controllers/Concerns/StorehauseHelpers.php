@@ -194,6 +194,10 @@ trait StorehauseHelpers
             'subtotal' => (float) $order->subtotal,
             'discount_amount' => (float) ($order->discount_amount ?? 0),
             'discount_label' => $order->discount_label,
+            'platform_fee_amount' => (float) ($order->platform_fee_amount ?? 0),
+            'platform_fee_percent' => (float) ($order->platform_fee_percent ?? 0),
+            // What the merchant is owed at settlement, i.e. total less the platform fee.
+            'merchant_amount' => round((float) $order->total_amount - (float) ($order->platform_fee_amount ?? 0), 2),
             'total_amount' => (float) $order->total_amount,
             'items' => $items,
             'notes' => $order->notes,

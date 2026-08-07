@@ -16,6 +16,7 @@ use App\Services\MerchantUsageEnforcementService;
 use App\Services\OrderInvoiceService;
 use App\Services\OrderPlacementService;
 use App\Services\PaystackService;
+use App\Services\PlatformFeeService;
 use App\Services\PlatformNotificationService;
 use App\Services\ShippingQuoteService;
 use App\Services\StoreCustomerService;
@@ -54,6 +55,7 @@ class PublicStorefrontController extends Controller
         private readonly OrderPlacementService $orderPlacement,
         private readonly ShippingQuoteService $shippingQuotes,
         private readonly ProductVariantResolver $variants,
+        private readonly PlatformFeeService $platformFee,
     ) {}
 
     public function listPublished(): JsonResponse
@@ -269,14 +271,31 @@ class PublicStorefrontController extends Controller
         $discountAmount = (float) $priced['discount_amount'];
         $cartDiscountLabel = $priced['discount_label'];
         $currency = (string) $priced['currency'];
-        $totalAmount = max(0, round($subtotal - $discountAmount + $deliveryFee, 2));
+
+        // Merchant-payable amount: what the seller actually earns and what plan
+        // caps and revenue metrics are measured against.
+        $merchantAmount = max(0, round($subtotal - $discountAmount + $deliveryFee, 2));
 
         $store->loadMissing('merchant');
         if ($store->merchant) {
-            $this->enforcement->assertCanProcessOrder($store->merchant, $totalAmount);
+            $this->enforcement->assertCanProcessOrder($store->merchant, $merchantAmount);
         }
 
+        // Platform service fee sits on top — the shopper pays it, the platform keeps it.
+        $fee = $this->platformFee->calculate($store->merchant, $merchantAmount);
+        $platformFeeAmount = $fee['amount'];
+        $totalAmount = $fee['total'];
+
         $paystackEnabled = $this->paystack->isConfigured();
+
+        // The service fee is only collectable on payments the platform processes.
+        // Rather than silently waive it, refuse the order and surface the reason.
+        if ($platformFeeAmount > 0 && ! $paystackEnabled) {
+            return response()->json([
+                'message' => 'Online payment is unavailable right now, so this order cannot be placed.',
+                'code' => 'online_payment_required',
+            ], 422);
+        }
 
         $addressParts = array_values(array_filter([
             trim((string) $data['delivery_address']),
@@ -298,6 +317,9 @@ class PublicStorefrontController extends Controller
             $deliveryMethod,
             $deliveryAddress,
             $totalAmount,
+            $merchantAmount,
+            $platformFeeAmount,
+            $fee,
             $currency,
             $paystackEnabled,
             $shippingQuote,
@@ -322,6 +344,8 @@ class PublicStorefrontController extends Controller
                 'discount_amount' => $discountAmount,
                 'discount_label' => $cartDiscountLabel,
                 'total_amount' => $totalAmount,
+                'platform_fee_amount' => $platformFeeAmount,
+                'platform_fee_percent' => $fee['rate'],
                 'items' => $items,
                 'notes' => $data['notes'] ?? null,
                 'placed_at' => now(),
@@ -331,10 +355,12 @@ class PublicStorefrontController extends Controller
 
             if (! $paystackEnabled) {
                 $store->increment('orders_count');
-                $store->increment('gross_revenue', $totalAmount);
+                // Store revenue and plan usage track the merchant's share, never the
+                // platform fee the shopper paid on top.
+                $store->increment('gross_revenue', $merchantAmount);
 
                 if ($store->merchant) {
-                    $this->enforcement->recordOrderProcessing($store->merchant, $totalAmount);
+                    $this->enforcement->recordOrderProcessing($store->merchant, $merchantAmount);
                 }
             }
 
@@ -718,6 +744,8 @@ class PublicStorefrontController extends Controller
 
     private function formatPublicPayload(Store $store): array
     {
+        $store->loadMissing('merchant');
+
         $storefront = $this->publishService->resolvePublished($store)
             ?? $this->builderService->synthesizeStorefront($store);
 
@@ -762,6 +790,8 @@ class PublicStorefrontController extends Controller
                     : 0.0,
                 'fulfilment_promise' => $store->fulfilment_promise,
                 'shipping_locations' => $this->shippingQuotes->formatPublicLocations($store),
+                'service_fee_percent' => $this->platformFee->rateForMerchant($store->merchant),
+                'service_fee_label' => $this->platformFee->labelForMerchant($store->merchant),
             ],
         ];
     }
