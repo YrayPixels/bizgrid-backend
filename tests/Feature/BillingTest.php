@@ -1,9 +1,9 @@
 <?php
 
+use App\Models\BillingWebhookEvent;
 use App\Models\Merchant;
 use App\Models\Store;
 use App\Models\User;
-use App\Services\DodoPaymentsService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
 
@@ -122,4 +122,174 @@ it('activates merchant subscription from webhook payload', function () {
         ->and($merchant->subscription_status)->toBe('active')
         ->and($merchant->dodo_subscription_id)->toBe('sub_test_123')
         ->and($merchant->dodo_customer_id)->toBe('cus_test_123');
+});
+
+it('ignores a redelivered webhook so allowances are not granted twice', function () {
+    config([
+        'dodopayments.webhook_secret' => null,
+        'dodopayments.plans.growth.product_id' => 'prod_growth_test',
+    ]);
+
+    $user = User::factory()->create();
+    $merchant = createBillingMerchant($user);
+
+    $payload = [
+        'type' => 'subscription.active',
+        'data' => [
+            'subscription_id' => 'sub_test_123',
+            'customer_id' => 'cus_test_123',
+            'product_id' => 'prod_growth_test',
+            'metadata' => ['merchant_id' => (string) $merchant->id, 'plan' => 'growth'],
+            'next_billing_date' => '2026-09-04T00:00:00Z',
+        ],
+    ];
+
+    $this->postJson('/api/storehause/billing/webhook', $payload, ['webhook-id' => 'evt_replayed'])
+        ->assertOk();
+
+    // Stand in for a month of trading between the original delivery and the replay.
+    $merchant->refresh();
+    $merchant->monthly_processed_ngn = 42_000;
+    $merchant->save();
+
+    $this->postJson('/api/storehause/billing/webhook', $payload, ['webhook-id' => 'evt_replayed'])
+        ->assertOk();
+
+    $merchant->refresh();
+
+    expect(BillingWebhookEvent::where('event_id', 'evt_replayed')->count())->toBe(1)
+        ->and((float) $merchant->monthly_processed_ngn)->toBe(42_000.0)
+        ->and($merchant->subscription_status)->toBe('active');
+});
+
+it('activates a merchant from the reconciler when the webhook never arrived', function () {
+    config([
+        'dodopayments.api_key' => 'test_api_key',
+        'dodopayments.environment' => 'test_mode',
+        'dodopayments.plans.growth.product_id' => 'prod_growth_test',
+    ]);
+
+    $user = User::factory()->create();
+    $merchant = createBillingMerchant($user);
+
+    Http::fake([
+        'https://test.dodopayments.com/subscriptions*' => Http::response([
+            'items' => [[
+                'subscription_id' => 'sub_recovered_1',
+                'status' => 'active',
+                'product_id' => 'prod_growth_test',
+                'customer' => ['customer_id' => 'cus_recovered_1'],
+                'metadata' => ['merchant_id' => (string) $merchant->id, 'plan' => 'growth'],
+                'next_billing_date' => '2026-09-04T00:00:00Z',
+            ]],
+        ], 200),
+    ]);
+
+    $this->artisan('storehause:reconcile-subscriptions')->assertExitCode(0);
+
+    $merchant->refresh();
+
+    expect($merchant->subscription_status)->toBe('active')
+        ->and($merchant->subscription_plan)->toBe('growth')
+        ->and($merchant->dodo_subscription_id)->toBe('sub_recovered_1')
+        ->and($merchant->dodo_customer_id)->toBe('cus_recovered_1')
+        ->and($merchant->sms_included_remaining)->toBe(300);
+});
+
+it('leaves an already-synced merchant untouched so usage counters survive', function () {
+    config([
+        'dodopayments.api_key' => 'test_api_key',
+        'dodopayments.environment' => 'test_mode',
+        'dodopayments.plans.growth.product_id' => 'prod_growth_test',
+    ]);
+
+    $user = User::factory()->create();
+    $merchant = createBillingMerchant($user, [
+        'subscription_plan' => 'growth',
+        'subscription_status' => 'active',
+        'dodo_subscription_id' => 'sub_synced_1',
+        'dodo_customer_id' => 'cus_synced_1',
+        'subscription_renews_at' => '2026-09-04T00:00:00Z',
+        'monthly_processed_ngn' => 88_000,
+    ]);
+
+    Http::fake([
+        'https://test.dodopayments.com/subscriptions*' => Http::response([
+            'items' => [[
+                'subscription_id' => 'sub_synced_1',
+                'status' => 'active',
+                'product_id' => 'prod_growth_test',
+                'customer' => ['customer_id' => 'cus_synced_1'],
+                'metadata' => ['merchant_id' => (string) $merchant->id, 'plan' => 'growth'],
+                'next_billing_date' => '2026-09-04T00:00:00Z',
+            ]],
+        ], 200),
+    ]);
+
+    $this->artisan('storehause:reconcile-subscriptions')
+        ->expectsOutputToContain('Reconciled 0 merchant(s).')
+        ->assertExitCode(0);
+
+    $merchant->refresh();
+
+    expect((float) $merchant->monthly_processed_ngn)->toBe(88_000.0);
+});
+
+it('drops a merchant to free when dodo reports the subscription cancelled', function () {
+    config([
+        'dodopayments.api_key' => 'test_api_key',
+        'dodopayments.environment' => 'test_mode',
+        'dodopayments.plans.growth.product_id' => 'prod_growth_test',
+    ]);
+
+    $user = User::factory()->create();
+    $merchant = createBillingMerchant($user, [
+        'subscription_plan' => 'growth',
+        'subscription_status' => 'active',
+        'dodo_subscription_id' => 'sub_gone_1',
+        'dodo_customer_id' => 'cus_gone_1',
+    ]);
+
+    Http::fake([
+        'https://test.dodopayments.com/subscriptions*' => Http::response([
+            'items' => [[
+                'subscription_id' => 'sub_gone_1',
+                'status' => 'cancelled',
+                'product_id' => 'prod_growth_test',
+                'customer' => ['customer_id' => 'cus_gone_1'],
+                'metadata' => ['merchant_id' => (string) $merchant->id],
+            ]],
+        ], 200),
+    ]);
+
+    $this->artisan('storehause:reconcile-subscriptions')->assertExitCode(0);
+
+    $merchant->refresh();
+
+    expect($merchant->subscription_status)->toBe('cancelled')
+        ->and($merchant->subscription_plan)->toBe('free')
+        ->and($merchant->dodo_subscription_id)->toBeNull();
+});
+
+it('flags an active subscription that matches no merchant', function () {
+    config([
+        'dodopayments.api_key' => 'test_api_key',
+        'dodopayments.environment' => 'test_mode',
+    ]);
+
+    Http::fake([
+        'https://test.dodopayments.com/subscriptions*' => Http::response([
+            'items' => [[
+                'subscription_id' => 'sub_orphan_1',
+                'status' => 'active',
+                'product_id' => 'prod_unknown',
+                'customer' => ['customer_id' => 'cus_orphan_1'],
+                'metadata' => [],
+            ]],
+        ], 200),
+    ]);
+
+    $this->artisan('storehause:reconcile-subscriptions')
+        ->expectsOutputToContain('ORPHAN: sub_orphan_1')
+        ->assertExitCode(0);
 });

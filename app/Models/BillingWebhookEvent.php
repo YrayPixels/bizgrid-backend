@@ -8,6 +8,7 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 class BillingWebhookEvent extends Model
 {
     protected $fillable = [
+        'event_id',
         'merchant_id',
         'event_type',
         'status',

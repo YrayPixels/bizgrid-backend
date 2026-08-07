@@ -7,6 +7,7 @@ namespace App\Services;
 use App\Models\BillingWebhookEvent;
 use App\Models\Merchant;
 use App\Models\User;
+use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Http\Client\RequestException;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Http;
@@ -214,12 +215,22 @@ class DodoPaymentsService
 
         $merchant = $this->resolveMerchant($data);
 
-        BillingWebhookEvent::create([
-            'merchant_id' => $merchant?->id,
-            'event_type' => $type,
-            'status' => 'processed',
-            'payload' => $event,
-        ]);
+        // Dodo retries on any non-2xx response and can redeliver an event we already
+        // handled. The unique index on event_id turns that into an insert collision,
+        // which is our signal to stop before the side effects run a second time —
+        // otherwise a redelivered subscription.active re-grants monthly allowances
+        // and resets the merchant's processing counter.
+        try {
+            BillingWebhookEvent::create([
+                'event_id' => $this->readHeader($headers, 'webhook-id'),
+                'merchant_id' => $merchant?->id,
+                'event_type' => $type,
+                'status' => 'processed',
+                'payload' => $event,
+            ]);
+        } catch (UniqueConstraintViolationException) {
+            return;
+        }
 
         $this->notifications->notify(
             'billing.webhook',
@@ -235,6 +246,119 @@ class DodoPaymentsService
             'payment.succeeded' => $this->syncAddOnPurchase($data),
             default => null,
         };
+    }
+
+    /**
+     * Page through every subscription Dodo knows about.
+     *
+     * Small merchant counts make a full sweep cheap; revisit if this grows past a
+     * few thousand subscriptions.
+     */
+    public function fetchRemoteSubscriptions(int $pageSize = 100, int $maxPages = 20): array
+    {
+        $this->assertConfigured();
+
+        $all = [];
+
+        for ($page = 0; $page < $maxPages; $page++) {
+            $response = $this->request('get', '/subscriptions', [
+                'page_size' => $pageSize,
+                'page_number' => $page,
+            ]);
+
+            $items = $response['items'] ?? [];
+            if (! is_array($items) || $items === []) {
+                break;
+            }
+
+            $all = array_merge($all, $items);
+
+            if (count($items) < $pageSize) {
+                break;
+            }
+        }
+
+        return $all;
+    }
+
+    /**
+     * Bring one merchant in line with Dodo's view of a subscription.
+     *
+     * Webhooks are the primary path; this is the safety net for events that never
+     * arrived — endpoint down, tunnel expired, deploy window. Returns a description
+     * of what changed, or null when local state already matched.
+     */
+    public function reconcileSubscription(array $remote): ?string
+    {
+        $merchant = $this->resolveMerchant($remote);
+        if (! $merchant) {
+            return null;
+        }
+
+        $status = $this->readString($remote, ['status']);
+
+        return match ($status) {
+            'active' => $this->reconcileActive($merchant, $remote),
+            'on_hold', 'paused' => $this->reconcileStatus($merchant, 'on_hold'),
+            'cancelled', 'expired', 'failed' => $this->reconcileStatus($merchant, 'cancelled'),
+            // `pending` and anything else is still mid-flight — nothing to apply yet.
+            default => null,
+        };
+    }
+
+    private function reconcileActive(Merchant $merchant, array $remote): ?string
+    {
+        $wasActive = $merchant->subscription_status === 'active';
+        $planKey = $this->resolvePlanKey($remote) ?? $merchant->subscription_plan;
+
+        $merchant->subscription_plan = $planKey;
+        $merchant->subscription_status = 'active';
+        $merchant->dodo_customer_id = $this->readString($remote, ['customer_id', 'customer.customer_id', 'customer.id'])
+            ?? $merchant->dodo_customer_id;
+        $merchant->dodo_subscription_id = $this->readString($remote, ['subscription_id', 'id'])
+            ?? $merchant->dodo_subscription_id;
+        $merchant->subscription_renews_at = $this->resolveRenewalDate($remote)
+            ?? $merchant->subscription_renews_at;
+
+        // Only stamp on the transition in. Backfilling it on every pass would make a
+        // merchant who is already synced look dirty and trigger a write each run.
+        if (! $wasActive) {
+            $merchant->activated_at ??= now();
+        }
+
+        if (! $merchant->isDirty()) {
+            return null;
+        }
+
+        $changed = implode(', ', array_keys($merchant->getDirty()));
+        $merchant->save();
+
+        // Allowances are granted only on the transition into active. Granting on every
+        // pass would reset monthly_processed_ngn on each run and wipe the usage counter
+        // — the webhook path still re-grants per renewal event, which is what we want.
+        if (! $wasActive) {
+            $this->usage->grantMonthlyAllowances($merchant);
+
+            $plan = $this->usage->planConfig($planKey);
+            $this->storeNotifications->billingEvent($merchant, 'subscription_active', [
+                'plan' => $planKey,
+                'plan_name' => $plan['name'] ?? ucfirst($planKey),
+                'renews_at' => $this->storeNotifications->formatRenewalDate($merchant->subscription_renews_at),
+            ]);
+        }
+
+        return "merchant #{$merchant->id} ({$merchant->business_name}) → active on {$planKey} [{$changed}]";
+    }
+
+    private function reconcileStatus(Merchant $merchant, string $status): ?string
+    {
+        if ($merchant->subscription_status === $status) {
+            return null;
+        }
+
+        $this->applySubscriptionStatus($merchant, $status);
+
+        return "merchant #{$merchant->id} ({$merchant->business_name}) → {$status}";
     }
 
     private function syncSubscriptionActive(array $data): void
@@ -296,6 +420,11 @@ class DodoPaymentsService
             return;
         }
 
+        $this->applySubscriptionStatus($merchant, $status);
+    }
+
+    private function applySubscriptionStatus(Merchant $merchant, string $status): void
+    {
         $merchant->subscription_status = $status;
 
         // A cancelled or expired subscription drops the merchant to the free plan
@@ -373,6 +502,22 @@ class DodoPaymentsService
         foreach ($candidates as $candidate) {
             if (filled($candidate)) {
                 return Carbon::parse($candidate);
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Symfony lowercases incoming header keys, but the same headers arrive title-cased
+     * from replayed fixtures and some proxies, so match either.
+     */
+    private function readHeader(array $headers, string $name): ?string
+    {
+        foreach ([$name, ucwords($name, '-')] as $key) {
+            $value = $headers[$key] ?? null;
+            if (is_string($value) && $value !== '') {
+                return $value;
             }
         }
 
