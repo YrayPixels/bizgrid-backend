@@ -12,6 +12,7 @@ use App\Models\StoreOrder;
 use App\Models\StoreProduct;
 use App\Models\StoreRecoveryOutreach;
 use App\Models\StoreSocialConnection;
+use App\Support\UtmUrl;
 use Illuminate\Support\Facades\Mail;
 use RuntimeException;
 
@@ -148,7 +149,7 @@ class AbandonedRecoveryService
      */
     public function draftRecoveryMessage(Store $store, string $sourceType, int $sourceId, string $channel = 'email'): array
     {
-        $context = $this->resolveSource($store, $sourceType, $sourceId);
+        $context = $this->resolveSource($store, $sourceType, $sourceId, $channel);
         $recoveryUrl = (string) $context['recovery_url'];
 
         $plan = $this->registry->execute('marketing-agent', [
@@ -213,7 +214,7 @@ class AbandonedRecoveryService
         string $message,
         ?string $subject = null,
     ): array {
-        $context = $this->resolveSource($store, $sourceType, $sourceId);
+        $context = $this->resolveSource($store, $sourceType, $sourceId, $channel);
         $trimmedMessage = trim($message);
 
         if ($trimmedMessage === '') {
@@ -274,7 +275,7 @@ class AbandonedRecoveryService
     /**
      * @return array<string, mixed>
      */
-    private function resolveSource(Store $store, string $sourceType, int $sourceId): array
+    private function resolveSource(Store $store, string $sourceType, int $sourceId, string $channel = 'email'): array
     {
         if ($sourceType === 'checkout') {
             $order = StoreOrder::query()
@@ -289,7 +290,7 @@ class AbandonedRecoveryService
                 'total_amount' => (float) $order->total_amount,
                 'currency' => $order->currency,
                 'order_number' => $order->order_number,
-                'recovery_url' => $this->checkoutRecoveryUrl($store, $order),
+                'recovery_url' => $this->checkoutRecoveryUrl($store, $order, $channel),
             ];
         }
 
@@ -307,7 +308,7 @@ class AbandonedRecoveryService
                 'total_amount' => (float) $cart->subtotal,
                 'currency' => $cart->currency,
                 'order_number' => null,
-                'recovery_url' => $this->cartRecoveryUrl($store),
+                'recovery_url' => $this->cartRecoveryUrl($store, $channel),
             ];
         }
 
@@ -461,19 +462,21 @@ class AbandonedRecoveryService
         ];
     }
 
-    private function checkoutRecoveryUrl(Store $store, StoreOrder $order): string
+    private function checkoutRecoveryUrl(Store $store, StoreOrder $order, string $channel = 'email'): string
     {
         $platformDomain = config('storehause.platform_domain', 'bizgrid.shop');
         $base = 'https://'.$store->slug.'.'.$platformDomain;
+        $url = $base.'/checkout?recover='.urlencode($order->order_number);
 
-        return $base.'/checkout?recover='.urlencode($order->order_number);
+        return UtmUrl::merge($url, UtmUrl::forRecovery($channel, (string) ($store->slug ?: $store->name)));
     }
 
-    private function cartRecoveryUrl(Store $store): string
+    private function cartRecoveryUrl(Store $store, string $channel = 'email'): string
     {
         $platformDomain = config('storehause.platform_domain', 'bizgrid.shop');
+        $url = 'https://'.$store->slug.'.'.$platformDomain.'/checkout';
 
-        return 'https://'.$store->slug.'.'.$platformDomain.'/checkout';
+        return UtmUrl::merge($url, UtmUrl::forRecovery($channel, (string) ($store->slug ?: $store->name)));
     }
 
     private function buildWhatsAppLink(string $phone, string $message): string

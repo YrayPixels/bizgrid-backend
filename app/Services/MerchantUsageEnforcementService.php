@@ -38,14 +38,19 @@ class MerchantUsageEnforcementService
 
         $dailyLimit = $this->usage->aiDailyLimit($merchant->subscription_plan ?: $this->usage->defaultPlanKey());
         $usedToday = (int) $merchant->ai_credits_used_today;
-        $purchased = (int) $merchant->ai_purchased_credits;
 
-        if ($usedToday >= $dailyLimit && $purchased <= 0) {
-            $this->deny('Daily AI credit limit reached. Purchase add-on credits or try again tomorrow.');
+        if ($usedToday < $dailyLimit) {
+            return;
         }
+
+        if ($this->usage->canUsePurchasedAi($merchant)) {
+            return;
+        }
+
+        $this->deny('Daily AI credit limit reached. Purchase add-on credits or try again tomorrow.');
     }
 
-    public function consumeAiCredit(Merchant $merchant): void
+    public function consumeAiCredit(Merchant $merchant, ?string $idempotencyKey = null): void
     {
         $this->usage->ensureDailyAiReset($merchant);
         $merchant->refresh();
@@ -54,12 +59,13 @@ class MerchantUsageEnforcementService
 
         if ((int) $merchant->ai_credits_used_today < $dailyLimit) {
             $merchant->ai_credits_used_today = (int) $merchant->ai_credits_used_today + 1;
-        } elseif ((int) $merchant->ai_purchased_credits > 0) {
-            $merchant->ai_purchased_credits = (int) $merchant->ai_purchased_credits - 1;
+            $merchant->ai_credits_date = now()->toDateString();
+            $merchant->save();
+
+            return;
         }
 
-        $merchant->ai_credits_date = now()->toDateString();
-        $merchant->save();
+        $this->usage->consumePurchasedAiCredit($merchant, $idempotencyKey);
     }
 
     public function assertCanProcessOrder(Merchant $merchant, float $amountNgn): void

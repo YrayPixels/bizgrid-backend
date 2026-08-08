@@ -8,6 +8,7 @@ use App\Jobs\PollTikTokPublishStatus;
 use App\Models\SocialPost;
 use App\Models\Store;
 use App\Models\StoreSocialConnection;
+use App\Support\UtmUrl;
 use Illuminate\Support\Facades\Log;
 use RuntimeException;
 
@@ -229,6 +230,8 @@ class SocialPostService
 
         $connection = $this->resolveConnection($post);
 
+        $this->stampAttributionOnLink($post);
+
         $post->update([
             'status' => self::STATUS_PUBLISHING,
             'social_connection_id' => $connection->id,
@@ -238,13 +241,13 @@ class SocialPostService
 
         try {
             $result = match ($post->provider) {
-                'facebook' => $this->publishFacebook($connection, $post),
+                'facebook' => $this->publishFacebook($connection, $post->fresh() ?? $post),
                 'instagram' => $this->instagram->publishImagePost(
                     $connection,
                     (string) $post->message,
                     (string) $post->image_url,
                 ),
-                'tiktok_creator' => $this->publishTikTok($connection, $post),
+                'tiktok_creator' => $this->publishTikTok($connection, $post->fresh() ?? $post),
                 default => throw new RuntimeException("Publishing to {$post->provider} is not supported."),
             };
         } catch (\Throwable $e) {
@@ -278,6 +281,31 @@ class SocialPostService
             'post' => $this->format($post->fresh()),
             'external_url' => $result['url'] ?? null,
         ];
+    }
+
+    /**
+     * Persist last-touch UTMs on the post's storefront link before it goes live
+     * so visit → order attribution can join on utm_content=post_{id}.
+     */
+    private function stampAttributionOnLink(SocialPost $post): void
+    {
+        $link = $this->nullableString($post->link_url);
+        if ($link === null) {
+            return;
+        }
+
+        $store = $post->store;
+        $campaign = $store?->slug ?: ($store?->name ?: 'store');
+
+        $stamped = UtmUrl::merge($link, UtmUrl::forSocialPost(
+            (string) $post->provider,
+            (int) $post->id,
+            (string) $campaign,
+        ));
+
+        if ($stamped !== $link) {
+            $post->update(['link_url' => $stamped]);
+        }
     }
 
     /**

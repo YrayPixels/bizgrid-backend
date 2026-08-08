@@ -7,6 +7,7 @@ namespace App\Services;
 use App\Models\Store;
 use App\Models\StoreAdCampaign;
 use App\Models\StoreSocialConnection;
+use App\Support\UtmUrl;
 use RuntimeException;
 
 /**
@@ -368,7 +369,7 @@ class MetaAdsService
 
         try {
             $response = $this->graph->get("/{$campaign->external_campaign_id}/insights", [
-                'fields' => 'impressions,reach,clicks,spend,ctr,cpc,actions',
+                'fields' => 'impressions,reach,clicks,spend,ctr,cpc,actions,action_values',
                 'date_preset' => 'maximum',
             ], (string) $adAccount->page_access_token);
         } catch (\Throwable) {
@@ -389,11 +390,49 @@ class MetaAdsService
                 'spend' => (float) ($row['spend'] ?? 0),
                 'ctr' => (float) ($row['ctr'] ?? 0),
                 'cpc' => (float) ($row['cpc'] ?? 0),
+                ...$this->extractPurchaseMetrics(is_array($row['actions'] ?? null) ? $row['actions'] : [], is_array($row['action_values'] ?? null) ? $row['action_values'] : []),
             ],
             'metrics_synced_at' => now(),
         ]);
 
         return $campaign->fresh();
+    }
+
+    /**
+     * Pull purchase counts (and value when Meta reports it) out of the actions
+     * arrays. Prefer omni_purchase over purchase when both are present.
+     *
+     * @param  list<array<string, mixed>>  $actions
+     * @param  list<array<string, mixed>>  $actionValues
+     * @return array{purchases: int, purchase_value: float|null}
+     */
+    private function extractPurchaseMetrics(array $actions, array $actionValues): array
+    {
+        $purchases = $this->actionCount($actions, ['omni_purchase', 'purchase', 'offsite_conversion.fb_pixel_purchase']);
+        $value = $this->actionCount($actionValues, ['omni_purchase', 'purchase', 'offsite_conversion.fb_pixel_purchase'], asFloat: true);
+
+        return [
+            'purchases' => (int) $purchases,
+            'purchase_value' => $value > 0 ? round($value, 2) : null,
+        ];
+    }
+
+    /**
+     * @param  list<array<string, mixed>>  $rows
+     */
+    private function actionCount(array $rows, array $types, bool $asFloat = false): float
+    {
+        foreach ($types as $type) {
+            foreach ($rows as $row) {
+                if (($row['action_type'] ?? null) !== $type) {
+                    continue;
+                }
+
+                return $asFloat ? (float) ($row['value'] ?? 0) : (float) ($row['value'] ?? 0);
+            }
+        }
+
+        return 0.0;
     }
 
     private function createCampaign(string $act, string $token, StoreAdCampaign $campaign): string
@@ -437,10 +476,20 @@ class MetaAdsService
     private function createCreative(string $act, string $token, StoreAdCampaign $campaign, StoreSocialConnection $page): string
     {
         $creative = $campaign->creative ?? [];
+        $link = trim((string) ($creative['link_url'] ?? ''));
+        if ($link !== '') {
+            $link = UtmUrl::merge($link, UtmUrl::forAdCampaign(
+                (int) $campaign->id,
+                (string) $campaign->name,
+            ));
+            // Persist the stamped URL so dashboard attribution matches what Meta serves.
+            $creative['link_url'] = $link;
+            $campaign->update(['creative' => $creative]);
+        }
 
         $linkData = [
             'message' => (string) ($creative['message'] ?? ''),
-            'link' => (string) ($creative['link_url'] ?? ''),
+            'link' => $link,
         ];
 
         if (filled($creative['headline'] ?? null)) {

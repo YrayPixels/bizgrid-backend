@@ -7,9 +7,15 @@ namespace App\Services;
 use App\Models\Merchant;
 use App\Models\StoreCustomer;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Str;
+use RuntimeException;
 
 class MerchantUsageService
 {
+    public function __construct(
+        private readonly DodoCreditBalanceService $credits,
+    ) {}
+
     public function defaultPlanKey(): string
     {
         return (string) config('dodopayments.default_plan', 'starter');
@@ -112,8 +118,9 @@ class MerchantUsageService
 
         $smsIncluded = (int) ($included['sms_units'] ?? 0);
         $whatsappIncluded = (int) ($included['whatsapp_units'] ?? 0);
-        $smsRemaining = (int) $merchant->sms_included_remaining + (int) $merchant->sms_purchased_balance;
-        $whatsappRemaining = (int) $merchant->whatsapp_included_remaining + (int) $merchant->whatsapp_purchased_balance;
+        $smsPurchased = $this->purchasedMessagingBalance($merchant, 'sms');
+        $whatsappPurchased = $this->purchasedMessagingBalance($merchant, 'whatsapp');
+        $aiPurchased = $this->purchasedAiBalance($merchant);
 
         return [
             'processing' => [
@@ -132,22 +139,22 @@ class MerchantUsageService
                 'label' => $this->formatCountCap($customerCount, $caps['max_customers'] ?? null, 'Unlimited'),
             ],
             'sms' => [
-                'remaining' => $smsRemaining,
+                'remaining' => (int) $merchant->sms_included_remaining + $smsPurchased,
                 'included_monthly' => $smsIncluded,
                 'included_remaining' => (int) $merchant->sms_included_remaining,
-                'purchased_balance' => (int) $merchant->sms_purchased_balance,
+                'purchased_balance' => $smsPurchased,
             ],
             'whatsapp' => [
-                'remaining' => $whatsappRemaining,
+                'remaining' => (int) $merchant->whatsapp_included_remaining + $whatsappPurchased,
                 'included_monthly' => $whatsappIncluded,
                 'included_remaining' => (int) $merchant->whatsapp_included_remaining,
-                'purchased_balance' => (int) $merchant->whatsapp_purchased_balance,
+                'purchased_balance' => $whatsappPurchased,
             ],
             'ai' => [
                 'daily_limit' => $dailyAiLimit,
                 'used_today' => (int) $merchant->ai_credits_used_today,
                 'remaining_today' => max(0, $dailyAiLimit - (int) $merchant->ai_credits_used_today),
-                'purchased_remaining' => (int) $merchant->ai_purchased_credits,
+                'purchased_remaining' => $aiPurchased,
             ],
             'limits' => $this->planLimits($plan),
         ];
@@ -182,6 +189,10 @@ class MerchantUsageService
         return null;
     }
 
+    /**
+     * Legacy / admin path: bump local purchased columns. Webhook grants no longer call this —
+     * Dodo credit entitlements are the source of truth for paid packs.
+     */
     public function applyAddOnPurchase(Merchant $merchant, string $type, string $packId): void
     {
         $pack = $this->findAddOn($type, $packId);
@@ -208,21 +219,34 @@ class MerchantUsageService
     {
         $this->ensureMonthlyPeriod($merchant);
 
-        return ((int) $merchant->sms_included_remaining + (int) $merchant->sms_purchased_balance) > 0;
+        if ((int) $merchant->sms_included_remaining > 0 || (int) $merchant->sms_purchased_balance > 0) {
+            return true;
+        }
+
+        return $this->safeRemoteBalance($merchant, 'sms') > 0;
     }
 
-    public function consumeSmsUnit(Merchant $merchant): void
+    public function consumeSmsUnit(Merchant $merchant, ?string $idempotencyKey = null): void
     {
         $this->ensureMonthlyPeriod($merchant);
 
         // Included units burn down first so purchased top-ups survive the month roll.
         if ((int) $merchant->sms_included_remaining > 0) {
             $merchant->sms_included_remaining = (int) $merchant->sms_included_remaining - 1;
-        } elseif ((int) $merchant->sms_purchased_balance > 0) {
-            $merchant->sms_purchased_balance = (int) $merchant->sms_purchased_balance - 1;
+            $merchant->save();
+
+            return;
         }
 
-        $merchant->save();
+        // Legacy / admin-granted local purchased before Dodo.
+        if ((int) $merchant->sms_purchased_balance > 0) {
+            $merchant->sms_purchased_balance = (int) $merchant->sms_purchased_balance - 1;
+            $merchant->save();
+
+            return;
+        }
+
+        $this->debitPurchased($merchant, 'sms', $idempotencyKey ?? ('sms:'.(string) Str::ulid()), 'SMS usage');
     }
 
     public function canSendWhatsapp(Merchant $merchant): bool
@@ -231,20 +255,104 @@ class MerchantUsageService
         // reads as out of units until something else happens to refresh them.
         $this->ensureMonthlyPeriod($merchant);
 
-        return ((int) $merchant->whatsapp_included_remaining + (int) $merchant->whatsapp_purchased_balance) > 0;
+        if ((int) $merchant->whatsapp_included_remaining > 0 || (int) $merchant->whatsapp_purchased_balance > 0) {
+            return true;
+        }
+
+        return $this->safeRemoteBalance($merchant, 'whatsapp') > 0;
     }
 
-    public function consumeWhatsappUnit(Merchant $merchant): void
+    public function consumeWhatsappUnit(Merchant $merchant, ?string $idempotencyKey = null): void
     {
         $this->ensureMonthlyPeriod($merchant);
 
         if ((int) $merchant->whatsapp_included_remaining > 0) {
             $merchant->whatsapp_included_remaining = (int) $merchant->whatsapp_included_remaining - 1;
-        } elseif ((int) $merchant->whatsapp_purchased_balance > 0) {
-            $merchant->whatsapp_purchased_balance = (int) $merchant->whatsapp_purchased_balance - 1;
+            $merchant->save();
+
+            return;
         }
 
+        if ((int) $merchant->whatsapp_purchased_balance > 0) {
+            $merchant->whatsapp_purchased_balance = (int) $merchant->whatsapp_purchased_balance - 1;
+            $merchant->save();
+
+            return;
+        }
+
+        $this->debitPurchased(
+            $merchant,
+            'whatsapp',
+            $idempotencyKey ?? ('wa:'.(string) Str::ulid()),
+            'WhatsApp usage',
+        );
+    }
+
+    public function canUsePurchasedAi(Merchant $merchant): bool
+    {
+        if ((int) $merchant->ai_purchased_credits > 0) {
+            return true;
+        }
+
+        return $this->safeRemoteBalance($merchant, 'ai') > 0;
+    }
+
+    public function purchasedAiBalance(Merchant $merchant): int
+    {
+        return (int) $merchant->ai_purchased_credits + $this->safeRemoteBalance($merchant, 'ai');
+    }
+
+    public function consumePurchasedAiCredit(Merchant $merchant, ?string $idempotencyKey = null): void
+    {
+        if ((int) $merchant->ai_purchased_credits > 0) {
+            $merchant->ai_purchased_credits = (int) $merchant->ai_purchased_credits - 1;
+            $merchant->ai_credits_date = now()->toDateString();
+            $merchant->save();
+
+            return;
+        }
+
+        $this->debitPurchased(
+            $merchant,
+            'ai',
+            $idempotencyKey ?? ('ai:'.(string) Str::ulid()),
+            'AI usage',
+        );
+        $merchant->ai_credits_date = now()->toDateString();
         $merchant->save();
+    }
+
+    private function purchasedMessagingBalance(Merchant $merchant, string $type): int
+    {
+        $local = $type === 'sms'
+            ? (int) $merchant->sms_purchased_balance
+            : (int) $merchant->whatsapp_purchased_balance;
+
+        return $local + $this->safeRemoteBalance($merchant, $type);
+    }
+
+    private function safeRemoteBalance(Merchant $merchant, string $type): int
+    {
+        try {
+            return $this->credits->getBalance($merchant, $type);
+        } catch (RuntimeException) {
+            // Billing page should still load if Dodo is briefly unreachable.
+            return 0;
+        }
+    }
+
+    private function debitPurchased(
+        Merchant $merchant,
+        string $type,
+        string $idempotencyKey,
+        string $reason,
+    ): void {
+        // Nothing left to debit against — no-op matches historical local behaviour.
+        if ($this->safeRemoteBalance($merchant, $type) <= 0) {
+            return;
+        }
+
+        $this->credits->debit($merchant, $type, 1, $idempotencyKey, $reason);
     }
 
     private function countCustomers(Merchant $merchant): int

@@ -293,3 +293,98 @@ it('flags an active subscription that matches no merchant', function () {
         ->expectsOutputToContain('ORPHAN: sub_orphan_1')
         ->assertExitCode(0);
 });
+
+it('creates a dodo checkout session for an add-on pack', function () {
+    config([
+        'dodopayments.api_key' => 'test_api_key',
+        'dodopayments.environment' => 'test_mode',
+        'dodopayments.app_url' => 'http://localhost:3000',
+        'dodopayments.add_ons.sms.0.product_id' => 'pdt_sms_500_test',
+    ]);
+
+    Http::fake([
+        'https://test.dodopayments.com/checkouts' => Http::response([
+            'session_id' => 'cs_addon_123',
+            'checkout_url' => 'https://checkout.dodopayments.com/session/cs_addon_123',
+        ], 200),
+    ]);
+
+    $user = User::factory()->create();
+    createBillingMerchant($user);
+
+    $this->actingAs($user, 'sanctum')
+        ->postJson('/api/storehause/billing/topup', [
+            'type' => 'sms',
+            'pack_id' => 'sms_500',
+        ])
+        ->assertOk()
+        ->assertJsonPath('mode', 'checkout')
+        ->assertJsonPath('checkout_url', 'https://checkout.dodopayments.com/session/cs_addon_123');
+
+    Http::assertSent(function ($request) {
+        $body = $request->data();
+
+        return $request->url() === 'https://test.dodopayments.com/checkouts'
+            && ($body['product_cart'][0]['product_id'] ?? null) === 'pdt_sms_500_test'
+            && ($body['metadata']['add_on_type'] ?? null) === 'sms'
+            && ($body['metadata']['add_on_pack_id'] ?? null) === 'sms_500';
+    });
+});
+
+it('notifies on add-on payment without bumping local purchased balances', function () {
+    \Illuminate\Support\Facades\Mail::fake();
+
+    config([
+        'dodopayments.webhook_secret' => null,
+        'dodopayments.add_ons.sms.0.product_id' => 'pdt_sms_500_test',
+    ]);
+
+    $user = User::factory()->create();
+    $merchant = createBillingMerchant($user, [
+        'sms_purchased_balance' => 10,
+        'dodo_customer_id' => null,
+    ]);
+
+    $payload = [
+        'type' => 'payment.succeeded',
+        'data' => [
+            'customer_id' => 'cus_topup_1',
+            'metadata' => [
+                'merchant_id' => (string) $merchant->id,
+                'add_on_type' => 'sms',
+                'add_on_pack_id' => 'sms_500',
+            ],
+        ],
+    ];
+
+    $this->postJson('/api/storehause/billing/webhook', $payload, [
+        'webhook-id' => 'evt_addon_1',
+    ])->assertOk();
+
+    $merchant->refresh();
+
+    // Dodo grants the entitlement; local purchased stock must stay unchanged.
+    expect((int) $merchant->sms_purchased_balance)->toBe(10)
+        ->and($merchant->dodo_customer_id)->toBe('cus_topup_1');
+
+    \Illuminate\Support\Facades\Mail::assertSent(\App\Mail\MerchantBillingEmail::class);
+});
+
+it('lists packs as available when product ids are configured', function () {
+    config([
+        'dodopayments.api_key' => 'test_api_key',
+        'dodopayments.add_ons.sms.0.product_id' => 'pdt_sms_500_test',
+        'dodopayments.add_ons.whatsapp.0.product_id' => 'pdt_wa_200_test',
+        'dodopayments.add_ons.ai_credits.0.product_id' => 'pdt_ai_50_test',
+    ]);
+
+    $user = User::factory()->create();
+    createBillingMerchant($user);
+
+    $this->actingAs($user, 'sanctum')
+        ->getJson('/api/storehause/billing/subscription')
+        ->assertOk()
+        ->assertJsonPath('add_ons.sms.0.available', true)
+        ->assertJsonPath('add_ons.whatsapp.0.available', true)
+        ->assertJsonPath('add_ons.ai_credits.0.available', true);
+});

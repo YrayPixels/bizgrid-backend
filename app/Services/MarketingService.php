@@ -7,7 +7,9 @@ namespace App\Services;
 use App\Agents\AgentRegistry;
 use App\Models\SocialPost;
 use App\Models\Store;
+use App\Models\StoreAbandonedCart;
 use App\Models\StoreAdCampaign;
+use App\Models\StoreOrder;
 use App\Models\StoreProduct;
 use App\Models\StoreSocialConnection;
 
@@ -220,13 +222,29 @@ class MarketingService
             ->whereNotNull('external_campaign_id')
             ->get();
 
-        $adTotals = ['spend' => 0.0, 'impressions' => 0, 'clicks' => 0, 'active_campaigns' => 0, 'currency' => null];
+        $adTotals = [
+            'spend' => 0.0,
+            'impressions' => 0,
+            'clicks' => 0,
+            'purchases' => 0,
+            'purchase_value' => null,
+            'roas' => null,
+            'active_campaigns' => 0,
+            'currency' => null,
+        ];
+        $purchaseValueSum = 0.0;
+        $hasPurchaseValue = false;
 
         foreach ($campaigns as $campaign) {
             $metrics = is_array($campaign->metrics) ? $campaign->metrics : [];
             $adTotals['spend'] += (float) ($metrics['spend'] ?? 0);
             $adTotals['impressions'] += (int) ($metrics['impressions'] ?? 0);
             $adTotals['clicks'] += (int) ($metrics['clicks'] ?? 0);
+            $adTotals['purchases'] += (int) ($metrics['purchases'] ?? 0);
+            if (array_key_exists('purchase_value', $metrics) && $metrics['purchase_value'] !== null) {
+                $purchaseValueSum += (float) $metrics['purchase_value'];
+                $hasPurchaseValue = true;
+            }
             $adTotals['currency'] ??= $campaign->currency;
 
             if ($campaign->status === 'active') {
@@ -234,6 +252,14 @@ class MarketingService
             }
         }
 
+        if ($hasPurchaseValue) {
+            $adTotals['purchase_value'] = round($purchaseValueSum, 2);
+            if ($adTotals['spend'] > 0) {
+                $adTotals['roas'] = round($purchaseValueSum / $adTotals['spend'], 2);
+            }
+        }
+
+        $outcomes = $this->outcomeSummary($store, $windowStart);
         $previousTotals = $this->totalsFor($previousPosts);
 
         return [
@@ -249,12 +275,101 @@ class MarketingService
             'has_comparison' => $previousTotals['posts'] > 0,
             'by_channel' => array_values($byChannel),
             'top_posts' => $ranked,
+            'outcomes' => $outcomes,
+            'by_content' => $outcomes['by_content'],
             'ads' => $adTotals,
             'last_synced_at' => $lastSynced?->toIso8601String(),
             // Numbers only exist once the hourly sync has run against a
             // published post; say so rather than showing a misleading zero.
             'awaiting_first_sync' => $totals['posts'] > 0 && $lastSynced === null,
         ];
+    }
+
+    /**
+     * First-party revenue outcomes for the window: UTM-attributed orders and
+     * recovered abandoned carts that converted to paid (or placed) orders.
+     *
+     * @return array{
+     *     attributed_revenue: float,
+     *     attributed_orders: int,
+     *     recovered_revenue: float,
+     *     recovered_orders: int,
+     *     currency: string,
+     *     by_content: list<array{utm_content: string, revenue: float, orders: int, label: string}>
+     * }
+     */
+    private function outcomeSummary(Store $store, $windowStart): array
+    {
+        $attributed = StoreOrder::query()
+            ->where('store_id', $store->id)
+            ->where('source', 'online')
+            ->whereNotNull('utm_content')
+            ->where('utm_content', '!=', '')
+            ->where('utm_content', '!=', 'recovery')
+            ->where('placed_at', '>=', $windowStart)
+            ->whereNotIn('status', ['cancelled'])
+            ->get(['id', 'total_amount', 'currency', 'utm_content', 'utm_source', 'utm_medium']);
+
+        $byContent = [];
+        foreach ($attributed as $order) {
+            $key = (string) $order->utm_content;
+            $byContent[$key] ??= [
+                'utm_content' => $key,
+                'revenue' => 0.0,
+                'orders' => 0,
+                'label' => $this->labelForUtmContent($key),
+            ];
+            $byContent[$key]['revenue'] += (float) $order->total_amount;
+            $byContent[$key]['orders']++;
+        }
+
+        uasort($byContent, fn (array $a, array $b): int => $b['revenue'] <=> $a['revenue']);
+        $byContent = array_slice(array_values(array_map(function (array $row): array {
+            $row['revenue'] = round($row['revenue'], 2);
+
+            return $row;
+        }, $byContent)), 0, 5);
+
+        $convertedCarts = StoreAbandonedCart::query()
+            ->where('store_id', $store->id)
+            ->where('status', 'converted')
+            ->whereNotNull('converted_order_id')
+            ->where('recovered_at', '>=', $windowStart)
+            ->pluck('converted_order_id');
+
+        $recoveredOrders = StoreOrder::query()
+            ->where('store_id', $store->id)
+            ->whereIn('id', $convertedCarts)
+            ->whereNotIn('status', ['cancelled'])
+            ->get(['total_amount', 'currency']);
+
+        $currency = $attributed->first()?->currency
+            ?? $recoveredOrders->first()?->currency
+            ?? 'NGN';
+
+        return [
+            'attributed_revenue' => round((float) $attributed->sum('total_amount'), 2),
+            'attributed_orders' => $attributed->count(),
+            'recovered_revenue' => round((float) $recoveredOrders->sum('total_amount'), 2),
+            'recovered_orders' => $recoveredOrders->count(),
+            'currency' => strtoupper((string) $currency),
+            'by_content' => $byContent,
+        ];
+    }
+
+    private function labelForUtmContent(string $content): string
+    {
+        if (str_starts_with($content, 'post_')) {
+            return 'Post #'.substr($content, 5);
+        }
+        if (str_starts_with($content, 'ad_')) {
+            return 'Ad #'.substr($content, 3);
+        }
+        if ($content === 'recovery') {
+            return 'Cart recovery';
+        }
+
+        return $content;
     }
 
     /**

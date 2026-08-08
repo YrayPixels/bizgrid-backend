@@ -224,3 +224,92 @@ it('assigns late night posts to the window that wraps midnight', function () {
     expect($result['confident'])->toBeTrue();
     expect($result['best_window']['label'])->toBe('Late night');
 });
+
+it('attributes store revenue from utm-stamped orders and recovered carts', function () {
+    ['user' => $user, 'store' => $store] = createDashboardStore();
+
+    $attributed = \App\Models\StoreOrder::create([
+        'store_id' => $store->id,
+        'order_number' => 'ORD-ATTR-1',
+        'customer_name' => 'Ada Obi',
+        'customer_email' => 'ada@example.com',
+        'customer_phone' => '08000000000',
+        'delivery_address' => 'Lagos',
+        'status' => 'pending',
+        'payment_status' => 'paid',
+        'source' => 'online',
+        'utm_source' => 'facebook',
+        'utm_medium' => 'social',
+        'utm_campaign' => 'glow-market',
+        'utm_content' => 'post_42',
+        'currency' => 'NGN',
+        'subtotal' => 10000,
+        'total_amount' => 10000,
+        'items' => [],
+        'placed_at' => now()->subDays(2),
+        'paid_at' => now()->subDays(2),
+    ]);
+
+    $recovered = \App\Models\StoreOrder::create([
+        'store_id' => $store->id,
+        'order_number' => 'ORD-REC-1',
+        'customer_name' => 'Chioma Bello',
+        'customer_email' => 'chioma@example.com',
+        'customer_phone' => '08000000001',
+        'delivery_address' => 'Abuja',
+        'status' => 'pending',
+        'payment_status' => 'paid',
+        'source' => 'online',
+        'currency' => 'NGN',
+        'subtotal' => 5000,
+        'total_amount' => 5000,
+        'items' => [],
+        'placed_at' => now()->subDay(),
+        'paid_at' => now()->subDay(),
+    ]);
+
+    \App\Models\StoreAbandonedCart::create([
+        'store_id' => $store->id,
+        'session_token' => 'sess-recovery-1',
+        'status' => 'converted',
+        'converted_order_id' => $recovered->id,
+        'recovered_at' => now()->subDay(),
+        'currency' => 'NGN',
+        'subtotal' => 5000,
+        'items' => [],
+        'last_activity_at' => now()->subDays(2),
+    ]);
+
+    $campaign = \App\Models\StoreAdCampaign::create([
+        'store_id' => $store->id,
+        'name' => 'Serum push',
+        'status' => 'active',
+        'objective' => 'OUTCOME_TRAFFIC',
+        'daily_budget_minor' => 500000,
+        'currency' => 'NGN',
+        'external_campaign_id' => 'ext-camp-1',
+        'creative' => ['message' => 'Shop now', 'link_url' => 'https://glow.example.test'],
+        'metrics' => [
+            'spend' => 1000,
+            'impressions' => 5000,
+            'clicks' => 120,
+            'purchases' => 3,
+            'purchase_value' => 4500,
+        ],
+    ]);
+
+    expect($attributed->id)->not->toBeNull();
+    expect($campaign->id)->not->toBeNull();
+
+    $this->actingAs($user)
+        ->getJson('/api/storehause/marketing/performance?window_days=30')
+        ->assertOk()
+        ->assertJsonPath('outcomes.attributed_revenue', 10000)
+        ->assertJsonPath('outcomes.attributed_orders', 1)
+        ->assertJsonPath('outcomes.recovered_revenue', 5000)
+        ->assertJsonPath('outcomes.recovered_orders', 1)
+        ->assertJsonPath('outcomes.by_content.0.utm_content', 'post_42')
+        ->assertJsonPath('ads.purchases', 3)
+        ->assertJsonPath('ads.purchase_value', 4500)
+        ->assertJsonPath('ads.roas', 4.5);
+});

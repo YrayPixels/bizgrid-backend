@@ -403,13 +403,24 @@ class DodoPaymentsService
             return;
         }
 
-        $this->usage->applyAddOnPurchase($merchant, $type, $packId);
+        // Pack products grant into Dodo credit entitlements automatically — we only
+        // notify and ensure the merchant is linked to the paying customer.
+        $customerId = $this->readString($data, ['customer_id', 'customer.customer_id', 'customer.id']);
+        if (filled($customerId) && $merchant->dodo_customer_id !== $customerId) {
+            $merchant->dodo_customer_id = $customerId;
+            $merchant->save();
+        }
 
         $pack = $this->usage->findAddOn($type, $packId);
+        $units = is_array($pack) ? ($pack['units'] ?? $pack['credits'] ?? null) : null;
+        $label = is_array($pack)
+            ? ($pack['price_label'] ?? $packId).(filled($units) ? " ({$units})" : '')
+            : $packId;
+
         $this->storeNotifications->billingEvent($merchant, 'add_on_purchased', [
             'add_on_type' => $type,
             'add_on_pack_id' => $packId,
-            'add_on_label' => is_array($pack) ? ($pack['label'] ?? $packId) : $packId,
+            'add_on_label' => $label,
         ]);
     }
 

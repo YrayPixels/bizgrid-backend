@@ -136,25 +136,32 @@ return [
         ],
     ],
 
+    // Credit entitlement IDs — purchased pack products grant into these on payment.
+    'credits' => [
+        'sms' => env('DODO_CREDIT_SMS'),
+        'whatsapp' => env('DODO_CREDIT_WHATSAPP'),
+        'ai' => env('DODO_CREDIT_AI'),
+    ],
+
     'add_ons' => [
         'sms' => [
             [
                 'id' => 'sms_500',
                 'units' => 500,
                 'price_label' => 'NGN 3,000',
-                'product_id' => env('DODO_ADDON_SMS_500'),
+                'product_id' => env('DODO_PRODUCT_SMS_500'),
             ],
             [
                 'id' => 'sms_1000',
                 'units' => 1_000,
                 'price_label' => 'NGN 5,500',
-                'product_id' => env('DODO_ADDON_SMS_1000'),
+                'product_id' => env('DODO_PRODUCT_SMS_1000'),
             ],
             [
                 'id' => 'sms_2500',
                 'units' => 2_500,
                 'price_label' => 'NGN 12,000',
-                'product_id' => env('DODO_ADDON_SMS_2500'),
+                'product_id' => env('DODO_PRODUCT_SMS_2500'),
             ],
         ],
         'whatsapp' => [
@@ -162,19 +169,19 @@ return [
                 'id' => 'wa_200',
                 'units' => 200,
                 'price_label' => 'NGN 4,000',
-                'product_id' => env('DODO_ADDON_WHATSAPP_200'),
+                'product_id' => env('DODO_PRODUCT_WHATSAPP_200'),
             ],
             [
                 'id' => 'wa_500',
                 'units' => 500,
                 'price_label' => 'NGN 9,000',
-                'product_id' => env('DODO_ADDON_WHATSAPP_500'),
+                'product_id' => env('DODO_PRODUCT_WHATSAPP_500'),
             ],
             [
                 'id' => 'wa_1000',
                 'units' => 1_000,
                 'price_label' => 'NGN 16,000',
-                'product_id' => env('DODO_ADDON_WHATSAPP_1000'),
+                'product_id' => env('DODO_PRODUCT_WHATSAPP_1000'),
             ],
         ],
         'ai_credits' => [
@@ -182,19 +189,19 @@ return [
                 'id' => 'ai_50',
                 'credits' => 50,
                 'price_label' => 'NGN 2,000',
-                'product_id' => env('DODO_ADDON_AI_50'),
+                'product_id' => env('DODO_PRODUCT_AI_50'),
             ],
             [
                 'id' => 'ai_200',
                 'credits' => 200,
                 'price_label' => 'NGN 6,000',
-                'product_id' => env('DODO_ADDON_AI_200'),
+                'product_id' => env('DODO_PRODUCT_AI_200'),
             ],
             [
                 'id' => 'ai_500',
                 'credits' => 500,
                 'price_label' => 'NGN 12,000',
-                'product_id' => env('DODO_ADDON_AI_500'),
+                'product_id' => env('DODO_PRODUCT_AI_500'),
             ],
         ],
     ],
