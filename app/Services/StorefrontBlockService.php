@@ -1114,8 +1114,8 @@ class StorefrontBlockService
         }
 
         return [
-            'title' => 'Shop the Essentials',
-            'eyebrow' => 'Minimal. Comfortable. Timeless.',
+            'title' => $this->categoryShowcaseTitleForIndustry($storefront),
+            'eyebrow' => $this->categoryShowcaseEyebrowForIndustry($storefront),
             'layout' => 'editorial_grid',
             'items' => [
                 ['label' => 'Hoodies', 'image_url' => 'https://images.unsplash.com/photo-1620799140408-edc6dcb6d633?auto=format&fit=crop&w=900&q=85'],
@@ -1124,6 +1124,43 @@ class StorefrontBlockService
                 ['label' => 'Everyday Basics', 'image_url' => 'https://images.unsplash.com/photo-1487222477894-8943e31ef7b2?auto=format&fit=crop&w=900&q=85'],
             ],
         ];
+    }
+
+    /**
+     * @param  array<string, mixed>  $storefront
+     */
+    private function categoryShowcaseTitleForIndustry(array $storefront): string
+    {
+        $industry = strtolower((string) data_get($storefront, 'industry', data_get($storefront, 'seo.industry', '')));
+
+        return match (true) {
+            str_contains($industry, 'electronic') => 'Shop by device',
+            str_contains($industry, 'beauty') || str_contains($industry, 'skincare') => 'Shop the collection',
+            str_contains($industry, 'food') || str_contains($industry, 'beverage') => 'Shop the menu',
+            str_contains($industry, 'home') || str_contains($industry, 'living') => 'Shop the home',
+            str_contains($industry, 'service') => 'Explore services',
+            str_contains($industry, 'fashion') || str_contains($industry, 'apparel') => 'Shop the Essentials',
+            default => 'Shop by category',
+        };
+    }
+
+    /**
+     * @param  array<string, mixed>  $storefront
+     */
+    private function categoryShowcaseEyebrowForIndustry(array $storefront): string
+    {
+        $industry = strtolower((string) data_get($storefront, 'industry', data_get($storefront, 'seo.industry', '')));
+        $name = trim((string) data_get($storefront, 'seo.title', data_get($storefront, 'hero.headline', 'your store')));
+
+        return match (true) {
+            str_contains($industry, 'electronic') => 'Powerful. Reliable. Everyday ready.',
+            str_contains($industry, 'beauty') || str_contains($industry, 'skincare') => 'Clean. Calm. Effective.',
+            str_contains($industry, 'food') || str_contains($industry, 'beverage') => 'Fresh. Flavorful. Ready to share.',
+            str_contains($industry, 'home') || str_contains($industry, 'living') => 'Warm. Considered. Made for living.',
+            str_contains($industry, 'service') => 'Simple. Clear. Ready when you are.',
+            str_contains($industry, 'fashion') || str_contains($industry, 'apparel') => 'Minimal. Comfortable. Timeless.',
+            default => 'Curated for '.($name !== '' ? $name : 'your store'),
+        };
     }
 
     /**
