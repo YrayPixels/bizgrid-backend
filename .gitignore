@@ -26,3 +26,6 @@ yarn-error.log
 
 /public/storehause/uploads/
 /public/storehause/try-on/
+*.db
+*.sqlite
+.DS_Store

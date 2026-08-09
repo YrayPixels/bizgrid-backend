@@ -120,6 +120,7 @@ class StoreProductService
             'description' => $product->description,
             'price' => (float) $product->price,
             'sale_price' => $product->sale_price !== null ? (float) $product->sale_price : null,
+            'floor_price' => $product->floor_price !== null ? (float) $product->floor_price : null,
             'currency' => $product->currency,
             'image_url' => $product->image_url,
             'images' => $product->images,
@@ -327,6 +328,7 @@ class StoreProductService
             'description' => $product->description,
             'price' => $price,
             'sale_price' => $salePrice,
+            'floor_price' => $product->floor_price !== null ? (float) $product->floor_price : null,
             'currency' => $product->currency,
             'image_url' => $product->image_url,
             'images' => $this->formatImages($product),
@@ -376,6 +378,9 @@ class StoreProductService
             'price' => (float) ($data['price'] ?? 0),
             'sale_price' => array_key_exists('sale_price', $data) && $data['sale_price'] !== null && $data['sale_price'] !== ''
                 ? (float) $data['sale_price']
+                : null,
+            'floor_price' => array_key_exists('floor_price', $data) && $data['floor_price'] !== null && $data['floor_price'] !== ''
+                ? (float) $data['floor_price']
                 : null,
             'currency' => strtoupper((string) ($data['currency'] ?? 'NGN')),
             ...$imageFields,
