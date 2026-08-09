@@ -21,6 +21,7 @@ use App\Http\Controllers\AiChatController;
 use App\Http\Controllers\AuthController;
 use App\Http\Controllers\BillingController;
 use App\Http\Controllers\CustomerController;
+use App\Http\Controllers\DealieIntegrationController;
 use App\Http\Controllers\LocationController;
 use App\Http\Controllers\MarketingController;
 use App\Http\Controllers\OpenTokenController;
@@ -246,6 +247,7 @@ Route::prefix('storehause')->group(function () {
             Route::patch('/stores/me/payments', [StorePaymentController::class, 'update']);
             Route::post('/stores/{storeId}/images', [StoreController::class, 'uploadStorefrontImage']);
             Route::post('/stores/{storeId}/publish', [StoreController::class, 'publishStorefront']);
+            Route::post('/storehause/dealie/sync', [DealieIntegrationController::class, 'syncCatalog']);
             Route::post('/ai/storefront/generate', [StoreController::class, 'generateStorefront']);
             Route::get('/ai/storefront/{storeId}', [StoreController::class, 'getStorefront']);
             Route::patch('/ai/storefront/{storeId}', [StoreController::class, 'updateStorefront']);
