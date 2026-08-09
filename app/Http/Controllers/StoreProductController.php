@@ -245,6 +245,7 @@ class StoreProductController extends Controller
             'description' => 'nullable|string|max:5000',
             'price' => ($partial ? 'sometimes|' : 'required|').'numeric|min:0',
             'sale_price' => 'nullable|numeric|min:0',
+            'floor_price' => 'nullable|numeric|min:0',
             'currency' => 'nullable|string|max:10',
             'image_url' => 'nullable|string|max:2048',
             'images' => 'nullable|array|max:12',

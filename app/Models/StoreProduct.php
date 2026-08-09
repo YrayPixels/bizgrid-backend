@@ -23,6 +23,7 @@ class StoreProduct extends Model
         'description',
         'price',
         'sale_price',
+        'floor_price',
         'currency',
         'image_url',
         'images',
@@ -46,6 +47,7 @@ class StoreProduct extends Model
         return [
             'price' => 'decimal:2',
             'sale_price' => 'decimal:2',
+            'floor_price' => 'decimal:2',
             'stock_quantity' => 'integer',
             'variants' => 'array',
             'perks' => 'array',

@@ -17,6 +17,10 @@ class Store extends Model
         'name',
         'slug',
         'status',
+        'dealie_enabled',
+        'dealie_vendor_id',
+        'dealie_chat_mode',
+        'dealie_chat_config',
         'primary_domain',
         'description',
         'brand_color',
@@ -95,6 +99,7 @@ class Store extends Model
             'allow_pickup' => 'boolean',
             'default_delivery_fee' => 'decimal:2',
             'store_perks' => 'array',
+            'dealie_chat_config' => 'array',
             'virtual_try_on_enabled' => 'boolean',
         ];
     }

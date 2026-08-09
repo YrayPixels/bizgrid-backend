@@ -139,6 +139,15 @@ trait StorehauseHelpers
             'subdomain' => $store->slug,
             'subdomain_host' => $subdomainHost,
             'primary_domain' => $store->primary_domain ?? $subdomainHost,
+            'dealie_enabled' => (bool) ($store->dealie_enabled ?? true),
+            'dealie_vendor_id' => $store->dealie_vendor_id ? (string) $store->dealie_vendor_id : null,
+            'dealie_chat_mode' => $store->dealie_chat_mode ?? 'full_ai',
+            'dealie_chat_config' => $store->dealie_chat_config ?? [
+                'auto_approve_discount_percent' => 5.0,
+                'offline_fallback_mode' => 'full_ai',
+                'sound_alerts' => true,
+                'email_alerts' => true,
+            ],
             'notifications' => app(StoreNotificationService::class)->formatNotificationSettings($store),
             'shipping' => [
                 'allow_local_delivery' => (bool) ($store->allow_local_delivery ?? true),

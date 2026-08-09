@@ -77,6 +77,32 @@ class OrderPlacementService
                 baseUnitPrice: $selection['option_price_applied'] ? $selection['base_price'] : null,
             );
             $unitPrice = (float) $priced['unit_price'];
+            $discountLabel = $priced['discount_label'];
+            $compareAtPrice = $priced['compare_at_price'];
+
+            // Handle Dealie AI Negotiated Deal Token Verification
+            $dealToken = $line['dealie_token'] ?? $line['deal_token'] ?? null;
+            if (filled($dealToken)) {
+                $dealieService = app(DealieIntegrationService::class);
+                $verification = $dealieService->verifyDealToken(
+                    dealToken: (string) $dealToken,
+                    vendorId: (string) $store->id,
+                    productId: (string) $product->id
+                );
+
+                if (! ($verification['valid'] ?? false)) {
+                    return response()->json([
+                        'message' => 'Invalid or expired Dealie AI deal token: '.($verification['reason'] ?? 'Verification failed.'),
+                    ], 422);
+                }
+
+                if (isset($verification['agreed_price']) && (float) $verification['agreed_price'] > 0) {
+                    $compareAtPrice = $unitPrice;
+                    $unitPrice = (float) $verification['agreed_price'];
+                    $discountLabel = 'Dealie AI Negotiated Deal';
+                }
+            }
+
             $lineTotal = $unitPrice * $quantity;
             $currency = (string) ($product->currency ?: $currency);
             $subtotal += $lineTotal;
@@ -85,12 +111,13 @@ class OrderPlacementService
                 'name' => $product->name,
                 'quantity' => $quantity,
                 'unit_price' => $unitPrice,
-                'compare_at_price' => $priced['compare_at_price'],
-                'discount_label' => $priced['discount_label'],
+                'compare_at_price' => $compareAtPrice,
+                'discount_label' => $discountLabel,
                 'total' => $lineTotal,
                 'currency' => $currency,
                 'image_url' => $selection['image_url'] ?? $product->image_url,
                 'selected_options' => $selectedOptions,
+                'dealie_token' => $dealToken,
             ];
         }
 

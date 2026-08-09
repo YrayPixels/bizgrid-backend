@@ -36,6 +36,15 @@ class StoreResource extends JsonResource
             'subdomain' => $this->slug,
             'subdomain_host' => $subdomainHost,
             'primary_domain' => $this->primary_domain ?? $subdomainHost,
+            'dealie_enabled' => (bool) ($this->dealie_enabled ?? true),
+            'dealie_vendor_id' => $this->dealie_vendor_id ? (string) $this->dealie_vendor_id : null,
+            'dealie_chat_mode' => $this->dealie_chat_mode ?? 'full_ai',
+            'dealie_chat_config' => $this->dealie_chat_config ?? [
+                'auto_approve_discount_percent' => 5.0,
+                'offline_fallback_mode' => 'full_ai',
+                'sound_alerts' => true,
+                'email_alerts' => true,
+            ],
         ];
     }
 }
