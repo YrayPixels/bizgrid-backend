@@ -29,3 +29,7 @@ yarn-error.log
 *.db
 *.sqlite
 .DS_Store
+
+*.db
+*.sqlite
+.DS_Store
