@@ -31,6 +31,8 @@ php artisan db:seed
 php artisan serve
 ```
 
+For organizer one-click demo login, set `STOREHAUSE_DEMO_LOGIN=true` before seeding (or run `php artisan db:seed --class=DemoMerchantSeeder`), then open the merchant app at `/demo`.
+
 ## Environment
 
 ```env
@@ -38,6 +40,10 @@ APP_NAME=Bizgrid
 DB_DATABASE=storehause
 
 OPENAI_API_KEY=your_openai_api_key_here
+
+# Optional: judge/demo merchant
+# STOREHAUSE_DEMO_LOGIN=true
+# STOREHAUSE_DEMO_EMAIL=demo@bizgrid.shop
 ```
 
 ## API Overview
@@ -67,3 +73,30 @@ Maintenance endpoints (protected by `DEPLOY_KEY`):
 - `POST /maintenance/migrate?key=...`
 - `POST /maintenance/cache-clear?key=...`
 - `POST /maintenance/mail-test?key=...&to=you@example.com` — sends a raw SMTP test and returns the active mail config / error
+- `POST /maintenance/seed-demo?key=...` — create/reset the organizer demo merchant (`DemoMerchantSeeder`)
+
+### cPanel / organizer demo
+
+1. In production `.env` set:
+
+```env
+STOREHAUSE_DEMO_LOGIN=true
+STOREHAUSE_DEMO_EMAIL=demo@bizgrid.shop
+DEPLOY_KEY=your_secure_deploy_key_here
+```
+
+2. Clear config so the flag is live (same as your normal post-deploy step):
+
+```bash
+curl -X POST "https://YOUR-API-DOMAIN/maintenance/cache-clear?key=YOUR_DEPLOY_KEY"
+```
+
+3. Seed (or reset) the demo account:
+
+```bash
+curl -X POST "https://YOUR-API-DOMAIN/maintenance/seed-demo?key=YOUR_DEPLOY_KEY"
+```
+
+4. On the merchant frontend, set `NEXT_PUBLIC_ENABLE_DEMO_LOGIN=true`, redeploy, then open `/demo`.
+
+Re-run step 3 any time the shared demo store gets messy.

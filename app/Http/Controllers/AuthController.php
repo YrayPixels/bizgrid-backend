@@ -442,6 +442,80 @@ class AuthController extends Controller
         ]);
     }
 
+    /**
+     * One-click demo merchant session for organizers/judges.
+     * Enabled only when STOREHAUSE_DEMO_LOGIN=true and DemoMerchantSeeder has run.
+     */
+    public function demoLogin(Request $request): JsonResponse|RedirectResponse
+    {
+        if (! config('storehause.demo_login')) {
+            if ($request->expectsJson() || $request->isMethod('POST')) {
+                return response()->json(['message' => 'Demo login is disabled.'], 404);
+            }
+
+            $frontendBase = rtrim((string) config('storehause.app_url'), '/');
+
+            return redirect()->away($frontendBase.'/demo?error='.urlencode('Demo login is disabled.'));
+        }
+
+        $email = strtolower((string) config('storehause.demo_email', 'demo@bizgrid.shop'));
+        $user = User::query()
+            ->where('email', $email)
+            ->where('is_admin', false)
+            ->first();
+
+        if (! $user) {
+            if ($request->expectsJson() || $request->isMethod('POST')) {
+                return response()->json([
+                    'message' => 'Demo account is not seeded. Run: php artisan db:seed --class=DemoMerchantSeeder',
+                ], 503);
+            }
+
+            $frontendBase = rtrim((string) config('storehause.app_url'), '/');
+
+            return redirect()->away($frontendBase.'/demo?error='.urlencode('Demo account is not seeded.'));
+        }
+
+        $merchant = Merchant::query()->where('owner_user_id', $user->id)->first();
+        if ($merchant && $merchant->status === 'suspended') {
+            if ($request->expectsJson() || $request->isMethod('POST')) {
+                return response()->json([
+                    'message' => 'Demo account has been suspended.',
+                ], 403);
+            }
+
+            $frontendBase = rtrim((string) config('storehause.app_url'), '/');
+
+            return redirect()->away($frontendBase.'/demo?error='.urlencode('Demo account has been suspended.'));
+        }
+
+        // Limit token pile-up from repeated demo clicks.
+        $user->tokens()->where('name', 'demo-login')->delete();
+
+        $tokenResult = $user->createToken('demo-login');
+        $tokenResult->accessToken->expires_at = now()->addDays(1);
+        $tokenResult->accessToken->save();
+        $token = $tokenResult->plainTextToken;
+
+        if ($request->expectsJson() || $request->isMethod('POST')) {
+            return response()->json([
+                'token' => $token,
+                'user' => $this->formatUser($user),
+            ]);
+        }
+
+        $code = Str::random(64);
+        \Illuminate\Support\Facades\Cache::put("auth:exchange:{$code}", [
+            'token' => $token,
+            'user_id' => $user->id,
+            'type' => 'merchant',
+        ], now()->addMinutes(2));
+
+        $frontendBase = rtrim((string) config('storehause.app_url'), '/');
+
+        return redirect()->away($frontendBase.'/login?auth_code='.urlencode($code));
+    }
+
     private function issueMerchantToken(User $user, int $days): string
     {
         $tokenResult = $user->createToken('storehause');

@@ -16,5 +16,9 @@ class DatabaseSeeder extends Seeder
             AdminSeeder::class,
             StorefrontTemplateSeeder::class,
         ]);
+
+        if (config('storehause.demo_login')) {
+            $this->call(DemoMerchantSeeder::class);
+        }
     }
 }

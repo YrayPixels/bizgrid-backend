@@ -107,3 +107,43 @@ Route::post('/maintenance/mail-test', function () {
         ], 500);
     }
 });
+
+Route::post('/maintenance/seed-demo', function () {
+    $key = request()->header('X-Deploy-Key') ?: request()->input('key');
+    if ($key !== config('app.deploy_key')) {
+        abort(403, 'Unauthorized');
+    }
+
+    try {
+        $exitCode = Artisan::call('db:seed', [
+            '--class' => 'Database\\Seeders\\DemoMerchantSeeder',
+            '--force' => true,
+        ]);
+        $output = trim(Artisan::output());
+
+        if ($exitCode !== 0) {
+            return response()->json([
+                'message' => 'Demo merchant seed failed',
+                'exit_code' => $exitCode,
+                'output' => $output,
+            ], 500);
+        }
+
+        return response()->json([
+            'message' => 'Demo merchant seeded successfully',
+            'demo_login_enabled' => (bool) config('storehause.demo_login'),
+            'demo_email' => config('storehause.demo_email'),
+            'store_slug' => \Database\Seeders\DemoMerchantSeeder::STORE_SLUG,
+            'output' => $output,
+            'hint' => config('storehause.demo_login')
+                ? 'Open the merchant app /demo to enter the demo account.'
+                : 'Set STOREHAUSE_DEMO_LOGIN=true (and clear/rebuild config cache) before /demo will work.',
+        ]);
+    } catch (\Throwable $e) {
+        return response()->json([
+            'message' => 'Demo merchant seed failed',
+            'error' => $e->getMessage(),
+            'output' => trim(Artisan::output()),
+        ], 500);
+    }
+});

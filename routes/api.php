@@ -118,6 +118,7 @@ Route::middleware('auth:sanctum')->group(function () {
 Route::prefix('storehause')->group(function () {
     Route::post('/auth/register', [AuthController::class, 'register'])->middleware('throttle:10,1');
     Route::post('/auth/login', [AuthController::class, 'login'])->middleware('throttle:10,1');
+    Route::match(['get', 'post'], '/auth/demo-login', [AuthController::class, 'demoLogin'])->middleware('throttle:10,1');
     Route::post('/auth/exchange-code', [AuthController::class, 'exchangeCode'])->middleware('throttle:10,1');
     Route::get('/auth/google', [AuthController::class, 'redirectToGoogle'])->middleware('throttle:10,1');
     Route::get('/auth/google/callback', [AuthController::class, 'handleGoogleCallback'])->middleware('throttle:10,1');

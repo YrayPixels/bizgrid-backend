@@ -11,4 +11,11 @@ return [
     'mail_primary_color' => env('STOREHAUSE_MAIL_PRIMARY_COLOR', '#0d9488'),
     'admin_app_url' => env('STOREHAUSE_ADMIN_APP_URL', 'http://localhost:5173'),
     'welcome_cc_email' => env('STOREHAUSE_WELCOME_CC_EMAIL', env('MAIL_FROM_ADDRESS')),
+
+    // One-click judge/demo merchant login. Keep false unless intentionally exposed.
+    'demo_login' => (bool) env('STOREHAUSE_DEMO_LOGIN', false),
+    'demo_email' => env('STOREHAUSE_DEMO_EMAIL', 'demo@bizgrid.shop'),
+    'demo_name' => env('STOREHAUSE_DEMO_NAME', 'Demo Merchant'),
+    // Optional password for the seeded demo user (also usable via normal /login).
+    'demo_password' => env('STOREHAUSE_DEMO_PASSWORD'),
 ];
