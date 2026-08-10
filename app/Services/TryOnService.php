@@ -163,29 +163,44 @@ class TryOnService
         $style = null;
         $garmentCategory = null;
 
-        if ($mode === 'clothes') {
-            $garmentCategory = is_string($input['garment_category'] ?? null)
-                ? $input['garment_category']
-                : ($tryOn['garment_category'] ?? 'auto');
-            if (! in_array($garmentCategory, self::GARMENT_CATEGORIES, true)) {
-                $garmentCategory = 'auto';
+        try {
+            if ($this->perfectCorp->isStub()) {
+                $srcRef = 'stub';
+                $refRef = 'stub';
+            } else {
+                $srcRef = $this->perfectCorp->uploadFromUrl($srcUrl);
+                $refRef = $this->perfectCorp->uploadFromUrl($refUrl);
             }
 
-            $task = $this->perfectCorp->createClothTask($srcUrl, $refUrl, $garmentCategory);
-        } else {
-            $genderDefault = $tryOn['bag_gender_default'] ?? 'ask';
-            $gender = $input['gender'] ?? null;
-            if (! in_array($gender, ['female', 'male'], true)) {
-                $gender = in_array($genderDefault, ['female', 'male'], true) ? $genderDefault : 'female';
-            }
+            if ($mode === 'clothes') {
+                $garmentCategory = is_string($input['garment_category'] ?? null)
+                    ? $input['garment_category']
+                    : ($tryOn['garment_category'] ?? 'auto');
+                if (! in_array($garmentCategory, self::GARMENT_CATEGORIES, true)) {
+                    $garmentCategory = 'auto';
+                }
 
-            $styleDefault = is_string($tryOn['bag_style'] ?? null) ? $tryOn['bag_style'] : 'random';
-            $style = $input['style'] ?? $styleDefault;
-            if (! in_array($style, self::BAG_STYLES, true)) {
-                $style = 'random';
-            }
+                $task = $this->perfectCorp->createClothTask($srcRef, $refRef, $garmentCategory);
+            } else {
+                $genderDefault = $tryOn['bag_gender_default'] ?? 'ask';
+                $gender = $input['gender'] ?? null;
+                if (! in_array($gender, ['female', 'male'], true)) {
+                    $gender = in_array($genderDefault, ['female', 'male'], true) ? $genderDefault : 'female';
+                }
 
-            $task = $this->perfectCorp->createBagTask($srcUrl, $refUrl, $gender, $style);
+                $styleDefault = is_string($tryOn['bag_style'] ?? null) ? $tryOn['bag_style'] : 'random';
+                $style = $input['style'] ?? $styleDefault;
+                if (! in_array($style, self::BAG_STYLES, true)) {
+                    $style = 'random';
+                }
+
+                $task = $this->perfectCorp->createBagTask($srcRef, $refRef, $gender, $style);
+            }
+        } catch (\Throwable $e) {
+            throw new RuntimeException(
+                'Could not start try-on: '.$e->getMessage(),
+                previous: $e,
+            );
         }
 
         $session = TryOnSession::create([
@@ -210,7 +225,11 @@ class TryOnService
             ? (int) config('perfectcorp.stub_delay_seconds', 4)
             : (int) config('perfectcorp.poll_interval_seconds', 3);
 
-        PollTryOnSessionStatus::dispatch($session->id)->delay(now()->addSeconds(max(1, $delay)));
+        try {
+            PollTryOnSessionStatus::dispatch($session->id)->delay(now()->addSeconds(max(1, $delay)));
+        } catch (\Throwable) {
+            // Client polling via GET still drives completion when the queue is offline.
+        }
 
         return $session;
     }
@@ -272,9 +291,20 @@ class TryOnService
         $taskStatus = $status['task_status'];
 
         if ($taskStatus === 'success') {
-            $resultUrl = is_string($status['result_url'] ?? null) && $status['result_url'] !== ''
-                ? $status['result_url']
-                : $session->ref_image_url;
+            $remoteUrl = is_string($status['result_url'] ?? null) ? $status['result_url'] : null;
+            $resultUrl = $remoteUrl
+                ? $this->persistResultImage($session, $remoteUrl)
+                : null;
+
+            if (! $resultUrl) {
+                $session->update([
+                    'status' => 'error',
+                    'error_code' => 'missing_result',
+                    'error_message' => 'Couldn\'t create this look — try a different photo.',
+                ]);
+
+                return $session->fresh() ?? $session;
+            }
 
             $session->update([
                 'status' => 'success',
@@ -287,10 +317,15 @@ class TryOnService
         }
 
         if ($taskStatus === 'error') {
+            $rawError = $status['error'] ?? null;
+            $errorCode = is_string($rawError)
+                ? $rawError
+                : (is_array($rawError) ? (string) ($rawError['error_code'] ?? $rawError['code'] ?? 'error_inference') : 'error_inference');
+
             $session->update([
                 'status' => 'error',
-                'error_code' => is_string($status['error'] ?? null) ? $status['error'] : 'error_inference',
-                'error_message' => 'Couldn\'t create this look — try a different photo.',
+                'error_code' => $errorCode,
+                'error_message' => $this->shopperErrorMessage($errorCode),
             ]);
 
             return $session->fresh() ?? $session;
@@ -321,9 +356,53 @@ class TryOnService
             'gender' => $session->gender,
             'style' => $session->style,
             'garment_category' => $session->garment_category,
+            'stub' => (bool) data_get($session->meta, 'stub', false),
             'created_at' => optional($session->created_at)?->toIso8601String(),
             'updated_at' => optional($session->updated_at)?->toIso8601String(),
         ];
+    }
+
+    private function persistResultImage(TryOnSession $session, string $remoteUrl): ?string
+    {
+        try {
+            $response = \Illuminate\Support\Facades\Http::timeout(60)->get($remoteUrl);
+            if (! $response->successful()) {
+                return $remoteUrl;
+            }
+
+            $bytes = $response->body();
+            if ($bytes === '') {
+                return $remoteUrl;
+            }
+
+            $mime = strtolower((string) ($response->header('Content-Type') ?: 'image/jpeg'));
+            $ext = match (true) {
+                str_contains($mime, 'png') => 'png',
+                str_contains($mime, 'webp') => 'webp',
+                default => 'jpg',
+            };
+
+            $dir = public_path('storehause/try-on/'.$session->store_id.'/results');
+            File::ensureDirectoryExists($dir);
+            $name = $session->id.'.'.$ext;
+            File::put($dir.'/'.$name, $bytes);
+
+            return url('storehause/try-on/'.$session->store_id.'/results/'.$name);
+        } catch (\Throwable) {
+            return $remoteUrl;
+        }
+    }
+
+    private function shopperErrorMessage(string $errorCode): string
+    {
+        return match ($errorCode) {
+            'error_no_face' => 'We need a clearer photo with your face fully visible.',
+            'error_pose' => 'We need a clearer standing photo facing the camera.',
+            'error_invalid_src', 'error_invalid_ref', 'error_apply_region_mismatch' => 'This photo or product image isn’t try-on ready — try another photo.',
+            'error_nsfw_content_detected' => 'Couldn’t create this look — try a different photo.',
+            'error_download_image' => 'Couldn’t load one of the images — try again.',
+            default => 'Couldn\'t create this look — try a different photo.',
+        };
     }
 
     private function storeShopperImage(Store $store, ?UploadedFile $file, ?string $srcImageUrl): string
