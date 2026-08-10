@@ -135,6 +135,13 @@ class StoreProductController extends Controller
             'variants.*.options.*' => 'nullable',
             'perks' => 'nullable|array',
             'perks.*' => 'string|max:160',
+            'try_on' => 'nullable|array',
+            'try_on.enabled' => 'sometimes|boolean',
+            'try_on.mode' => 'sometimes|string|in:bag,clothes',
+            'try_on.ref_image_url' => 'nullable|string|max:2048',
+            'try_on.bag_gender_default' => 'nullable|string|in:female,male,ask',
+            'try_on.bag_style' => 'nullable|string|max:80',
+            'try_on.garment_category' => 'nullable|string|in:auto,full_body,upper_body,lower_body,outerwear,shoes',
         ];
 
         $validated = $request->validate($rules);

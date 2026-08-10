@@ -53,7 +53,13 @@ function startServer(host, port) {
       console.log(`   LAN access: http://${lanIp}:${port} (Google OAuth requires localhost)`);
     }
   }
-  execSync(`php artisan serve --host=${host} --port=${port}`, { stdio: 'inherit' });
+  // display_errors=0: artisan serve's server.php can emit Notices (broken pipe) that
+  // flush Content-Type: text/html before Laravel adds CORS headers — browsers then
+  // report a CORS failure even though config/cors.php allows localhost.
+  execSync(
+    `php -d display_errors=0 -d log_errors=1 artisan serve --host=${host} --port=${port}`,
+    { stdio: 'inherit' },
+  );
 }
 
 try {

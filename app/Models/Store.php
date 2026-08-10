@@ -46,6 +46,7 @@ class Store extends Model
         'fulfilment_promise',
         'shipping_policy',
         'return_policy',
+        'virtual_try_on_enabled',
         'storefront_template_id',
         'preferred_storefront_template_id',
         'storefront_content',
@@ -92,6 +93,7 @@ class Store extends Model
             'allow_pickup' => 'boolean',
             'default_delivery_fee' => 'decimal:2',
             'store_perks' => 'array',
+            'virtual_try_on_enabled' => 'boolean',
         ];
     }
 

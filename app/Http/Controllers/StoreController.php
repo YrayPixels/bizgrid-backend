@@ -177,6 +177,7 @@ class StoreController extends Controller
             'fulfilment_promise' => 'sometimes|nullable|string|max:255',
             'shipping_policy' => 'sometimes|nullable|string|max:5000',
             'return_policy' => 'sometimes|nullable|string|max:5000',
+            'virtual_try_on_enabled' => 'sometimes|boolean',
         ], $this->businessProfileRules(required: false)));
 
         if (array_key_exists('business_name', $data)) {
@@ -246,6 +247,7 @@ class StoreController extends Controller
             'fulfilment_promise',
             'shipping_policy',
             'return_policy',
+            'virtual_try_on_enabled',
         ] as $field) {
             if (array_key_exists($field, $data)) {
                 $store->{$field} = $data[$field];
