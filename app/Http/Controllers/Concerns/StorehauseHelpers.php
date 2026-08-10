@@ -150,6 +150,11 @@ trait StorehauseHelpers
                 'shipping_policy' => $store->shipping_policy,
                 'return_policy' => $store->return_policy,
             ],
+            'features' => [
+                'virtual_try_on' => [
+                    'enabled' => (bool) ($store->virtual_try_on_enabled ?? false),
+                ],
+            ],
             'store_perks' => array_values(array_filter(array_map(
                 fn ($perk) => is_string($perk) ? trim($perk) : '',
                 is_array($store->store_perks) ? $store->store_perks : [],

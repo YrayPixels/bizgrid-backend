@@ -35,6 +35,7 @@ class StoreProduct extends Model
         'status',
         'variants',
         'perks',
+        'try_on',
         'sort_order',
         'id',
     ];
@@ -47,6 +48,7 @@ class StoreProduct extends Model
             'stock_quantity' => 'integer',
             'variants' => 'array',
             'perks' => 'array',
+            'try_on' => 'array',
             'images' => 'array',
             'sort_order' => 'integer',
         ];

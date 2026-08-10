@@ -132,6 +132,7 @@ class StoreProductService
             'status' => $product->status,
             'variants' => $product->variants,
             'perks' => $product->perks,
+            'try_on' => $product->try_on,
             'sort_order' => $product->sort_order,
         ], $data);
 
@@ -165,6 +166,7 @@ class StoreProductService
             'status' => 'draft',
             'variants' => $product->variants,
             'perks' => $product->perks,
+            'try_on' => $product->try_on,
         ]);
     }
 
@@ -341,6 +343,7 @@ class StoreProductService
             'low_stock' => $this->isLowStock($product),
             'variants' => app(ProductVariantResolver::class)->normalizeGroups($product->variants),
             'perks' => $product->perks,
+            'try_on' => app(TryOnService::class)->normalizeTryOnConfig($product->try_on),
         ];
     }
 
@@ -369,7 +372,7 @@ class StoreProductService
             : [];
         $imageFields = $this->normalizeImageFields($data);
 
-        return [
+        $attrs = [
             'slug' => $this->uniqueSlug($store, $slugInput !== '' ? $slugInput : 'product', $ignoreId),
             'name' => $name,
             'description' => (string) ($data['description'] ?? ''),
@@ -403,6 +406,12 @@ class StoreProductService
             'perks' => $data['perks'] ?? null,
             'sort_order' => isset($data['sort_order']) ? (int) $data['sort_order'] : 0,
         ];
+
+        if (array_key_exists('try_on', $data)) {
+            $attrs['try_on'] = app(TryOnService::class)->normalizeTryOnConfig($data['try_on']);
+        }
+
+        return $attrs;
     }
 
     /**
