@@ -11,6 +11,7 @@ use App\Mail\AdminVerificationCode;
 use App\Models\User;
 use App\Services\AdminAuditService;
 use App\Services\GoogleOAuthService;
+use App\Support\AdminPermissions;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
@@ -33,41 +34,143 @@ class AdminController extends Controller
 
             $validator = Validator::make($request->all(), [
                 'name' => 'required|string|max:255',
-                'email' => 'required|email|unique:users',
+                'email' => 'required|email',
                 'admin_role' => 'nullable|string|in:super_admin,support,billing',
+                'admin_permissions' => 'nullable|array',
+                'admin_permissions.*' => 'string|in:'.implode(',', AdminPermissions::all()),
             ]);
             if ($validator->fails()) {
                 return response()->json(['message' => 'Validation failed', 'errors' => $validator->errors()], 422);
             }
 
-            $password = Str::password(16, letters: true, numbers: true, symbols: true);
+            $email = strtolower(trim((string) $request->email));
+            $role = (string) $request->input('admin_role', 'support');
+            $permissions = $request->has('admin_permissions')
+                ? AdminPermissions::normalize($request->input('admin_permissions'), $role)
+                : AdminPermissions::defaultsForRole($role);
 
-            $admin = User::where('email', $request->email)->first();
-            if ($admin) {
+            $password = Str::password(16, letters: true, numbers: true, symbols: true);
+            $existing = User::where('email', $email)->first();
+
+            if ($existing?->is_admin) {
                 return response()->json(['message' => 'Admin already exists'], 400);
+            }
+
+            if ($existing) {
+                $existing->password = Hash::make($password);
+                $existing->is_admin = true;
+                $existing->admin_role = $role;
+                $existing->admin_permissions = $permissions;
+                $existing->save();
+
+                Mail::to($existing->email)->send(new AdminCreated($existing, $password));
+
+                $this->audit->log($request, 'admin.promoted', 'user', $existing->id, [
+                    'email' => $existing->email,
+                    'admin_role' => $role,
+                    'admin_permissions' => $permissions,
+                ]);
+
+                return response()->json([
+                    'message' => 'Existing user promoted to admin. Login credentials were emailed.',
+                    'promoted' => true,
+                    'admin' => $this->formatAdmin($existing),
+                ]);
             }
 
             $admin = new User;
             $admin->name = $request->name;
-            $admin->email = $request->email;
+            $admin->email = $email;
             $admin->password = Hash::make($password);
             $admin->is_admin = true;
-            $admin->admin_role = $request->input('admin_role', 'support');
+            $admin->admin_role = $role;
+            $admin->admin_permissions = $permissions;
             $admin->save();
 
             Mail::to($admin->email)->send(new AdminCreated($admin, $password));
 
             $this->audit->log($request, 'admin.created', 'user', $admin->id, [
                 'email' => $admin->email,
+                'admin_role' => $role,
+                'admin_permissions' => $permissions,
             ]);
 
             return response()->json([
                 'message' => 'Admin created successfully',
+                'promoted' => false,
                 'admin' => $this->formatAdmin($admin),
             ]);
         } catch (\Exception $e) {
             return response()->json(['message' => 'Admin creation failed', 'error' => $e->getMessage()], 500);
         }
+    }
+
+    public function update_admin(Request $request, int $id): JsonResponse
+    {
+        $validator = Validator::make($request->all(), [
+            'admin_role' => 'sometimes|required|string|in:super_admin,support,billing',
+            'admin_permissions' => 'sometimes|required|array',
+            'admin_permissions.*' => 'string|in:'.implode(',', AdminPermissions::all()),
+        ]);
+
+        if ($validator->fails()) {
+            return response()->json(['message' => 'Validation failed', 'errors' => $validator->errors()], 422);
+        }
+
+        if (! $request->has('admin_role') && ! $request->has('admin_permissions')) {
+            return response()->json(['message' => 'Nothing to update'], 422);
+        }
+
+        $admin = User::find($id);
+        if (! $admin || ! $admin->is_admin) {
+            return response()->json(['message' => 'Admin not found'], 404);
+        }
+
+        $actor = $request->user();
+        $wasSuperAdmin = ($admin->admin_role ?? 'super_admin') === 'super_admin';
+        $newRole = $request->has('admin_role')
+            ? (string) $request->input('admin_role')
+            : (string) ($admin->admin_role ?? 'support');
+
+        if ($actor && (int) $actor->id === (int) $admin->id && $wasSuperAdmin && $newRole !== 'super_admin') {
+            return response()->json(['message' => 'You cannot demote your own super admin role'], 400);
+        }
+
+        if ($wasSuperAdmin && $newRole !== 'super_admin') {
+            $otherSuperAdmins = User::query()
+                ->where('is_admin', true)
+                ->where('admin_role', 'super_admin')
+                ->where('id', '!=', $admin->id)
+                ->count();
+
+            if ($otherSuperAdmins === 0) {
+                return response()->json(['message' => 'Cannot demote the last super admin'], 400);
+            }
+        }
+
+        $permissionsInput = $request->has('admin_permissions')
+            ? $request->input('admin_permissions')
+            : ($admin->admin_permissions ?? AdminPermissions::defaultsForRole($newRole));
+
+        $permissions = AdminPermissions::normalize(
+            is_array($permissionsInput) ? $permissionsInput : [],
+            $newRole
+        );
+
+        $admin->admin_role = $newRole;
+        $admin->admin_permissions = $permissions;
+        $admin->save();
+
+        $this->audit->log($request, 'admin.updated', 'user', $admin->id, [
+            'email' => $admin->email,
+            'admin_role' => $newRole,
+            'admin_permissions' => $permissions,
+        ]);
+
+        return response()->json([
+            'message' => 'Admin updated successfully',
+            'admin' => $this->formatAdmin($admin),
+        ]);
     }
 
     public function login_admin(Request $request): JsonResponse
@@ -454,11 +557,17 @@ class AdminController extends Controller
 
     private function formatAdmin(User $user): array
     {
+        $role = $user->admin_role ?? 'super_admin';
+
         return [
             'id' => $user->id,
             'name' => $user->name,
             'email' => $user->email,
-            'admin_role' => $user->admin_role ?? 'super_admin',
+            'admin_role' => $role,
+            'admin_permissions' => AdminPermissions::effective(
+                is_array($user->admin_permissions) ? $user->admin_permissions : null,
+                $role
+            ),
             'email_verified_at' => $user->email_verified_at?->toIso8601String(),
             'created_at' => $user->created_at?->toIso8601String(),
             'updated_at' => $user->updated_at?->toIso8601String(),

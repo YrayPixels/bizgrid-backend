@@ -54,6 +54,7 @@ Route::middleware('auth:sanctum')->group(function () {
 
     Route::middleware('admin')->group(function () {
         Route::post('/create-admin', [AdminController::class, 'create_admin'])->middleware('admin.role:super_admin');
+        Route::patch('/admin/admins/{id}', [AdminController::class, 'update_admin'])->middleware('admin.role:super_admin');
         Route::post('/delete-admin', [AdminController::class, 'delete_admin'])->middleware('admin.role:super_admin');
         Route::post('/fetch-admins', [AdminController::class, 'fetch_admins']);
         Route::post('/reset-admin-password', [AdminController::class, 'reset_admin_password'])->middleware('admin.role:super_admin');

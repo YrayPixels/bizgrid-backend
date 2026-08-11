@@ -41,6 +41,7 @@ jobs:
             deploy/
             release.zip
             public/storehause/uploads/**
+            public/storehause/try-on/**
 
       # 5️⃣ Run migrations (after files are uploaded)
       - name: Run migrations

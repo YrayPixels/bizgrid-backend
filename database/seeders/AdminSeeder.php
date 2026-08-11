@@ -3,6 +3,7 @@
 namespace Database\Seeders;
 
 use App\Models\User;
+use App\Support\AdminPermissions;
 use Illuminate\Database\Seeder;
 use Illuminate\Support\Facades\Hash;
 use RuntimeException;
@@ -26,6 +27,7 @@ class AdminSeeder extends Seeder
         $admin->password = Hash::make($password);
         $admin->is_admin = true;
         $admin->admin_role = 'super_admin';
+        $admin->admin_permissions = AdminPermissions::all();
         $admin->save();
     }
 }
