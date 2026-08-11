@@ -26,6 +26,7 @@ use App\Http\Controllers\OpenTokenController;
 use App\Http\Controllers\OrderController;
 use App\Http\Controllers\PaystackWebhookController;
 use App\Http\Controllers\PosController;
+use App\Http\Controllers\PlatformVisitController;
 use App\Http\Controllers\PublicStorefrontController;
 use App\Http\Controllers\StaffController;
 use App\Http\Controllers\StoreCategoryController;
@@ -70,6 +71,7 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::get('/export/orders', [AdminExportController::class, 'orders']);
 
             Route::get('/analytics/overview', [AdminAnalyticsController::class, 'overview']);
+            Route::get('/analytics/site', [AdminAnalyticsController::class, 'site']);
 
             Route::get('/merchants', [AdminMerchantController::class, 'index']);
             Route::get('/merchants/stats', [AdminMerchantController::class, 'stats']);
@@ -145,6 +147,7 @@ Route::prefix('storehause')->group(function () {
     Route::get('/public/storefronts/{slug}/products/{productId}/reviews', [PublicStorefrontController::class, 'listProductReviews'])->middleware('throttle:60,1');
     Route::post('/public/storefronts/{slug}/products/{productId}/reviews', [PublicStorefrontController::class, 'submitProductReview'])->middleware('throttle:10,1');
     Route::post('/public/storefronts/{slug}/visits', [PublicStorefrontController::class, 'recordVisit'])->middleware('throttle:60,1');
+    Route::post('/public/platform/visits', [PlatformVisitController::class, 'store'])->middleware('throttle:60,1');
 
     // AI chat proxy — uses backend API key, no user auth needed
     Route::post('/billing/webhook', [BillingController::class, 'webhook'])->middleware('throttle:120,1');

@@ -8,6 +8,8 @@ final class AdminPermissions
 {
     public const DASHBOARD = 'dashboard';
 
+    public const ANALYTICS = 'analytics';
+
     public const MERCHANTS = 'merchants';
 
     public const ORDERS = 'orders';
@@ -40,6 +42,7 @@ final class AdminPermissions
     {
         return [
             self::DASHBOARD,
+            self::ANALYTICS,
             self::MERCHANTS,
             self::ORDERS,
             self::INQUIRIES,
@@ -62,6 +65,7 @@ final class AdminPermissions
     {
         return [
             self::DASHBOARD,
+            self::ANALYTICS,
             self::MERCHANTS,
             self::ORDERS,
             self::INQUIRIES,
@@ -92,6 +96,7 @@ final class AdminPermissions
             ],
             default => [
                 self::DASHBOARD,
+                self::ANALYTICS,
                 self::MERCHANTS,
                 self::ORDERS,
                 self::INQUIRIES,
