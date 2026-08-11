@@ -123,14 +123,28 @@ class Merchant extends Model
             $suffix++;
         }
 
-        return static::create([
+        return static::create(array_merge([
             'owner_user_id' => $user->id,
             'business_name' => $displayName,
             'slug' => $slug,
             'status' => 'pending',
-            'subscription_plan' => config('dodopayments.default_plan', 'free'),
-            'subscription_status' => 'active',
-        ]);
+        ], static::defaultTrialSubscriptionAttributes()));
+    }
+
+    /**
+     * Starter plan on a fresh trial — used for every new merchant shell.
+     *
+     * @return array{subscription_plan: string, subscription_status: string, subscription_renews_at: \Illuminate\Support\Carbon}
+     */
+    public static function defaultTrialSubscriptionAttributes(): array
+    {
+        $trialDays = max(1, (int) config('dodopayments.trial_days', 14));
+
+        return [
+            'subscription_plan' => (string) config('dodopayments.default_plan', 'starter'),
+            'subscription_status' => 'trialing',
+            'subscription_renews_at' => now()->addDays($trialDays),
+        ];
     }
 
     /**

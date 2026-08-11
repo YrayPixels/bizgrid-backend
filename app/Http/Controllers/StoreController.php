@@ -81,8 +81,7 @@ class StoreController extends Controller
                 'industry' => $data['industry'],
                 'status' => 'active',
                 'activated_at' => now(),
-                'subscription_plan' => config('dodopayments.default_plan', 'free'),
-                'subscription_status' => 'active',
+                ...Merchant::defaultTrialSubscriptionAttributes(),
             ],
         );
 

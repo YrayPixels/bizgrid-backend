@@ -133,7 +133,7 @@ class OrderPlacementService
         $store->loadMissing('merchant');
         if ($store->merchant) {
             // POS takes cash and bank transfer, which never flow through the platform,
-            // so the free plan's per-order service fee cannot be collected on them.
+            // so the online service fee cannot be collected on them.
             $this->enforcement->assertCanUseOfflinePayments($store->merchant);
             $this->enforcement->assertCanProcessOrder($store->merchant, $built['total_amount']);
         }

@@ -194,11 +194,11 @@ it('accepts the statuses and plans the system actually writes from admin', funct
 
     $this->actingAs($admin, 'sanctum')
         ->patchJson("/api/admin/merchants/{$merchant->id}/billing", [
-            'subscription_plan' => 'free',
+            'subscription_plan' => 'starter',
         ])
         ->assertOk();
 
-    expect($merchant->fresh()->subscription_plan)->toBe('free');
+    expect($merchant->fresh()->subscription_plan)->toBe('starter');
 
     // The spellings the old admin dropdown sent are no longer accepted.
     foreach (['trial', 'past_due'] as $legacy) {
@@ -210,16 +210,16 @@ it('accepts the statuses and plans the system actually writes from admin', funct
     }
 });
 
-it('gives the free plan no messaging allowance', function () {
-    $merchant = allowanceMerchant(['subscription_plan' => 'free']);
+it('gives the starter plan its messaging allowance', function () {
+    $merchant = allowanceMerchant(['subscription_plan' => 'starter']);
     $usage = app(MerchantUsageService::class);
 
     $usage->ensureMonthlyPeriod($merchant);
     $merchant->refresh();
 
-    expect((int) $merchant->sms_included_remaining)->toBe(0)
-        ->and((int) $merchant->whatsapp_included_remaining)->toBe(0)
-        ->and($usage->canSendWhatsapp($merchant))->toBeFalse();
+    expect((int) $merchant->sms_included_remaining)->toBe(100)
+        ->and((int) $merchant->whatsapp_included_remaining)->toBe(50)
+        ->and($usage->canSendWhatsapp($merchant))->toBeTrue();
 });
 
 it('allows sms when only a dodo purchased balance remains', function () {

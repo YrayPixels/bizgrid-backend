@@ -41,32 +41,6 @@ class BillingController extends Controller
             $merchant = $this->findOwnedMerchant($request);
             $user = $request->user();
 
-            // The free plan has nothing to charge for. Merchants on a paid subscription
-            // must cancel through the billing portal; the resulting webhook drops them
-            // to free. Anyone without a subscription can switch immediately.
-            if ((float) (config("dodopayments.plans.{$data['plan']}.price_monthly_ngn") ?? 0) <= 0) {
-                if (filled($merchant->dodo_subscription_id)
-                    && in_array($merchant->subscription_status, ['active', 'on_hold'], true)
-                ) {
-                    return response()->json([
-                        'mode' => 'portal_required',
-                        'message' => 'Cancel your current subscription in the billing portal to move to the free plan.',
-                    ], 409);
-                }
-
-                $merchant->subscription_plan = $data['plan'];
-                $merchant->subscription_status = 'active';
-                $merchant->save();
-                $this->dodoPayments->grantMonthlyAllowances($merchant);
-                $merchant->refresh();
-
-                return response()->json([
-                    'mode' => 'plan_change',
-                    'subscription' => $this->dodoPayments->formatSubscription($merchant),
-                    'message' => 'You are now on the free plan.',
-                ]);
-            }
-
             if (
                 filled($merchant->dodo_subscription_id)
                 && in_array($merchant->subscription_status, ['active', 'on_hold'], true)

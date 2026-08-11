@@ -10,51 +10,21 @@ return [
     // Purchased credits stack on top of whichever daily allowance applies.
     'ai_daily_credits' => 5,
 
-    // Plan merchants land on before they ever pay. Monetised per-order instead of monthly.
-    'default_plan' => 'free',
+    // Plan + trial new merchants land on before they subscribe via Dodo.
+    'default_plan' => 'starter',
+    'trial_days' => 14,
+
+    // Percentage added to every online order at checkout, kept by the platform.
+    // Applies on all plans (trial and paid). Offline/POS is not fee-charged.
+    'transaction_fee_percent' => 2.5,
 
     'plans' => [
-        'free' => [
-            'name' => 'Free',
-            'price_monthly_ngn' => 0,
-            'price_label' => 'Free forever',
-            'description' => 'No monthly fee. A 2.5% service fee is added to each online order at checkout.',
-            'product_id' => null,
-            // Percentage added to the shopper's payable total and kept by the platform.
-            // Paid plans set this to 0 — the subscription replaces the per-order fee.
-            'transaction_fee_percent' => 2.5,
-            'ai_daily_credits' => 3,
-            'caps' => [
-                'monthly_processing_ngn' => null,
-                'max_stores' => 1,
-                'max_customers' => null,
-                'custom_domains' => false,
-                'max_custom_domains' => 0,
-                // Free is online-payment only: the fee is only collectable on payments
-                // the platform processes, so POS/cash channels are gated to paid plans.
-                'offline_payments' => false,
-            ],
-            'included_monthly' => [
-                'sms_units' => 0,
-                'whatsapp_units' => 0,
-            ],
-            'features' => [
-                'No monthly fee, ever',
-                '2.5% service fee per online order',
-                'Unlimited payment processing',
-                'Unlimited customers',
-                '1 storefront',
-                'Online card payments only',
-                '3 AI queries per day',
-            ],
-        ],
         'starter' => [
             'name' => 'Starter',
             'price_monthly_ngn' => 5_000,
             'price_label' => 'NGN 5,000',
             'description' => 'Launch your first store and start selling with essential limits.',
             'product_id' => env('DODO_PRODUCT_STARTER'),
-            'transaction_fee_percent' => 0,
             'caps' => [
                 'monthly_processing_ngn' => null,
                 'max_stores' => 1,
@@ -68,7 +38,8 @@ return [
                 'whatsapp_units' => 50,
             ],
             'features' => [
-                'No service fee on orders',
+                '14-day free trial',
+                '2.5% service fee per online order',
                 'Unlimited payment processing',
                 '1 storefront',
                 'Unlimited customers',
@@ -82,7 +53,6 @@ return [
             'price_label' => 'NGN 15,000',
             'description' => 'For growing brands selling across channels with higher volume.',
             'product_id' => env('DODO_PRODUCT_GROWTH'),
-            'transaction_fee_percent' => 0,
             'caps' => [
                 'monthly_processing_ngn' => null,
                 'max_stores' => 3,
@@ -96,7 +66,8 @@ return [
                 'whatsapp_units' => 150,
             ],
             'features' => [
-                'No service fee on orders',
+                '14-day free trial',
+                '2.5% service fee per online order',
                 'Unlimited payment processing',
                 'Up to 3 storefronts',
                 'Unlimited customers',
@@ -111,7 +82,6 @@ return [
             'price_label' => 'NGN 30,000',
             'description' => 'For teams with high order volume and multi-store operations.',
             'product_id' => env('DODO_PRODUCT_SCALE'),
-            'transaction_fee_percent' => 0,
             'caps' => [
                 'monthly_processing_ngn' => null,
                 'max_stores' => 10,
@@ -125,7 +95,8 @@ return [
                 'whatsapp_units' => 350,
             ],
             'features' => [
-                'No service fee on orders',
+                '14-day free trial',
+                '2.5% service fee per online order',
                 'Unlimited payment processing',
                 'Up to 10 storefronts',
                 'Unlimited customers',

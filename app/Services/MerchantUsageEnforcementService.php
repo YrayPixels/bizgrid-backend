@@ -87,14 +87,13 @@ class MerchantUsageEnforcementService
     }
 
     /**
-     * Channels the platform does not process (POS, cash, bank transfer) are gated to
-     * paid plans — the free plan's service fee can only be collected from payments
-     * that flow through the platform.
+     * Channels the platform does not process (POS, cash, bank transfer) honour
+     * the plan's `offline_payments` cap.
      */
     public function assertCanUseOfflinePayments(Merchant $merchant): void
     {
         if (! $this->platformFee->allowsOfflinePayments($merchant)) {
-            $this->deny('In-person and cash payments require a paid plan. Upgrade to sell offline.');
+            $this->deny('In-person and cash payments are not available on your current plan.');
         }
     }
 

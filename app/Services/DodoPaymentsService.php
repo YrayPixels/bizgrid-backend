@@ -29,9 +29,11 @@ class DodoPaymentsService
 
     public function listPlans(): array
     {
+        $platformFee = (float) config('dodopayments.transaction_fee_percent', 0);
+
         return collect(config('dodopayments.plans', []))
-            ->map(function (array $plan, string $key) {
-                $isFree = (float) ($plan['price_monthly_ngn'] ?? 0) <= 0;
+            ->map(function (array $plan, string $key) use ($platformFee) {
+                $feePercent = (float) ($plan['transaction_fee_percent'] ?? $platformFee);
 
                 return [
                     'id' => $key,
@@ -41,10 +43,9 @@ class DodoPaymentsService
                     'description' => $plan['description'],
                     'features' => $plan['features'],
                     'limits' => $this->usage->planLimits($plan),
-                    'transaction_fee_percent' => (float) ($plan['transaction_fee_percent'] ?? 0),
-                    'is_free' => $isFree,
-                    // Free plans need no Dodo product — they are always selectable.
-                    'available' => $isFree || filled($plan['product_id'] ?? null),
+                    'transaction_fee_percent' => $feePercent,
+                    'trial_days' => (int) config('dodopayments.trial_days', 14),
+                    'available' => filled($plan['product_id'] ?? null),
                 ];
             })
             ->values()
@@ -57,14 +58,15 @@ class DodoPaymentsService
         // which also seeds allowances for a merchant who never had them granted.
         $planKey = $merchant->subscription_plan ?: $this->usage->defaultPlanKey();
         $plan = $this->usage->planConfig($planKey);
-        $feePercent = (float) ($plan['transaction_fee_percent'] ?? 0);
+        $feePercent = (float) ($plan['transaction_fee_percent']
+            ?? config('dodopayments.transaction_fee_percent', 0));
 
         return [
             'plan' => $planKey,
             'plan_name' => $plan['name'] ?? ucfirst($planKey),
             'price_label' => $plan['price_label'] ?? null,
-            'is_free' => (float) ($plan['price_monthly_ngn'] ?? 0) <= 0,
             'transaction_fee_percent' => $feePercent,
+            'trial_days' => (int) config('dodopayments.trial_days', 14),
             'status' => $merchant->subscription_status,
             'renews_at' => $merchant->subscription_renews_at?->toIso8601String(),
             'limits' => $this->usage->planLimits($plan),
@@ -438,8 +440,8 @@ class DodoPaymentsService
     {
         $merchant->subscription_status = $status;
 
-        // A cancelled or expired subscription drops the merchant to the free plan
-        // rather than leaving them on paid entitlements they no longer pay for.
+        // A cancelled or expired subscription drops the merchant to the default
+        // (Starter) entitlements rather than leaving paid plan caps in place.
         // `on_hold` is a retrying payment, so those keep their plan for now.
         if ($status === 'cancelled') {
             $merchant->subscription_plan = $this->usage->defaultPlanKey();

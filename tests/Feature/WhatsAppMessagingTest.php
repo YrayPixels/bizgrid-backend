@@ -30,7 +30,7 @@ function createWhatsAppStore(): array
         'slug' => 'glow-market',
         'industry' => 'beauty_and_skincare',
         'status' => 'active',
-        // WhatsApp sending needs a plan that includes units; the free plan has none.
+        // WhatsApp sending needs a plan that includes units.
         'subscription_plan' => 'growth',
         'subscription_status' => 'active',
     ]);

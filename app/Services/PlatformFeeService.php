@@ -7,11 +7,10 @@ namespace App\Services;
 use App\Models\Merchant;
 
 /**
- * Resolves the platform service fee added to shopper orders.
+ * Resolves the platform service fee added to shopper online orders.
  *
- * Free-plan merchants pay no subscription; the platform instead adds a percentage
- * to the shopper's payable total and keeps it at settlement. Paid plans are
- * configured at 0% — the subscription replaces the per-order fee.
+ * All plans charge the configured percentage on online (Paystack) checkouts.
+ * Offline/POS channels are not fee-charged — they remain allowed on paid plans.
  */
 class PlatformFeeService
 {
@@ -20,7 +19,7 @@ class PlatformFeeService
     ) {}
 
     /**
-     * Fee percentage that applies to this merchant's orders, e.g. 2.5 for 2.5%.
+     * Fee percentage that applies to this merchant's online orders, e.g. 2.5 for 2.5%.
      */
     public function rateForMerchant(?Merchant $merchant): float
     {
@@ -28,9 +27,12 @@ class PlatformFeeService
             return 0.0;
         }
 
+        // Prefer the plan override when present; otherwise the platform-wide rate.
         $plan = $this->usage->planConfig($merchant->subscription_plan ?: $this->usage->defaultPlanKey());
+        $rate = $plan['transaction_fee_percent']
+            ?? config('dodopayments.transaction_fee_percent', 0);
 
-        return max(0.0, (float) ($plan['transaction_fee_percent'] ?? 0));
+        return max(0.0, (float) $rate);
     }
 
     /**
@@ -54,8 +56,7 @@ class PlatformFeeService
 
     /**
      * Whether the merchant's plan permits channels the platform does not process
-     * (POS, cash, bank transfer). Free is online-payment only because the service
-     * fee can only be collected from payments that flow through the platform.
+     * (POS, cash, bank transfer).
      */
     public function allowsOfflinePayments(?Merchant $merchant): bool
     {

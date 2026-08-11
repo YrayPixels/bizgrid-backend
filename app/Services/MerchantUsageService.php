@@ -373,7 +373,8 @@ class MerchantUsageService
         $caps = $plan['caps'] ?? [];
         $included = $plan['included_monthly'] ?? [];
         $dailyAi = (int) ($plan['ai_daily_credits'] ?? config('dodopayments.ai_daily_credits', 5));
-        $feePercent = (float) ($plan['transaction_fee_percent'] ?? 0);
+        $feePercent = (float) ($plan['transaction_fee_percent']
+            ?? config('dodopayments.transaction_fee_percent', 0));
 
         return [
             ['label' => 'Service fee', 'value' => $this->formatFeeLabel($feePercent)],

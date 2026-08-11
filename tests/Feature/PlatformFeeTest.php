@@ -13,7 +13,7 @@ use Illuminate\Support\Str;
 
 uses(RefreshDatabase::class);
 
-function createFeeStore(User $user, string $plan = 'free'): Store
+function createFeeStore(User $user, string $plan = 'starter'): Store
 {
     $merchant = Merchant::create([
         'owner_user_id' => $user->id,
@@ -92,9 +92,9 @@ beforeEach(function () {
     ]);
 });
 
-it('adds the service fee to a free plan order total', function () {
+it('adds the service fee to online orders on every plan', function (string $plan) {
     $user = User::factory()->create();
-    $store = createFeeStore($user, 'free');
+    $store = createFeeStore($user, $plan);
     $product = createFeeProduct($store, 10_000);
 
     placeFeeOrder($store, $product)
@@ -104,22 +104,11 @@ it('adds the service fee to a free plan order total', function () {
         ->assertJsonPath('order.platform_fee_amount', 250)
         ->assertJsonPath('order.merchant_amount', 10000)
         ->assertJsonPath('order.total_amount', 10250);
-});
-
-it('charges no service fee on a paid plan', function () {
-    $user = User::factory()->create();
-    $store = createFeeStore($user, 'growth');
-    $product = createFeeProduct($store, 10_000);
-
-    placeFeeOrder($store, $product)
-        ->assertCreated()
-        ->assertJsonPath('order.platform_fee_amount', 0)
-        ->assertJsonPath('order.total_amount', 10000);
-});
+})->with(['starter', 'growth', 'scale']);
 
 it('charges the fee on the delivery-inclusive total', function () {
     $user = User::factory()->create();
-    $store = createFeeStore($user, 'free');
+    $store = createFeeStore($user, 'starter');
     $store->update(['default_delivery_fee' => 2_000, 'allow_local_delivery' => true]);
     $product = createFeeProduct($store, 8_000);
 
@@ -133,7 +122,7 @@ it('charges the fee on the delivery-inclusive total', function () {
 
 it('excludes the platform fee from merchant revenue when payment is verified', function () {
     $user = User::factory()->create();
-    $store = createFeeStore($user, 'free');
+    $store = createFeeStore($user, 'starter');
 
     $order = StoreOrder::create([
         'store_id' => $store->id,
@@ -174,9 +163,9 @@ it('excludes the platform fee from merchant revenue when payment is verified', f
         ->and((float) $store->merchant->fresh()->monthly_processed_ngn)->toBe(10000.0);
 });
 
-it('blocks POS orders on the free plan', function () {
+it('allows POS orders on starter', function () {
     $user = User::factory()->create();
-    $store = createFeeStore($user, 'free');
+    $store = createFeeStore($user, 'starter');
     $product = createFeeProduct($store, 5_000);
 
     $this->actingAs($user, 'sanctum')
@@ -184,13 +173,12 @@ it('blocks POS orders on the free plan', function () {
             'items' => [['product_id' => $product->id, 'quantity' => 1]],
             'payment_method' => 'cash',
         ])
-        ->assertStatus(403)
-        ->assertJsonPath('code', 'plan_limit_exceeded');
+        ->assertCreated();
 });
 
 it('exposes the service fee on the public storefront payload', function () {
     $user = User::factory()->create();
-    $store = createFeeStore($user, 'free');
+    $store = createFeeStore($user, 'growth');
 
     $this->getJson("/api/storehause/public/storefronts/{$store->slug}")
         ->assertOk()

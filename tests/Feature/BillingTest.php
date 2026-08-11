@@ -51,8 +51,8 @@ it('returns subscription and plan catalog for the signed in merchant', function 
         ->assertJsonPath('subscription.plan', 'growth')
         ->assertJsonPath('subscription.status', 'active')
         ->assertJsonPath('subscription.plan_name', 'Growth')
-        ->assertJsonPath('subscription.transaction_fee_percent', 0)
-        ->assertJsonCount(4, 'plans');
+        ->assertJsonPath('subscription.transaction_fee_percent', 2.5)
+        ->assertJsonCount(3, 'plans');
 });
 
 it('creates a dodo checkout session for a selected plan', function () {
@@ -235,7 +235,7 @@ it('leaves an already-synced merchant untouched so usage counters survive', func
     expect((float) $merchant->monthly_processed_ngn)->toBe(88_000.0);
 });
 
-it('drops a merchant to free when dodo reports the subscription cancelled', function () {
+it('drops a merchant to starter when dodo reports the subscription cancelled', function () {
     config([
         'dodopayments.api_key' => 'test_api_key',
         'dodopayments.environment' => 'test_mode',
@@ -267,7 +267,7 @@ it('drops a merchant to free when dodo reports the subscription cancelled', func
     $merchant->refresh();
 
     expect($merchant->subscription_status)->toBe('cancelled')
-        ->and($merchant->subscription_plan)->toBe('free')
+        ->and($merchant->subscription_plan)->toBe('starter')
         ->and($merchant->dodo_subscription_id)->toBeNull();
 });
 

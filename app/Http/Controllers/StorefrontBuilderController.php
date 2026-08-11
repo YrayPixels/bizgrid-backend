@@ -826,8 +826,7 @@ class StorefrontBuilderController extends Controller
                 'industry' => $industry,
                 'status' => 'active',
                 'activated_at' => now(),
-                'subscription_plan' => config('dodopayments.default_plan', 'free'),
-                'subscription_status' => 'active',
+                ...Merchant::defaultTrialSubscriptionAttributes(),
             ],
         );
 
