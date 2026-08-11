@@ -30,10 +30,35 @@ final class AdminPermissions
 
     public const PROFILE = 'profile';
 
+    /** Capability: open the merchant app as that merchant (not a sidebar page). */
+    public const VIEW_AS_MERCHANT = 'view_as_merchant';
+
     /**
      * @return list<string>
      */
     public static function all(): array
+    {
+        return [
+            self::DASHBOARD,
+            self::MERCHANTS,
+            self::ORDERS,
+            self::INQUIRIES,
+            self::BUILDER,
+            self::AGENT_LOGS,
+            self::AI_SETTINGS,
+            self::STOREFRONT_TEMPLATES,
+            self::AUDIT_LOG,
+            self::HEALTH,
+            self::ADMINS,
+            self::PROFILE,
+            self::VIEW_AS_MERCHANT,
+        ];
+    }
+
+    /**
+     * @return list<string>
+     */
+    public static function pageKeys(): array
     {
         return [
             self::DASHBOARD,
@@ -74,6 +99,7 @@ final class AdminPermissions
                 self::AGENT_LOGS,
                 self::STOREFRONT_TEMPLATES,
                 self::PROFILE,
+                self::VIEW_AS_MERCHANT,
             ],
         };
     }
@@ -132,5 +158,20 @@ final class AdminPermissions
         }
 
         return self::normalize($stored, $role);
+    }
+
+    public static function userHas(?object $user, string $permission): bool
+    {
+        if (! $user || empty($user->is_admin)) {
+            return false;
+        }
+
+        $stored = is_array($user->admin_permissions ?? null) ? $user->admin_permissions : null;
+
+        return in_array(
+            $permission,
+            self::effective($stored, $user->admin_role ?? null),
+            true
+        );
     }
 }

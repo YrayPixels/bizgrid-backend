@@ -29,6 +29,7 @@ return Application::configure(basePath: dirname(__DIR__))
         $middleware->alias([
             'admin' => \App\Http\Middleware\AdminMiddleware::class,
             'admin.role' => \App\Http\Middleware\AdminRoleMiddleware::class,
+            'admin.permission' => \App\Http\Middleware\AdminPermissionMiddleware::class,
             'merchant.active' => \App\Http\Middleware\MerchantActiveMiddleware::class,
             'merchant.capability' => \App\Http\Middleware\MerchantCapabilityMiddleware::class,
             'api.cache' => \App\Http\Middleware\CacheApiGetResponse::class,

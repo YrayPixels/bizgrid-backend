@@ -78,7 +78,7 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::get('/merchants/{id}/billing', [AdminMerchantController::class, 'billing']);
             Route::patch('/merchants/{id}/billing', [AdminMerchantController::class, 'updateBilling'])->middleware('admin.role:super_admin,billing');
             Route::post('/merchants/{id}/impersonate', [AdminMerchantController::class, 'impersonate'])
-                ->middleware('admin.role:super_admin,support');
+                ->middleware('admin.permission:view_as_merchant');
             Route::patch('/merchants/{id}/status', [AdminMerchantController::class, 'updateStatus']);
             Route::get('/merchants/{id}/notes', [AdminMerchantController::class, 'notes']);
             Route::post('/merchants/{id}/notes', [AdminMerchantController::class, 'storeNote']);
