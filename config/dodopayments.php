@@ -11,7 +11,7 @@ return [
     'ai_daily_credits' => 5,
 
     // Plan + local free trial new merchants land on before they subscribe via Dodo.
-    // StoreHause owns the no-card 14-day trial (`subscription_renews_at`).
+    // StoreHause owns the no-card trial from merchant signup (`created_at` + trial_days).
     // Configure Dodo product trials to 0 days so checkout does not stack a second trial.
     'default_plan' => 'starter',
     'trial_days' => 14,
