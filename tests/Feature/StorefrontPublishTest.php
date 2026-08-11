@@ -376,11 +376,29 @@ it('blocks publish after the local free trial expires', function () {
     $store = publishTestStorefront($user, [
         'subscription_renews_at' => now()->subDay(),
     ]);
+    $store->merchant->forceFill([
+        'created_at' => now()->subDays(15),
+    ])->save();
 
     $this->actingAs($user, 'sanctum')
         ->postJson("/api/storehause/stores/{$store->id}/publish")
         ->assertForbidden()
         ->assertJsonPath('code', 'trial_expired');
+});
+
+it('allows publish during a local trial even when renews_at was never stamped', function () {
+    $user = User::factory()->create();
+    $store = publishTestStorefront($user, [
+        'subscription_renews_at' => null,
+    ]);
+    $store->merchant->forceFill([
+        'created_at' => now()->subDays(7),
+    ])->save();
+
+    $this->actingAs($user, 'sanctum')
+        ->postJson("/api/storehause/stores/{$store->id}/publish")
+        ->assertOk()
+        ->assertJsonPath('publish.is_published', true);
 });
 
 it('takes a published storefront offline when the local trial expires', function () {
@@ -391,9 +409,10 @@ it('takes a published storefront offline when the local trial expires', function
         ->postJson("/api/storehause/stores/{$store->id}/publish")
         ->assertOk();
 
-    $store->merchant->update([
+    $store->merchant->forceFill([
+        'created_at' => now()->subDays(15),
         'subscription_renews_at' => now()->subDay(),
-    ]);
+    ])->save();
 
     $this->getJson('/api/storehause/public/storefronts/glow-rituals')
         ->assertForbidden()

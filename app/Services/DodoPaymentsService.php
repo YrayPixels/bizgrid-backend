@@ -70,7 +70,7 @@ class DodoPaymentsService
             'status' => $merchant->subscription_status,
             'renews_at' => $merchant->subscription_renews_at?->toIso8601String(),
             'trial_ends_at' => $merchant->subscription_status === 'trialing'
-                ? $merchant->subscription_renews_at?->toIso8601String()
+                ? ($merchant->localTrialEndsAt() ?? $merchant->subscription_renews_at)?->toIso8601String()
                 : null,
             'is_local_trial' => $merchant->subscription_status === 'trialing'
                 && blank($merchant->dodo_subscription_id),

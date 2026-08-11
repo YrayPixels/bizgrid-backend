@@ -133,20 +133,38 @@ class Merchant extends Model
 
     /**
      * Starter plan on a local free trial — used for every new merchant shell.
-     * The trial clock is owned by StoreHause (`subscription_renews_at`), not Dodo.
+     * The trial clock starts at merchant signup (`created_at` + trial_days).
+     * `subscription_renews_at` is a mirrored end date for billing UI.
      * Configure Dodo products with 0 trial days so checkout starts paid billing immediately.
      *
      * @return array{subscription_plan: string, subscription_status: string, subscription_renews_at: \Illuminate\Support\Carbon}
      */
     public static function defaultTrialSubscriptionAttributes(): array
     {
-        $trialDays = max(1, (int) config('dodopayments.trial_days', 14));
+        $trialDays = static::configuredTrialDays();
 
         return [
             'subscription_plan' => (string) config('dodopayments.default_plan', 'starter'),
             'subscription_status' => 'trialing',
             'subscription_renews_at' => now()->addDays($trialDays),
         ];
+    }
+
+    public static function configuredTrialDays(): int
+    {
+        return max(1, (int) config('dodopayments.trial_days', 14));
+    }
+
+    /**
+     * End of the local no-card trial, measured from merchant signup.
+     */
+    public function localTrialEndsAt(): ?\Illuminate\Support\Carbon
+    {
+        if ($this->created_at === null) {
+            return null;
+        }
+
+        return $this->created_at->copy()->addDays(static::configuredTrialDays());
     }
 
     /**
@@ -168,8 +186,9 @@ class Merchant extends Model
             return true;
         }
 
-        return $this->subscription_renews_at !== null
-            && $this->subscription_renews_at->isFuture();
+        $trialEndsAt = $this->localTrialEndsAt();
+
+        return $trialEndsAt !== null && $trialEndsAt->isFuture();
     }
 
     /**
@@ -177,12 +196,13 @@ class Merchant extends Model
      */
     public function isExpiredLocalTrial(): bool
     {
-        return $this->subscription_status === 'trialing'
-            && blank($this->dodo_subscription_id)
-            && (
-                $this->subscription_renews_at === null
-                || $this->subscription_renews_at->isPast()
-            );
+        if ($this->subscription_status !== 'trialing' || filled($this->dodo_subscription_id)) {
+            return false;
+        }
+
+        $trialEndsAt = $this->localTrialEndsAt();
+
+        return $trialEndsAt === null || $trialEndsAt->isPast();
     }
 
     /**
