@@ -3,6 +3,7 @@
 namespace App\Services;
 
 use App\Jobs\PollTryOnSessionStatus;
+use App\Models\Customer;
 use App\Models\Store;
 use App\Models\StoreProduct;
 use App\Models\TryOnSession;
@@ -126,6 +127,7 @@ class TryOnService
         Store $store,
         array $input,
         ?UploadedFile $srcImage = null,
+        ?Customer $customer = null,
     ): TryOnSession {
         if (! (bool) ($store->virtual_try_on_enabled ?? false)) {
             throw new RuntimeException('Virtual try-on is not enabled for this store.');
@@ -205,6 +207,7 @@ class TryOnService
 
         $session = TryOnSession::create([
             'store_id' => $store->id,
+            'customer_id' => $customer?->id,
             'product_id' => $product->id,
             'mode' => $mode,
             'status' => 'processing',

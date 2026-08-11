@@ -16,6 +16,7 @@ class TryOnSession extends Model
 
     protected $fillable = [
         'store_id',
+        'customer_id',
         'product_id',
         'mode',
         'status',
@@ -44,6 +45,11 @@ class TryOnSession extends Model
     public function store(): BelongsTo
     {
         return $this->belongsTo(Store::class);
+    }
+
+    public function customer(): BelongsTo
+    {
+        return $this->belongsTo(Customer::class);
     }
 
     public function product(): BelongsTo

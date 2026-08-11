@@ -5,6 +5,7 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 
 class Store extends Model
@@ -110,6 +111,13 @@ class Store extends Model
     public function customers(): HasMany
     {
         return $this->hasMany(StoreCustomer::class);
+    }
+
+    public function shoppers(): BelongsToMany
+    {
+        return $this->belongsToMany(Customer::class, 'customer_stores')
+            ->withPivot(['first_seen_at', 'last_seen_at'])
+            ->withTimestamps();
     }
 
     public function visits(): HasMany
