@@ -13,6 +13,7 @@ class StorefrontPublishService
 {
     public function __construct(
         private readonly WorkbenchProjectStorage $projectStorage,
+        private readonly MerchantUsageEnforcementService $enforcement,
     ) {}
     /**
      * Bolt custom project payloads can exceed MySQL max_allowed_packet when duplicated
@@ -203,6 +204,11 @@ class StorefrontPublishService
 
     public function publish(Store $store): Store
     {
+        $store->loadMissing('merchant');
+        if ($store->merchant) {
+            $this->enforcement->assertCanAccessLiveStorefront($store->merchant);
+        }
+
         $draft = $this->resolveFullDraft($store);
 
         if (! is_array($draft) || $draft === []) {

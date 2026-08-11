@@ -127,6 +127,12 @@ trait StorehauseHelpers
             'checkout_enabled' => filled(config('paystack.public_key')) && filled(config('paystack.secret_key')),
             'subscription_plan' => $store->merchant?->subscription_plan ?? 'starter',
             'subscription_status' => $store->merchant?->subscription_status ?? 'trialing',
+            'subscription_renews_at' => $store->merchant?->subscription_renews_at?->toIso8601String(),
+            'trial_active' => (bool) $store->merchant?->canAccessLiveStorefront()
+                && $store->merchant?->subscription_status === 'trialing'
+                && blank($store->merchant?->dodo_subscription_id),
+            'trial_expired' => (bool) $store->merchant?->isExpiredLocalTrial(),
+            'has_payment_method' => filled($store->merchant?->dodo_subscription_id),
             'staff_count' => $store->staff_count,
             'physical_store_count' => $store->physical_store_count,
             'storefront_template_id' => $store->storefront_template_id ?? StorefrontTemplate::DEFAULT_ID,
@@ -443,6 +449,10 @@ trait StorehauseHelpers
         $store->loadMissing('merchant');
         if ($store->merchant?->status === 'suspended') {
             abort(403, 'This storefront is temporarily unavailable.');
+        }
+
+        if ($store->merchant && ! $store->merchant->canAccessLiveStorefront()) {
+            abort(403, 'This storefront is temporarily unavailable while the merchant renews their subscription.');
         }
     }
 

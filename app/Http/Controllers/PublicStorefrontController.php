@@ -61,7 +61,7 @@ class PublicStorefrontController extends Controller
     public function listPublished(): JsonResponse
     {
         $stores = Store::query()
-            ->with('merchant:id,industry')
+            ->with('merchant')
             ->where('status', 'published')
             ->whereNotNull('published_json')
             ->orderByDesc('published_at')
@@ -80,7 +80,10 @@ class PublicStorefrontController extends Controller
 
         return response()->json([
             'data' => $stores
-                ->filter(fn (Store $store) => $this->publishService->isPublished($store))
+                ->filter(function (Store $store) {
+                    return $this->publishService->isPublished($store)
+                        && ($store->merchant?->canAccessLiveStorefront() ?? false);
+                })
                 ->map(function (Store $store) {
                     $published = is_array($store->published_json) ? $store->published_json : [];
                     $banner = data_get($published, 'media.hero_image_url');

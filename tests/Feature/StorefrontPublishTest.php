@@ -7,9 +7,9 @@ use Illuminate\Foundation\Testing\RefreshDatabase;
 
 uses(RefreshDatabase::class);
 
-function publishTestStorefront(User $user): Store
+function publishTestStorefront(User $user, array $merchantOverrides = []): Store
 {
-    $merchant = Merchant::create([
+    $merchant = Merchant::create(array_merge([
         'owner_user_id' => $user->id,
         'business_name' => 'Glow Rituals',
         'slug' => 'glow-rituals',
@@ -17,7 +17,8 @@ function publishTestStorefront(User $user): Store
         'status' => 'active',
         'subscription_plan' => 'starter',
         'subscription_status' => 'trialing',
-    ]);
+        'subscription_renews_at' => now()->addDays(14),
+    ], $merchantOverrides));
 
     $storefront = [
         'hero' => [
@@ -152,6 +153,7 @@ it('rejects publish when no draft exists', function () {
         'status' => 'active',
         'subscription_plan' => 'starter',
         'subscription_status' => 'trialing',
+        'subscription_renews_at' => now()->addDays(14),
     ]);
     $store = Store::create([
         'merchant_id' => $merchant->id,
@@ -367,4 +369,51 @@ it('excludes stores with empty published_json from the public index', function (
     $this->getJson('/api/storehause/public/storefronts/glow-rituals')
         ->assertNotFound()
         ->assertJsonPath('message', 'This storefront has not been published yet.');
+});
+
+it('blocks publish after the local free trial expires', function () {
+    $user = User::factory()->create();
+    $store = publishTestStorefront($user, [
+        'subscription_renews_at' => now()->subDay(),
+    ]);
+
+    $this->actingAs($user, 'sanctum')
+        ->postJson("/api/storehause/stores/{$store->id}/publish")
+        ->assertForbidden()
+        ->assertJsonPath('code', 'trial_expired');
+});
+
+it('takes a published storefront offline when the local trial expires', function () {
+    $user = User::factory()->create();
+    $store = publishTestStorefront($user);
+
+    $this->actingAs($user, 'sanctum')
+        ->postJson("/api/storehause/stores/{$store->id}/publish")
+        ->assertOk();
+
+    $store->merchant->update([
+        'subscription_renews_at' => now()->subDay(),
+    ]);
+
+    $this->getJson('/api/storehause/public/storefronts/glow-rituals')
+        ->assertForbidden()
+        ->assertJsonPath('message', 'This storefront is temporarily unavailable while the merchant renews their subscription.');
+
+    $this->getJson('/api/storehause/public/storefronts')
+        ->assertOk()
+        ->assertJsonCount(0, 'data');
+});
+
+it('allows publish for an active paid subscription', function () {
+    $user = User::factory()->create();
+    $store = publishTestStorefront($user, [
+        'subscription_status' => 'active',
+        'subscription_renews_at' => now()->addMonth(),
+        'dodo_subscription_id' => 'sub_paid_1',
+    ]);
+
+    $this->actingAs($user, 'sanctum')
+        ->postJson("/api/storehause/stores/{$store->id}/publish")
+        ->assertOk()
+        ->assertJsonPath('publish.is_published', true);
 });

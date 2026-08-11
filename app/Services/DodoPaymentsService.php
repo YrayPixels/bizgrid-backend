@@ -69,6 +69,13 @@ class DodoPaymentsService
             'trial_days' => (int) config('dodopayments.trial_days', 14),
             'status' => $merchant->subscription_status,
             'renews_at' => $merchant->subscription_renews_at?->toIso8601String(),
+            'trial_ends_at' => $merchant->subscription_status === 'trialing'
+                ? $merchant->subscription_renews_at?->toIso8601String()
+                : null,
+            'is_local_trial' => $merchant->subscription_status === 'trialing'
+                && blank($merchant->dodo_subscription_id),
+            'trial_expired' => $merchant->isExpiredLocalTrial(),
+            'can_access_live_storefront' => $merchant->canAccessLiveStorefront(),
             'limits' => $this->usage->planLimits($plan),
             'usage' => $this->usage->formatUsage($merchant),
             'has_payment_method' => filled($merchant->dodo_subscription_id),

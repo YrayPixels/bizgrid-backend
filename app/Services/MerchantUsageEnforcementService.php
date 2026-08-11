@@ -97,6 +97,29 @@ class MerchantUsageEnforcementService
         }
     }
 
+    /**
+     * Live storefront access requires an in-window local trial or a paid Dodo subscription.
+     * Dodo products should have 0 trial days — StoreHause owns the free no-card trial.
+     */
+    public function assertCanAccessLiveStorefront(Merchant $merchant): void
+    {
+        if ($merchant->canAccessLiveStorefront()) {
+            return;
+        }
+
+        if ($merchant->isExpiredLocalTrial()) {
+            $this->deny(
+                'Your free trial has ended. Subscribe to a plan to publish and keep your storefront live.',
+                'trial_expired',
+            );
+        }
+
+        $this->deny(
+            'Subscribe to a plan to publish and keep your storefront live.',
+            'subscription_required',
+        );
+    }
+
     public function recordOrderProcessing(Merchant $merchant, float $amountNgn): void
     {
         $this->usage->ensureMonthlyPeriod($merchant);
@@ -104,11 +127,11 @@ class MerchantUsageEnforcementService
         $merchant->save();
     }
 
-    private function deny(string $message): void
+    private function deny(string $message, string $code = 'plan_limit_exceeded'): void
     {
         throw new HttpResponseException(response()->json([
             'message' => $message,
-            'code' => 'plan_limit_exceeded',
+            'code' => $code,
         ], 403));
     }
 }

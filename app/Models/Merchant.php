@@ -132,7 +132,9 @@ class Merchant extends Model
     }
 
     /**
-     * Starter plan on a fresh trial — used for every new merchant shell.
+     * Starter plan on a local free trial — used for every new merchant shell.
+     * The trial clock is owned by StoreHause (`subscription_renews_at`), not Dodo.
+     * Configure Dodo products with 0 trial days so checkout starts paid billing immediately.
      *
      * @return array{subscription_plan: string, subscription_status: string, subscription_renews_at: \Illuminate\Support\Carbon}
      */
@@ -145,6 +147,42 @@ class Merchant extends Model
             'subscription_status' => 'trialing',
             'subscription_renews_at' => now()->addDays($trialDays),
         ];
+    }
+
+    /**
+     * Whether the merchant may keep a storefront live / publish changes.
+     * Active (or on-hold) paid subs, and in-window local trials, qualify.
+     */
+    public function canAccessLiveStorefront(): bool
+    {
+        if (in_array($this->subscription_status, ['active', 'on_hold'], true)) {
+            return true;
+        }
+
+        if ($this->subscription_status !== 'trialing') {
+            return false;
+        }
+
+        // Once Dodo has a subscription, trust that over the local clock.
+        if (filled($this->dodo_subscription_id)) {
+            return true;
+        }
+
+        return $this->subscription_renews_at !== null
+            && $this->subscription_renews_at->isFuture();
+    }
+
+    /**
+     * Local no-card trial that has passed its end date without a Dodo subscription.
+     */
+    public function isExpiredLocalTrial(): bool
+    {
+        return $this->subscription_status === 'trialing'
+            && blank($this->dodo_subscription_id)
+            && (
+                $this->subscription_renews_at === null
+                || $this->subscription_renews_at->isPast()
+            );
     }
 
     /**
