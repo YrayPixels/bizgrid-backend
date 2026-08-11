@@ -12,6 +12,8 @@ use Laravel\Socialite\Two\User as SocialiteUser;
 
 class GoogleOAuthService
 {
+    public const INTENTS = ['merchant', 'admin', 'customer'];
+
     public function isConfigured(): bool
     {
         return filled(config('services.google.client_id'))
@@ -29,12 +31,19 @@ class GoogleOAuthService
         return rtrim((string) config('app.url'), '/').'/api/storehause/auth/google/callback';
     }
 
-    public function redirect(string $intent): RedirectResponse
+    /**
+     * @param  array<string, mixed>  $meta
+     */
+    public function redirect(string $intent, array $meta = []): RedirectResponse
     {
+        if (! in_array($intent, self::INTENTS, true)) {
+            throw new \InvalidArgumentException('Invalid Google OAuth intent.');
+        }
+
         $state = Str::random(48);
-        Cache::put($this->stateCacheKey($state), [
+        Cache::put($this->stateCacheKey($state), array_merge($meta, [
             'intent' => $intent,
-        ], now()->addMinutes(15));
+        ]), now()->addMinutes(15));
 
         return Socialite::driver('google')
             ->redirectUrl($this->redirectUri())
@@ -63,11 +72,23 @@ class GoogleOAuthService
     }
 
     /**
+     * Read OAuth state payload without consuming it.
+     *
+     * @return array<string, mixed>|null
+     */
+    public function peekState(string $state): ?array
+    {
+        $payload = Cache::get($this->stateCacheKey($state));
+
+        return is_array($payload) ? $payload : null;
+    }
+
+    /**
      * Read OAuth intent without consuming state (fetchUser consumes after success).
      */
     public function peekIntent(string $state): ?string
     {
-        $payload = Cache::get($this->stateCacheKey($state));
+        $payload = $this->peekState($state);
 
         if (! is_array($payload)) {
             return null;
@@ -75,7 +96,7 @@ class GoogleOAuthService
 
         $intent = $payload['intent'] ?? null;
 
-        return is_string($intent) && in_array($intent, ['merchant', 'admin'], true)
+        return is_string($intent) && in_array($intent, self::INTENTS, true)
             ? $intent
             : null;
     }

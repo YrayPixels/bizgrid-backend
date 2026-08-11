@@ -133,13 +133,20 @@ class AuthController extends Controller
         return $this->googleOAuth->redirect('merchant');
     }
 
-    public function handleGoogleCallback(Request $request, AdminController $adminController): RedirectResponse
-    {
+    public function handleGoogleCallback(
+        Request $request,
+        AdminController $adminController,
+        CustomerAuthController $customerAuthController,
+    ): RedirectResponse {
         $state = (string) $request->query('state', '');
         $intent = $this->googleOAuth->peekIntent($state) ?? 'merchant';
 
         if ($intent === 'admin') {
             return $adminController->completeGoogleSignIn($request, $this->googleOAuth);
+        }
+
+        if ($intent === 'customer') {
+            return $customerAuthController->completeGoogleSignIn($request);
         }
 
         return $this->completeMerchantGoogleSignIn($request);

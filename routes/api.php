@@ -28,6 +28,7 @@ use App\Http\Controllers\PaystackWebhookController;
 use App\Http\Controllers\PosController;
 use App\Http\Controllers\PlatformVisitController;
 use App\Http\Controllers\PublicStorefrontController;
+use App\Http\Controllers\CustomerAuthController;
 use App\Http\Controllers\PublicTryOnController;
 use App\Http\Controllers\StaffController;
 use App\Http\Controllers\StoreCategoryController;
@@ -128,6 +129,13 @@ Route::prefix('storehause')->group(function () {
     Route::get('/auth/google/callback', [AuthController::class, 'handleGoogleCallback'])->middleware('throttle:10,1');
     Route::post('/auth/request-password-reset', [AuthController::class, 'requestPasswordReset'])->middleware('throttle:5,1');
     Route::post('/auth/reset-password-with-code', [AuthController::class, 'resetPasswordWithCode'])->middleware('throttle:5,1');
+
+    Route::get('/customer/auth/google', [CustomerAuthController::class, 'redirectToGoogle'])->middleware('throttle:10,1');
+    Route::post('/customer/auth/exchange-code', [CustomerAuthController::class, 'exchangeCode'])->middleware('throttle:20,1');
+    Route::middleware(['auth:sanctum', 'auth.customer'])->group(function () {
+        Route::get('/customer/auth/me', [CustomerAuthController::class, 'me']);
+        Route::post('/customer/auth/logout', [CustomerAuthController::class, 'logout']);
+    });
     Route::get('/storefront-templates', [StorefrontTemplateController::class, 'active'])
         ->middleware('api.cache:shared');
     Route::post('/storefront-builder/recommend-templates', [StorefrontTemplateController::class, 'recommend']);
@@ -147,8 +155,10 @@ Route::prefix('storehause')->group(function () {
     Route::post('/public/storefronts/{slug}/contact', [PublicStorefrontController::class, 'submitContact'])->middleware('throttle:10,1');
     Route::get('/public/storefronts/{slug}/products/{productId}/reviews', [PublicStorefrontController::class, 'listProductReviews'])->middleware('throttle:60,1');
     Route::post('/public/storefronts/{slug}/products/{productId}/reviews', [PublicStorefrontController::class, 'submitProductReview'])->middleware('throttle:10,1');
-    Route::post('/public/storefronts/{slug}/try-on/sessions', [PublicTryOnController::class, 'createSession'])->middleware('throttle:20,1');
-    Route::get('/public/storefronts/{slug}/try-on/sessions/{sessionId}', [PublicTryOnController::class, 'showSession'])->middleware('throttle:60,1');
+    Route::middleware(['auth:sanctum', 'auth.customer'])->group(function () {
+        Route::post('/public/storefronts/{slug}/try-on/sessions', [PublicTryOnController::class, 'createSession'])->middleware('throttle:20,1');
+        Route::get('/public/storefronts/{slug}/try-on/sessions/{sessionId}', [PublicTryOnController::class, 'showSession'])->middleware('throttle:60,1');
+    });
     Route::post('/public/storefronts/{slug}/visits', [PublicStorefrontController::class, 'recordVisit'])->middleware('throttle:60,1');
     Route::post('/public/platform/visits', [PlatformVisitController::class, 'store'])->middleware('throttle:60,1');
 

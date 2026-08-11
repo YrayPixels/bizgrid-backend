@@ -3,8 +3,10 @@
 namespace App\Http\Controllers;
 
 use App\Http\Controllers\Concerns\StorehauseHelpers;
+use App\Models\Customer;
 use App\Models\Store;
 use App\Models\TryOnSession;
+use App\Services\CustomerStoreService;
 use App\Services\StorefrontPublishService;
 use App\Services\TryOnService;
 use Illuminate\Http\JsonResponse;
@@ -19,10 +21,14 @@ class PublicTryOnController extends Controller
     public function __construct(
         private StorefrontPublishService $publishService,
         private TryOnService $tryOnService,
+        private CustomerStoreService $customerStores,
     ) {}
 
     public function createSession(Request $request, string $slug): JsonResponse
     {
+        /** @var Customer $customer */
+        $customer = $request->user();
+
         $store = Store::with('merchant')->where('slug', Str::slug($slug))->first();
 
         if (! $store || ! $this->publishService->isPublished($store)) {
@@ -34,6 +40,8 @@ class PublicTryOnController extends Controller
         if (! (bool) ($store->virtual_try_on_enabled ?? false)) {
             return response()->json(['message' => 'Virtual try-on is not enabled for this store.'], 403);
         }
+
+        $this->customerStores->attach($customer, $store);
 
         $data = $request->validate([
             'product_id' => 'required|uuid',
@@ -53,6 +61,7 @@ class PublicTryOnController extends Controller
                 $store,
                 $data,
                 $request->file('src_image'),
+                $customer,
             );
         } catch (RuntimeException $e) {
             $status = str_contains(strtolower($e->getMessage()), 'not found') ? 404 : 422;
@@ -65,8 +74,11 @@ class PublicTryOnController extends Controller
         ], 201);
     }
 
-    public function showSession(string $slug, string $sessionId): JsonResponse
+    public function showSession(Request $request, string $slug, string $sessionId): JsonResponse
     {
+        /** @var Customer $customer */
+        $customer = $request->user();
+
         $store = Store::query()->where('slug', Str::slug($slug))->first();
 
         if (! $store || ! $this->publishService->isPublished($store)) {
@@ -75,6 +87,7 @@ class PublicTryOnController extends Controller
 
         $session = TryOnSession::query()
             ->where('store_id', $store->id)
+            ->where('customer_id', $customer->id)
             ->where('id', $sessionId)
             ->first();
 

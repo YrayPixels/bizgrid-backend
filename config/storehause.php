@@ -12,6 +12,12 @@ return [
     'admin_app_url' => env('STOREHAUSE_ADMIN_APP_URL', 'http://localhost:5173'),
     'welcome_cc_email' => env('STOREHAUSE_WELCOME_CC_EMAIL', env('MAIL_FROM_ADDRESS')),
 
+    // Extra hosts allowed for customer Google OAuth return_url (comma-separated).
+    'customer_auth_allowed_hosts' => array_values(array_filter(array_map(
+        static fn (string $host): string => strtolower(trim($host)),
+        explode(',', (string) env('STOREHAUSE_CUSTOMER_AUTH_ALLOWED_HOSTS', '')),
+    ))),
+
     // One-click judge/demo merchant login. Keep false unless intentionally exposed.
     'demo_login' => (bool) env('STOREHAUSE_DEMO_LOGIN', false),
     'demo_email' => env('STOREHAUSE_DEMO_EMAIL', 'demo@bizgrid.shop'),

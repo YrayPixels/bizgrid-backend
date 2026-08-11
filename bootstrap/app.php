@@ -32,6 +32,7 @@ return Application::configure(basePath: dirname(__DIR__))
             'admin.permission' => \App\Http\Middleware\AdminPermissionMiddleware::class,
             'merchant.active' => \App\Http\Middleware\MerchantActiveMiddleware::class,
             'merchant.capability' => \App\Http\Middleware\MerchantCapabilityMiddleware::class,
+            'auth.customer' => \App\Http\Middleware\CustomerAuthMiddleware::class,
             'api.cache' => \App\Http\Middleware\CacheApiGetResponse::class,
         ]);
     })
