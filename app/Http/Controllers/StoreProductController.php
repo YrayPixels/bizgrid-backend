@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 use App\Models\Store;
 use App\Models\StoreProduct;
 use App\Http\Controllers\Concerns\InvalidatesApiCache;
+use App\Services\ProductStyleEnrichmentService;
 use App\Services\StoreProductService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -105,6 +106,30 @@ class StoreProductController extends Controller
 
         return response()->json([
             ...$report,
+            'data' => $this->productService->listForStore($store),
+        ]);
+    }
+
+    public function enrichStyleProfiles(Request $request, ProductStyleEnrichmentService $enrichment): JsonResponse
+    {
+        $data = $request->validate([
+            'force' => 'sometimes|boolean',
+            'limit' => 'sometimes|integer|min:1|max:100',
+        ]);
+
+        $store = $this->ownedStore($request);
+        $updated = $enrichment->enrichStore(
+            $store,
+            null,
+            (int) ($data['limit'] ?? 60),
+            (bool) ($data['force'] ?? false),
+        );
+
+        $this->invalidateStoreApiCache($store);
+
+        return response()->json([
+            'message' => 'Style profiles updated.',
+            'updated' => $updated,
             'data' => $this->productService->listForStore($store),
         ]);
     }
