@@ -36,6 +36,7 @@ class StoreProduct extends Model
         'variants',
         'perks',
         'try_on',
+        'style_profile',
         'sort_order',
         'id',
     ];
@@ -49,6 +50,7 @@ class StoreProduct extends Model
             'variants' => 'array',
             'perks' => 'array',
             'try_on' => 'array',
+            'style_profile' => 'array',
             'images' => 'array',
             'sort_order' => 'integer',
         ];

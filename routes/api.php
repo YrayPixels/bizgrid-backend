@@ -29,6 +29,7 @@ use App\Http\Controllers\PosController;
 use App\Http\Controllers\PlatformVisitController;
 use App\Http\Controllers\PublicStorefrontController;
 use App\Http\Controllers\CustomerAuthController;
+use App\Http\Controllers\PublicAiShopController;
 use App\Http\Controllers\PublicTryOnController;
 use App\Http\Controllers\StaffController;
 use App\Http\Controllers\StoreCategoryController;
@@ -155,6 +156,8 @@ Route::prefix('storehause')->group(function () {
     Route::post('/public/storefronts/{slug}/contact', [PublicStorefrontController::class, 'submitContact'])->middleware('throttle:10,1');
     Route::get('/public/storefronts/{slug}/products/{productId}/reviews', [PublicStorefrontController::class, 'listProductReviews'])->middleware('throttle:60,1');
     Route::post('/public/storefronts/{slug}/products/{productId}/reviews', [PublicStorefrontController::class, 'submitProductReview'])->middleware('throttle:10,1');
+    Route::post('/public/storefronts/{slug}/ai/shop', [PublicAiShopController::class, 'shop'])->middleware('throttle:30,1');
+    Route::post('/public/storefronts/{slug}/ai/enrich-style-profiles', [PublicAiShopController::class, 'enrich'])->middleware('throttle:5,1');
     Route::middleware(['auth:sanctum', 'auth.customer'])->group(function () {
         Route::post('/public/storefronts/{slug}/try-on/sessions', [PublicTryOnController::class, 'createSession'])->middleware('throttle:20,1');
         Route::get('/public/storefronts/{slug}/try-on/sessions/{sessionId}', [PublicTryOnController::class, 'showSession'])->middleware('throttle:60,1');
@@ -239,6 +242,7 @@ Route::prefix('storehause')->group(function () {
             Route::get('/products', [StoreProductController::class, 'index']);
             Route::post('/products', [StoreProductController::class, 'store']);
             Route::post('/products/import', [StoreProductController::class, 'import']);
+            Route::post('/products/enrich-style-profiles', [StoreProductController::class, 'enrichStyleProfiles']);
             Route::post('/products/{productId}/duplicate', [StoreProductController::class, 'duplicate']);
             Route::patch('/products/{productId}', [StoreProductController::class, 'update']);
             Route::delete('/products/{productId}', [StoreProductController::class, 'destroy']);

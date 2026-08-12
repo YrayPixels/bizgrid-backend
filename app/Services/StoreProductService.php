@@ -344,6 +344,7 @@ class StoreProductService
             'variants' => app(ProductVariantResolver::class)->normalizeGroups($product->variants),
             'perks' => $product->perks,
             'try_on' => app(TryOnService::class)->normalizeTryOnConfig($product->try_on),
+            'style_profile' => is_array($product->style_profile) ? $product->style_profile : null,
         ];
     }
 
