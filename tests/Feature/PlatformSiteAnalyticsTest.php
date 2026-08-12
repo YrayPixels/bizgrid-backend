@@ -1,6 +1,7 @@
 <?php
 
 use App\Models\Merchant;
+use App\Models\PlatformEvent;
 use App\Models\PlatformVisit;
 use App\Models\Store;
 use App\Models\User;
@@ -29,6 +30,33 @@ it('records a public platform visit', function () {
         ->and($visit->utm_source)->toBe('google')
         ->and($visit->ip_hash)->not->toBeNull()
         ->and($visit->visited_at)->not->toBeNull();
+});
+
+it('records a public platform event', function () {
+    $this->postJson('/api/storehause/public/platform/events', [
+        'event' => 'preview_started',
+        'session_id' => 'sess-preview-1',
+        'source' => 'landing',
+        'utm_source' => 'twitter',
+    ])
+        ->assertCreated()
+        ->assertJsonPath('success', true);
+
+    expect(PlatformEvent::count())->toBe(1);
+
+    $event = PlatformEvent::first();
+    expect($event->event)->toBe('preview_started')
+        ->and($event->session_id)->toBe('sess-preview-1')
+        ->and($event->source)->toBe('landing')
+        ->and($event->utm_source)->toBe('twitter')
+        ->and($event->occurred_at)->not->toBeNull();
+});
+
+it('rejects unknown platform events', function () {
+    $this->postJson('/api/storehause/public/platform/events', [
+        'event' => 'not_a_real_event',
+        'session_id' => 'sess-1',
+    ])->assertStatus(422);
 });
 
 it('validates platform visit payload', function () {
@@ -61,6 +89,31 @@ it('returns site analytics for admins', function () {
         'visited_at' => now(),
     ]);
 
+    PlatformEvent::create([
+        'session_id' => 's1',
+        'event' => 'preview_started',
+        'source' => 'landing',
+        'occurred_at' => now(),
+    ]);
+    PlatformEvent::create([
+        'session_id' => 's1',
+        'event' => 'preview_ready',
+        'source' => 'landing',
+        'occurred_at' => now(),
+    ]);
+    PlatformEvent::create([
+        'session_id' => 's1',
+        'event' => 'claim_store_clicked',
+        'source' => 'landing',
+        'occurred_at' => now(),
+    ]);
+    PlatformEvent::create([
+        'session_id' => 's1',
+        'event' => 'preview_signup_completed',
+        'source' => 'signup',
+        'occurred_at' => now(),
+    ]);
+
     $owner = User::factory()->create([
         'email_verified_at' => now(),
     ]);
@@ -89,10 +142,17 @@ it('returns site analytics for admins', function () {
         ->assertJsonPath('data.period_days', 30)
         ->assertJsonPath('data.kpis.pageviews.period', 3)
         ->assertJsonPath('data.kpis.sessions.period', 2)
+        ->assertJsonPath('data.kpis.preview_started.period', 1)
+        ->assertJsonPath('data.kpis.preview_ready.period', 1)
+        ->assertJsonPath('data.kpis.claim_store_clicked.period', 1)
+        ->assertJsonPath('data.kpis.preview_signups.period', 1)
         ->assertJsonPath('data.kpis.signups.period', 1)
         ->assertJsonPath('data.kpis.verified.period', 1)
         ->assertJsonPath('data.kpis.first_stores.period', 1)
         ->assertJsonCount(4, 'data.funnel')
+        ->assertJsonCount(5, 'data.preview_funnel')
+        ->assertJsonPath('data.preview_funnel.1.key', 'preview_started')
+        ->assertJsonPath('data.preview_funnel.3.key', 'claim_store_clicked')
         ->assertJsonStructure([
             'data' => [
                 'charts' => [
@@ -100,11 +160,14 @@ it('returns site analytics for admins', function () {
                     'signups_by_day',
                     'verified_by_day',
                     'first_stores_by_day',
+                    'preview_started_by_day',
+                    'claim_store_clicked_by_day',
                 ],
                 'breakdowns' => [
                     'top_paths',
                     'top_referrers',
                     'top_utm_sources',
+                    'preview_sources',
                 ],
             ],
         ]);

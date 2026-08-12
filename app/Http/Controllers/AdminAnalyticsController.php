@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Http\Controllers;
 
 use App\Models\Merchant;
+use App\Models\PlatformEvent;
 use App\Models\PlatformVisit;
 use App\Models\Store;
 use App\Models\StoreOrder;
@@ -138,6 +139,16 @@ class AdminAnalyticsController extends Controller
         $firstStoresTotal = $this->firstStoresCount();
         $firstStoresPeriod = $this->firstStoresCount($since);
 
+        $previewStartedPeriod = $this->distinctEventSessions('preview_started', $since);
+        $previewReadyPeriod = $this->distinctEventSessions('preview_ready', $since);
+        $claimClickedPeriod = $this->distinctEventSessions('claim_store_clicked', $since);
+        $previewSignupPeriod = $this->distinctEventSessions('preview_signup_completed', $since);
+
+        $previewStartedTotal = $this->distinctEventSessions('preview_started');
+        $previewReadyTotal = $this->distinctEventSessions('preview_ready');
+        $claimClickedTotal = $this->distinctEventSessions('claim_store_clicked');
+        $previewSignupTotal = $this->distinctEventSessions('preview_signup_completed');
+
         $funnel = [
             [
                 'key' => 'visits',
@@ -165,6 +176,39 @@ class AdminAnalyticsController extends Controller
             ],
         ];
 
+        $previewFunnel = [
+            [
+                'key' => 'sessions',
+                'label' => 'Unique sessions',
+                'count' => $sessionsPeriod,
+                'conversion_from_previous' => null,
+            ],
+            [
+                'key' => 'preview_started',
+                'label' => 'Preview started',
+                'count' => $previewStartedPeriod,
+                'conversion_from_previous' => $this->conversionRate($previewStartedPeriod, $sessionsPeriod),
+            ],
+            [
+                'key' => 'preview_ready',
+                'label' => 'Preview ready',
+                'count' => $previewReadyPeriod,
+                'conversion_from_previous' => $this->conversionRate($previewReadyPeriod, $previewStartedPeriod),
+            ],
+            [
+                'key' => 'claim_store_clicked',
+                'label' => 'Claim store clicked',
+                'count' => $claimClickedPeriod,
+                'conversion_from_previous' => $this->conversionRate($claimClickedPeriod, $previewReadyPeriod),
+            ],
+            [
+                'key' => 'preview_signup_completed',
+                'label' => 'Signed up from preview',
+                'count' => $previewSignupPeriod,
+                'conversion_from_previous' => $this->conversionRate($previewSignupPeriod, $claimClickedPeriod),
+            ],
+        ];
+
         return response()->json([
             'success' => true,
             'data' => [
@@ -177,6 +221,22 @@ class AdminAnalyticsController extends Controller
                     'sessions' => [
                         'total' => $sessionsTotal,
                         'period' => $sessionsPeriod,
+                    ],
+                    'preview_started' => [
+                        'total' => $previewStartedTotal,
+                        'period' => $previewStartedPeriod,
+                    ],
+                    'preview_ready' => [
+                        'total' => $previewReadyTotal,
+                        'period' => $previewReadyPeriod,
+                    ],
+                    'claim_store_clicked' => [
+                        'total' => $claimClickedTotal,
+                        'period' => $claimClickedPeriod,
+                    ],
+                    'preview_signups' => [
+                        'total' => $previewSignupTotal,
+                        'period' => $previewSignupPeriod,
                     ],
                     'signups' => [
                         'total' => $signupsTotal,
@@ -192,6 +252,7 @@ class AdminAnalyticsController extends Controller
                     ],
                 ],
                 'funnel' => $funnel,
+                'preview_funnel' => $previewFunnel,
                 'charts' => [
                     'visits_by_day' => $this->visitsByDay($since),
                     'signups_by_day' => $this->countsByDay(
@@ -200,6 +261,8 @@ class AdminAnalyticsController extends Controller
                     ),
                     'verified_by_day' => $this->verifiedByDay($since),
                     'first_stores_by_day' => $this->firstStoresByDay($since),
+                    'preview_started_by_day' => $this->eventsByDay('preview_started', $since),
+                    'claim_store_clicked_by_day' => $this->eventsByDay('claim_store_clicked', $since),
                 ],
                 'breakdowns' => [
                     'top_paths' => $this->topGrouped(
@@ -214,9 +277,52 @@ class AdminAnalyticsController extends Controller
                         PlatformVisit::query()->where('visited_at', '>=', $since)->whereNotNull('utm_source')->where('utm_source', '!=', ''),
                         'utm_source'
                     ),
+                    'preview_sources' => $this->topGrouped(
+                        PlatformEvent::query()
+                            ->where('occurred_at', '>=', $since)
+                            ->where('event', 'preview_started')
+                            ->whereNotNull('source')
+                            ->where('source', '!=', ''),
+                        'source'
+                    ),
                 ],
             ],
         ]);
+    }
+
+    private function distinctEventSessions(string $event, ?\DateTimeInterface $since = null): int
+    {
+        $query = PlatformEvent::query()
+            ->where('event', $event)
+            ->whereNotNull('session_id');
+
+        if ($since !== null) {
+            $query->where('occurred_at', '>=', $since);
+        }
+
+        return (int) $query
+            ->selectRaw('COUNT(DISTINCT session_id) as aggregate')
+            ->value('aggregate');
+    }
+
+    /**
+     * @return list<array{date: string, count: int}>
+     */
+    private function eventsByDay(string $event, \DateTimeInterface $since): array
+    {
+        return PlatformEvent::query()
+            ->where('event', $event)
+            ->where('occurred_at', '>=', $since)
+            ->selectRaw('DATE(occurred_at) as date, COUNT(DISTINCT session_id) as count')
+            ->groupBy('date')
+            ->orderBy('date')
+            ->get()
+            ->map(fn ($row) => [
+                'date' => (string) $row->date,
+                'count' => (int) $row->count,
+            ])
+            ->values()
+            ->all();
     }
 
     private function conversionRate(int $current, int $previous): ?float

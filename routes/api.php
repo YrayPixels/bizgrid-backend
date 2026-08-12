@@ -27,6 +27,7 @@ use App\Http\Controllers\OrderController;
 use App\Http\Controllers\ShopperDemandController;
 use App\Http\Controllers\PaystackWebhookController;
 use App\Http\Controllers\PosController;
+use App\Http\Controllers\PlatformEventController;
 use App\Http\Controllers\PlatformVisitController;
 use App\Http\Controllers\PublicStorefrontController;
 use App\Http\Controllers\CustomerAuthController;
@@ -166,6 +167,7 @@ Route::prefix('storehause')->group(function () {
     });
     Route::post('/public/storefronts/{slug}/visits', [PublicStorefrontController::class, 'recordVisit'])->middleware('throttle:60,1');
     Route::post('/public/platform/visits', [PlatformVisitController::class, 'store'])->middleware('throttle:60,1');
+    Route::post('/public/platform/events', [PlatformEventController::class, 'store'])->middleware('throttle:60,1');
 
     // AI chat proxy — uses backend API key, no user auth needed
     Route::post('/billing/webhook', [BillingController::class, 'webhook'])->middleware('throttle:120,1');
