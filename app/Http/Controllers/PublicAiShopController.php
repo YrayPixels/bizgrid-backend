@@ -35,6 +35,7 @@ class PublicAiShopController extends Controller
             'look.items' => 'nullable|array|max:12',
             'look.items.*.role' => 'nullable|string|max:40',
             'look.items.*.product_id' => 'nullable|uuid',
+            'session_id' => 'nullable|string|max:64',
         ]);
 
         if (blank($data['message'] ?? null) && empty($data['chips'] ?? [])) {

@@ -84,6 +84,7 @@ class Store extends Model
             'draft_json' => 'array',
             'published_json' => 'array',
             'published_at' => 'datetime',
+            'shopper_demand_seen_at' => 'datetime',
             'whatsapp_auto_reply_enabled' => 'boolean',
             'tiktok_auto_reply_enabled' => 'boolean',
             'notify_merchant_new_order' => 'boolean',
