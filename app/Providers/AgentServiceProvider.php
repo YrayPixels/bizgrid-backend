@@ -8,6 +8,8 @@ use App\Agents\MarketingAgent;
 use App\Agents\ProductStyleProfileAgent;
 use App\Agents\SentimentAgent;
 use App\Agents\ShoppingIntentAgent;
+use App\Agents\ShoppingPlannerAgent;
+use App\Agents\ShoppingProductPickerAgent;
 use App\Agents\StorefrontCodeAgent;
 use App\Agents\StorefrontWriterAgent;
 use App\Agents\VisionAgent;
@@ -36,6 +38,8 @@ class AgentServiceProvider extends ServiceProvider
             $registry->register('storefront-writer', StorefrontWriterAgent::class);
             $registry->register('product-style-profile', ProductStyleProfileAgent::class);
             $registry->register('shopping-intent-agent', ShoppingIntentAgent::class);
+            $registry->register('shopping-planner-agent', ShoppingPlannerAgent::class);
+            $registry->register('shopping-product-picker-agent', ShoppingProductPickerAgent::class);
 
             return $registry;
         });
