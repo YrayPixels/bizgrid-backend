@@ -59,6 +59,8 @@ class ProductStyleEnrichmentService
             'styles' => $this->normalizeTags($raw['styles'] ?? []),
             'occasions' => $this->normalizeTags($raw['occasions'] ?? []),
             'colors' => $this->normalizeTags($raw['colors'] ?? []),
+            'use_cases' => $this->normalizeTags($raw['use_cases'] ?? []),
+            'keywords' => $this->normalizeTags($raw['keywords'] ?? []),
             'formality' => $formality,
             'gender' => $gender,
             'material' => $material,
@@ -74,6 +76,7 @@ class ProductStyleEnrichmentService
      */
     public function enrichStore(Store $store, ?Collection $products = null, int $limit = 40, bool $force = false): int
     {
+        $mode = app(StoreShoppingContextService::class)->resolveMode($store);
         $query = StoreProduct::query()
             ->where('store_id', $store->id)
             ->where('status', 'active')
@@ -98,11 +101,16 @@ class ProductStyleEnrichmentService
             return 0;
         }
 
-        $aiProfiles = $this->generateWithAi($targets);
+        $aiProfiles = $mode === StoreShoppingContextService::MODE_FASHION
+            ? $this->generateWithAi($targets)
+            : [];
         $updated = 0;
 
         foreach ($targets as $product) {
-            $profile = $aiProfiles[$product->id] ?? $this->heuristicProfile($product);
+            $profile = $aiProfiles[$product->id]
+                ?? ($mode === StoreShoppingContextService::MODE_FASHION
+                    ? $this->heuristicProfile($product)
+                    : $this->heuristicCatalogProfile($product, $mode));
             $product->style_profile = $profile;
             $product->save();
             $updated++;
@@ -231,6 +239,98 @@ class ProductStyleEnrichmentService
             'colors' => array_values(array_unique($colors)),
             'formality' => $formality,
             'gender' => $gender,
+            'material' => null,
+        ], 'heuristic');
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    public function heuristicCatalogProfile(StoreProduct $product, string $mode): array
+    {
+        $haystack = Str::lower(trim(implode(' ', array_filter([
+            $product->name,
+            $product->description,
+            $product->category,
+            $product->brand,
+        ]))));
+
+        $productType = 'other';
+        $useCases = [];
+        $keywords = [];
+
+        $electronicsMap = [
+            'laptop' => ['laptop', 'macbook', 'notebook', 'chromebook'],
+            'camera' => ['camera', 'dslr', 'mirrorless', 'lens', 'gopro'],
+            'phone' => ['phone', 'iphone', 'samsung', 'smartphone', 'mobile'],
+            'tablet' => ['tablet', 'ipad'],
+            'audio' => ['headphone', 'earbud', 'speaker', 'airpod', 'soundbar'],
+            'accessory' => ['charger', 'cable', 'case', 'adapter', 'keyboard', 'mouse', 'monitor'],
+        ];
+
+        $beautyMap = [
+            'skincare' => ['serum', 'moistur', 'cleanser', 'toner', 'sunscreen', 'spf'],
+            'makeup' => ['lipstick', 'foundation', 'mascara', 'blush', 'concealer'],
+            'fragrance' => ['perfume', 'cologne', 'fragrance'],
+            'haircare' => ['shampoo', 'conditioner', 'hair oil'],
+        ];
+
+        $map = match ($mode) {
+            StoreShoppingContextService::MODE_ELECTRONICS => $electronicsMap,
+            StoreShoppingContextService::MODE_BEAUTY => $beautyMap,
+            default => array_merge($electronicsMap, $beautyMap, [
+                'other' => [],
+            ]),
+        };
+
+        foreach ($map as $type => $needles) {
+            foreach ($needles as $needle) {
+                if (str_contains($haystack, $needle)) {
+                    $productType = $type;
+                    $keywords[] = $needle;
+                    break 2;
+                }
+            }
+        }
+
+        foreach ([
+            'work' => ['office', 'work', 'business', 'professional'],
+            'gaming' => ['gaming', 'gamer', 'rgb'],
+            'photography' => ['photo', 'vlog', 'content creator', 'youtube'],
+            'student' => ['student', 'school', 'study'],
+            'travel' => ['travel', 'portable', 'compact'],
+            'dry_skin' => ['dry skin', 'hydrating', 'moistur'],
+            'oily_skin' => ['oily skin', 'matte', 'oil control'],
+            'sensitive_skin' => ['sensitive', 'gentle', 'fragrance free'],
+        ] as $useCase => $needles) {
+            foreach ($needles as $needle) {
+                if (str_contains($haystack, $needle)) {
+                    $useCases[] = $useCase;
+                    break;
+                }
+            }
+        }
+
+        if ($product->brand) {
+            $keywords[] = Str::lower($product->brand);
+        }
+
+        foreach (preg_split('/\s+/', preg_replace('/[^a-z0-9\s]/', ' ', $haystack) ?? '') ?: [] as $token) {
+            if (strlen($token) >= 4) {
+                $keywords[] = $token;
+            }
+        }
+
+        return $this->normalize([
+            'product_type' => $productType,
+            'roles' => ['pick'],
+            'styles' => [],
+            'occasions' => [],
+            'colors' => [],
+            'use_cases' => array_values(array_unique($useCases)),
+            'keywords' => array_values(array_unique(array_slice($keywords, 0, 12))),
+            'formality' => 'casual',
+            'gender' => 'unisex',
             'material' => null,
         ], 'heuristic');
     }

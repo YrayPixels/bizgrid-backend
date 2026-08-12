@@ -157,6 +157,7 @@ Route::prefix('storehause')->group(function () {
     Route::get('/public/storefronts/{slug}/products/{productId}/reviews', [PublicStorefrontController::class, 'listProductReviews'])->middleware('throttle:60,1');
     Route::post('/public/storefronts/{slug}/products/{productId}/reviews', [PublicStorefrontController::class, 'submitProductReview'])->middleware('throttle:10,1');
     Route::post('/public/storefronts/{slug}/ai/shop', [PublicAiShopController::class, 'shop'])->middleware('throttle:30,1');
+    Route::get('/public/storefronts/{slug}/ai/config', [PublicAiShopController::class, 'config'])->middleware('throttle:60,1');
     Route::post('/public/storefronts/{slug}/ai/enrich-style-profiles', [PublicAiShopController::class, 'enrich'])->middleware('throttle:5,1');
     Route::middleware(['auth:sanctum', 'auth.customer'])->group(function () {
         Route::post('/public/storefronts/{slug}/try-on/sessions', [PublicTryOnController::class, 'createSession'])->middleware('throttle:20,1');

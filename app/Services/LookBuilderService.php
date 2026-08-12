@@ -147,6 +147,7 @@ class LookBuilderService
 
         return [
             'id' => (string) Str::uuid(),
+            'type' => 'look',
             'name' => $this->lookName($intent, $primary),
             'occasion' => is_string($intent['occasion'] ?? null) ? $intent['occasion'] : null,
             'styles' => array_values(array_filter(
