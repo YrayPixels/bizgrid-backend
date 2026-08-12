@@ -1,4 +1,4 @@
-# Deploying heysolanabackend on Railway
+# Deploying the Bizgrid backend on Railway
 
 Railway auto-detects this Laravel app and runs it with **PHP-FPM and Nginx**. Use either **CLI** or **GitHub** to deploy.
 
@@ -88,7 +88,7 @@ Only the **app service** needs a public domain. Worker and cron do not.
 
 ```bash
 # Install Railway CLI, then:
-cd /path/to/heysolanabackend
+cd /path/to/storehausebackend
 railway init
 railway up
 ```
