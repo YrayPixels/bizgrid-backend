@@ -2,18 +2,25 @@
 
 namespace App\Services;
 
-use App\Agents\ShoppingIntentAgent;
+use App\Agents\ShoppingPlannerAgent;
 use App\Models\Store;
+use App\Services\AgentExecutionLogService;
+use App\Support\ShoppingQueryHeuristics;
 use Illuminate\Support\Str;
 
 class AiShoppingService
 {
+    /** @var list<array{agent: string, phase: string, title: string, detail?: string}> */
+    private array $thinking = [];
+
     public function __construct(
-        private readonly ShoppingIntentAgent $intentAgent,
+        private readonly ShoppingPlannerAgent $planner,
         private readonly LookBuilderService $looks,
         private readonly ProductRecommendationService $recommendations,
         private readonly ProductStyleEnrichmentService $enrichment,
         private readonly StoreShoppingContextService $shoppingContext,
+        private readonly AgentExecutionLogService $agentLogs,
+        private readonly ShoppingSearchService $shoppingSearch,
     ) {}
 
     /**
@@ -30,30 +37,65 @@ class AiShoppingService
      */
     public function shop(Store $store, array $input): array
     {
+        $this->thinking = [];
         $message = trim((string) ($input['message'] ?? ''));
         $chips = is_array($input['chips'] ?? null) ? $input['chips'] : [];
         $previousIntent = is_array($input['intent'] ?? null) ? $input['intent'] : null;
         $previousLook = is_array($input['look'] ?? null) ? $input['look'] : null;
         $shopper = $this->shoppingContext->forStore($store);
 
-        $intent = $this->resolveIntent($store, $shopper, $message, $chips, $previousIntent);
-        $recommendation = null;
+        return $this->agentLogs->using([
+            'store_id' => $store->id,
+            'merchant_id' => $store->merchant_id,
+            'source' => 'ai_shopper',
+        ], function () use ($store, $message, $chips, $previousIntent, $previousLook, $shopper) {
+            $this->think('ShoppingPlanner', 'start', 'Understanding your request', $message !== '' ? $message : 'Quick picks');
 
-        if (! ($intent['needs_clarification'] ?? false)) {
-            $recommendation = $this->buildRecommendation($store, $shopper, $intent, $previousLook);
-        }
+            [$intent, $interpretation, $plan] = $this->resolveIntent($store, $shopper, $message, $chips, $previousIntent);
 
-        $reply = $this->composeReply($shopper, $intent, $recommendation, $message);
+            if (is_array($interpretation)) {
+                $this->think(
+                    'ShoppingPlanner',
+                    'analyze',
+                    'What you want',
+                    (string) ($interpretation['task_summary'] ?? ''),
+                );
+            }
 
-        return [
-            'reply' => $reply,
-            'intent' => $intent,
-            'shopper' => $shopper,
-            'look' => $recommendation,
-            'recommendation' => $recommendation,
-            'suggestions' => $this->suggestions($shopper, $intent, $recommendation),
-            'catalog_enriched' => true,
-        ];
+            $action = is_string($intent['action'] ?? null) ? $intent['action'] : 'search_products';
+            $this->think('ShoppingPlanner', 'plan', 'Next step', (string) ($plan['intent_summary'] ?? $action));
+
+            $recommendation = null;
+            $shouldRecommend = $this->shouldExecuteRecommendation($intent, $message, $action);
+
+            if ($shouldRecommend) {
+                $this->think('Catalog', 'search', 'Searching the catalog', $this->searchDetail($action, $intent));
+                $recommendation = $this->buildRecommendation($store, $shopper, $intent, $previousLook, $action, $message);
+                $this->think(
+                    'Catalog',
+                    'complete',
+                    $recommendation ? 'Found matches' : 'No exact match',
+                    $recommendation
+                        ? count($recommendation['items'] ?? []).' option(s)'
+                        : 'Will explain what is available instead.',
+                );
+            }
+
+            $reply = $this->composeReply($shopper, $intent, $recommendation, $message, $action);
+
+            return [
+                'reply' => $reply,
+                'intent' => $intent,
+                'interpretation' => $interpretation,
+                'plan' => $plan,
+                'thinking' => $this->thinking,
+                'shopper' => $shopper,
+                'look' => $recommendation,
+                'recommendation' => $recommendation,
+                'suggestions' => $this->suggestions($shopper, $intent, $recommendation, $action),
+                'catalog_enriched' => true,
+            ];
+        });
     }
 
     /**
@@ -72,13 +114,19 @@ class AiShoppingService
      * @param  array<string, mixed>|null  $previousIntent
      * @return array<string, mixed>
      */
+    /**
+     * @param  array<string, mixed>  $shopper
+     * @param  list<mixed>  $chips
+     * @param  array<string, mixed>|null  $previousIntent
+     * @return array{0: array<string, mixed>, 1: array<string, mixed>|null, 2: array<string, mixed>|null}
+     */
     private function resolveIntent(Store $store, array $shopper, string $message, array $chips, ?array $previousIntent): array
     {
         $chipIntent = $this->intentFromChips($chips);
-        $aiIntent = null;
+        $planResult = null;
 
         if ($message !== '' || $chips !== []) {
-            $aiIntent = $this->intentAgent->execute([
+            $planResult = $this->planner->execute([
                 'message' => $message !== '' ? $message : $this->chipsToMessage($chips),
                 'chips' => $chips,
                 'previous_intent' => $previousIntent,
@@ -92,32 +140,59 @@ class AiShoppingService
             $merged = $this->mergeIntent($merged, $previousIntent);
         }
         $merged = $this->mergeIntent($merged, $chipIntent);
-        if (is_array($aiIntent)) {
-            $merged = $this->mergeIntent($merged, $aiIntent);
-            if (is_string($aiIntent['reply'] ?? null) && trim($aiIntent['reply']) !== '') {
-                $merged['reply'] = trim($aiIntent['reply']);
+
+        $interpretation = is_array($planResult['interpretation'] ?? null) ? $planResult['interpretation'] : null;
+        $plan = is_array($planResult['plan'] ?? null) ? $planResult['plan'] : null;
+
+        if (is_array($planResult['intent'] ?? null)) {
+            $merged = $this->mergeIntent($merged, $planResult['intent']);
+            if (is_string($planResult['intent']['reply'] ?? null) && trim($planResult['intent']['reply']) !== '') {
+                $merged['reply'] = trim($planResult['intent']['reply']);
             }
         }
+
+        $merged['action'] = is_string($plan['action'] ?? null) ? $plan['action'] : 'search_products';
 
         if (($merged['budget_max'] ?? null) === null && $message !== '') {
             $merged['budget_max'] = $this->parseBudgetFromMessage($message);
         }
 
-        if (
-            is_string($merged['product_query'] ?? null)
-            && trim((string) $merged['product_query']) === ''
-            && $message !== ''
-        ) {
-            $merged['product_query'] = $message;
+        if (empty($merged['attributes']) && str_contains(Str::lower($message), 'wireless')) {
+            $merged['attributes'] = array_values(array_unique([
+                ...($merged['attributes'] ?? []),
+                'wireless',
+            ]));
+        }
+
+        if (ShoppingQueryHeuristics::isCatalogOverviewQuestion($message)) {
+            $merged['action'] = 'catalog_overview';
+            $merged['product_query'] = null;
+            $merged['needs_clarification'] = false;
+            if (trim((string) ($merged['reply'] ?? '')) === '') {
+                $categoryNames = array_values(array_filter(array_map(
+                    fn ($category) => is_array($category) ? (string) ($category['name'] ?? '') : '',
+                    $shopper['categories'] ?? [],
+                )));
+                $merged['reply'] = ShoppingQueryHeuristics::catalogOverviewReply($shopper, $categoryNames);
+            }
+        } else {
+            $merged['product_query'] = $this->normalizeProductQuery(
+                is_string($merged['product_query'] ?? null) ? trim($merged['product_query']) : '',
+                $message,
+            );
         }
 
         $merged['needs_clarification'] = (bool) ($merged['needs_clarification'] ?? false);
+        if ($this->hasExplicitBrowseIntent($merged, $message) || in_array($merged['action'], ['search_products', 'catalog_overview', 'build_look'], true)) {
+            $merged['needs_clarification'] = false;
+        }
         if ($this->shouldAskClarification($shopper, $merged, $message, $chips)) {
             $merged['needs_clarification'] = true;
+            $merged['action'] = 'clarify';
             $merged['reply'] = $shopper['welcome_message'];
         }
 
-        return $merged;
+        return [$merged, $interpretation, $plan];
     }
 
     /**
@@ -126,13 +201,71 @@ class AiShoppingService
      * @param  array<string, mixed>|null  $previousLook
      * @return array<string, mixed>|null
      */
-    private function buildRecommendation(Store $store, array $shopper, array $intent, ?array $previousLook): ?array
+    private function buildRecommendation(Store $store, array $shopper, array $intent, ?array $previousLook, string $action, string $message = ''): ?array
     {
-        if ($this->shouldBuildLook($shopper, $intent, $previousLook)) {
+        if ($action === 'catalog_overview') {
+            return $this->recommendations->catalogOverview($store, $intent);
+        }
+
+        if ($action === 'build_look' || $this->shouldBuildLook($shopper, $intent, $previousLook)) {
             return $this->looks->build($store, $intent, $previousLook);
         }
 
-        return $this->recommendations->recommend($store, $intent, $previousLook);
+        if (! in_array($action, ['search_products'], true)) {
+            return null;
+        }
+
+        return $this->shoppingSearch->searchAndPick(
+            $store,
+            $message,
+            $intent,
+            $shopper,
+            fn (string $agent, string $phase, string $title, string $detail = '') => $this->think($agent, $phase, $title, $detail),
+        );
+    }
+
+    /**
+     * @param  array<string, mixed>  $intent
+     */
+    private function shouldExecuteRecommendation(array $intent, string $message, string $action): bool
+    {
+        if (in_array($action, ['greeting', 'clarify'], true)) {
+            return false;
+        }
+
+        if ($action === 'catalog_overview' || $action === 'build_look' || $action === 'search_products') {
+            return true;
+        }
+
+        if ($intent['needs_clarification'] ?? false) {
+            return $this->hasExplicitBrowseIntent($intent, $message);
+        }
+
+        return true;
+    }
+
+    /**
+     * @param  array<string, mixed>  $intent
+     */
+    private function searchDetail(string $action, array $intent): string
+    {
+        return match ($action) {
+            'catalog_overview' => 'Picking highlights across categories',
+            'build_look' => 'Building a complete look',
+            default => trim((string) ($intent['product_query'] ?? '')) ?: 'Matching products to your request',
+        };
+    }
+
+    private function think(string $agent, string $phase, string $title, string $detail = ''): void
+    {
+        $entry = [
+            'agent' => $agent,
+            'phase' => $phase,
+            'title' => $title,
+            'detail' => $detail,
+        ];
+        $this->thinking[] = $entry;
+        $this->agentLogs->recordPhase($agent, $phase, $title, $detail);
     }
 
     /**
@@ -181,6 +314,14 @@ class AiShoppingService
      */
     private function intentWantsProductSearch(array $intent): bool
     {
+        if (in_array($intent['action'] ?? null, ['catalog_overview', 'greeting', 'clarify'], true)) {
+            return false;
+        }
+
+        if (ShoppingQueryHeuristics::isCatalogOverviewQuestion((string) ($intent['product_query'] ?? ''))) {
+            return false;
+        }
+
         if (filled($intent['occasion'] ?? null) || ! empty($intent['styles'])) {
             return false;
         }
@@ -220,6 +361,35 @@ class AiShoppingService
         return $query !== '' && ! str_contains($query, 'look') && ! str_contains($query, 'outfit');
     }
 
+    /**
+     * @param  array<string, mixed>  $intent
+     */
+    private function hasExplicitBrowseIntent(array $intent, string $message): bool
+    {
+        if (! $this->intentWantsProductSearch($intent)) {
+            return false;
+        }
+
+        $messageLower = Str::lower(trim($message));
+        $query = Str::lower(trim((string) ($intent['product_query'] ?? '')));
+
+        foreach ([
+            'show me', 'show the', 'show all', 'show my', 'list', 'browse', 'see the', 'see all',
+            'what laptops', 'what phones', 'what cameras', 'what do you have', 'in the store', 'in this store',
+        ] as $phrase) {
+            if (($messageLower !== '' && str_contains($messageLower, $phrase))
+                || ($query !== '' && str_contains($query, $phrase))) {
+                return true;
+            }
+        }
+
+        if (! empty($intent['categories'])) {
+            return $query !== '' || $messageLower !== '';
+        }
+
+        return false;
+    }
+
     private function parseBudgetFromMessage(string $message): ?float
     {
         $value = Str::lower($message);
@@ -238,6 +408,34 @@ class AiShoppingService
         }
 
         return null;
+    }
+
+    private function normalizeProductQuery(string $fromAi, string $message): string
+    {
+        $message = trim($message);
+        if ($message === '') {
+            return $fromAi;
+        }
+
+        if ($fromAi === '' || strlen($fromAi) < 3) {
+            return $message;
+        }
+
+        // Prefer the shopper's exact words when the model returns a vague paraphrase.
+        $aiLower = Str::lower($fromAi);
+        $msgLower = Str::lower($message);
+        $productNouns = [
+            'laptop', 'headphone', 'camera', 'phone', 'tablet', 'watch', 'console', 'monitor',
+            'keyboard', 'mouse', 'dress', 'gown', 'suit', 'shirt', 'shoe', 'bag',
+        ];
+
+        foreach ($productNouns as $noun) {
+            if (str_contains($msgLower, $noun) && ! str_contains($aiLower, $noun)) {
+                return $message;
+            }
+        }
+
+        return $fromAi;
     }
 
     /**
@@ -263,6 +461,7 @@ class AiShoppingService
     {
         return [
             'reply' => $shopper['welcome_message'],
+            'action' => 'clarify',
             'occasion' => null,
             'styles' => [],
             'budget_max' => null,
@@ -434,7 +633,7 @@ class AiShoppingService
      * @param  array<string, mixed>  $intent
      * @param  array<string, mixed>|null  $recommendation
      */
-    private function composeReply(array $shopper, array $intent, ?array $recommendation, string $message): string
+    private function composeReply(array $shopper, array $intent, ?array $recommendation, string $message, string $action): string
     {
         if (is_string($intent['reply'] ?? null) && trim($intent['reply']) !== '') {
             $base = trim($intent['reply']);
@@ -443,9 +642,26 @@ class AiShoppingService
         }
 
         if ($recommendation === null) {
+            if ($intent['needs_clarification'] ?? false) {
+                return $base;
+            }
+
+            if (in_array($action, ['catalog_overview', 'greeting', 'clarify'], true)) {
+                return $base;
+            }
+
             $query = trim((string) ($intent['product_query'] ?? ''));
             if ($query !== '' && $this->intentWantsProductSearch($intent)) {
-                return "I couldn’t find anything matching “{$query}” in {$shopper['store_name']}’s catalog. Try asking what this store sells, or browse by category.";
+                $clean = $this->cleanProductLabel($query);
+                $budget = isset($intent['budget_max']) && is_numeric($intent['budget_max'])
+                    ? (float) $intent['budget_max']
+                    : null;
+
+                if ($budget !== null) {
+                    return "I found {$clean} at {$shopper['store_name']}, but nothing under ₦".number_format($budget, 0)." right now. Say “raise my budget” or “show alternatives” and I’ll adjust.";
+                }
+
+                return "I couldn’t find any {$clean} in {$shopper['store_name']}’s catalog right now. Try browsing categories or ask what this store sells.";
             }
 
             return $base;
@@ -455,6 +671,7 @@ class AiShoppingService
         $total = number_format((float) ($recommendation['total_price'] ?? 0), 0);
         $currency = $recommendation['currency'] ?? 'NGN';
         $isLook = ($recommendation['type'] ?? '') === 'look';
+        $isOverview = (bool) ($recommendation['overview'] ?? false);
 
         if ($isLook) {
             $suffix = " I put together a {$count}-piece look for {$currency} {$total}.";
@@ -466,16 +683,27 @@ class AiShoppingService
                 $suffix .= ' Want to change anything?';
             }
         } else {
-            $suffix = " I found {$count} option".($count === 1 ? '' : 's').' from this store';
-            if ($count > 1) {
-                $suffix .= " starting at {$currency} {$total}";
-            } else {
-                $suffix .= " at {$currency} {$total}";
+            $suffix = $isOverview
+                ? " Here are {$count} highlights from {$shopper['store_name']} starting at {$currency} {$total}."
+                : " I found {$count} option".($count === 1 ? '' : 's').' from this store';
+            if (! $isOverview) {
+                if ($count > 1) {
+                    $suffix .= " starting at {$currency} {$total}";
+                } else {
+                    $suffix .= " at {$currency} {$total}";
+                }
             }
             $suffix .= '.';
             if (($recommendation['within_budget'] ?? true) === false) {
-                $suffix .= ' These are slightly over budget — say “cheaper options”.';
-            } else {
+                $budget = isset($intent['budget_max']) && is_numeric($intent['budget_max'])
+                    ? number_format((float) $intent['budget_max'], 0)
+                    : null;
+                if ($budget !== null) {
+                    $suffix .= " These are above your ₦{$budget} budget — say “cheaper options” if you want me to keep looking.";
+                } else {
+                    $suffix .= ' These are slightly over budget — say “cheaper options”.';
+                }
+            } elseif (! $isOverview) {
                 $suffix .= ' Say “show alternatives” if you want more choices.';
             }
         }
@@ -487,14 +715,26 @@ class AiShoppingService
         return $base.$suffix;
     }
 
+    private function cleanProductLabel(string $query): string
+    {
+        $clean = preg_replace('/under\s+[₦\d,.k\s]+/iu', '', $query) ?? $query;
+        $clean = preg_replace('/\b(show me|show the|show all|in the store|in this store)\b/iu', '', $clean) ?? $clean;
+
+        return trim($clean) ?: trim($query);
+    }
+
     /**
      * @param  array<string, mixed>  $shopper
      * @param  array<string, mixed>  $intent
      * @param  array<string, mixed>|null  $recommendation
      * @return list<string>
      */
-    private function suggestions(array $shopper, array $intent, ?array $recommendation): array
+    private function suggestions(array $shopper, array $intent, ?array $recommendation, string $action): array
     {
+        if ($action === 'catalog_overview') {
+            return array_slice($shopper['default_suggestions'], 0, 3);
+        }
+
         if ($recommendation === null) {
             return $shopper['default_suggestions'];
         }

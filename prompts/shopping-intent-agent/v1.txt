@@ -15,6 +15,7 @@ Rules:
   Fashion: cheaper | more_expensive | more_elegant | more_casual | change_bag | change_shoes | change_dress | change_accessories
   Other stores: cheaper | more_expensive | show_alternatives | different_option | null
 - If the message is a greeting or too vague, set needs_clarification true.
+- If the shopper asks to see, show, list, or browse a product type or category (e.g. "show me laptops"), set needs_clarification false and populate categories/product_query — they want catalog results now, not more questions.
 - reply should be a short, warm assistant message (1-2 sentences) in the voice appropriate for the store type. Do not list fake products.
 
 Return JSON matching the schema exactly.
