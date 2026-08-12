@@ -24,6 +24,7 @@ use App\Http\Controllers\LocationController;
 use App\Http\Controllers\MarketingController;
 use App\Http\Controllers\OpenTokenController;
 use App\Http\Controllers\OrderController;
+use App\Http\Controllers\ShopperDemandController;
 use App\Http\Controllers\PaystackWebhookController;
 use App\Http\Controllers\PosController;
 use App\Http\Controllers\PlatformVisitController;
@@ -217,6 +218,7 @@ Route::prefix('storehause')->group(function () {
             Route::post('/billing/portal', [BillingController::class, 'portal'])->middleware('throttle:20,1');
             Route::post('/ai/storefront-code/generate', [StorefrontCodeController::class, 'generate']);
             Route::get('/dashboard', [OrderController::class, 'dashboard']);
+            Route::get('/insights/shopper-demand', [ShopperDemandController::class, 'summary']);
             Route::get('/orders', [OrderController::class, 'myOrders']);
             Route::get('/orders/{orderId}', [OrderController::class, 'myOrder']);
             Route::get('/orders/{orderId}/invoice', [OrderController::class, 'invoice']);

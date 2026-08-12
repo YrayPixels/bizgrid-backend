@@ -21,6 +21,7 @@ class AiShoppingService
         private readonly StoreShoppingContextService $shoppingContext,
         private readonly AgentExecutionLogService $agentLogs,
         private readonly ShoppingSearchService $shoppingSearch,
+        private readonly ShopperIntentLogService $intentLog,
     ) {}
 
     /**
@@ -42,13 +43,14 @@ class AiShoppingService
         $chips = is_array($input['chips'] ?? null) ? $input['chips'] : [];
         $previousIntent = is_array($input['intent'] ?? null) ? $input['intent'] : null;
         $previousLook = is_array($input['look'] ?? null) ? $input['look'] : null;
+        $sessionId = is_string($input['session_id'] ?? null) ? trim($input['session_id']) : null;
         $shopper = $this->shoppingContext->forStore($store);
 
         return $this->agentLogs->using([
             'store_id' => $store->id,
             'merchant_id' => $store->merchant_id,
             'source' => 'ai_shopper',
-        ], function () use ($store, $message, $chips, $previousIntent, $previousLook, $shopper) {
+        ], function () use ($store, $message, $chips, $previousIntent, $previousLook, $shopper, $sessionId) {
             $this->think('ShoppingPlanner', 'start', 'Understanding your request', $message !== '' ? $message : 'Quick picks');
 
             [$intent, $interpretation, $plan] = $this->resolveIntent($store, $shopper, $message, $chips, $previousIntent);
@@ -82,6 +84,16 @@ class AiShoppingService
             }
 
             $reply = $this->composeReply($shopper, $intent, $recommendation, $message, $action);
+
+            $this->intentLog->record(
+                $store,
+                $message,
+                $chips,
+                $intent,
+                $interpretation,
+                $recommendation,
+                $sessionId,
+            );
 
             return [
                 'reply' => $reply,

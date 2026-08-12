@@ -8,6 +8,7 @@ use App\Http\Controllers\Concerns\StorehauseHelpers;
 use App\Models\StoreOrder;
 use App\Services\OrderInvoiceService;
 use App\Services\OrderLifecycleService;
+use App\Services\ShopperDemandService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response;
@@ -20,6 +21,7 @@ class OrderController extends Controller
     public function __construct(
         private readonly OrderLifecycleService $orderLifecycle,
         private readonly OrderInvoiceService $invoices,
+        private readonly ShopperDemandService $shopperDemand,
     ) {}
 
     public function dashboard(Request $request): JsonResponse
@@ -35,7 +37,10 @@ class OrderController extends Controller
             }
         }
 
-        return response()->json($this->buildMerchantDashboardPayload($store, $locationId));
+        $payload = $this->buildMerchantDashboardPayload($store, $locationId);
+        $payload['shopper_demand'] = $this->shopperDemand->summary($store, 30, true);
+
+        return response()->json($payload);
     }
 
     public function myOrders(Request $request): JsonResponse
