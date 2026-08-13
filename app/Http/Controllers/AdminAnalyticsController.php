@@ -253,6 +253,7 @@ class AdminAnalyticsController extends Controller
                 ],
                 'funnel' => $funnel,
                 'preview_funnel' => $previewFunnel,
+                'session_flow' => $this->sessionFlowTree($since),
                 'charts' => [
                     'visits_by_day' => $this->visitsByDay($since),
                     'signups_by_day' => $this->countsByDay(
@@ -290,6 +291,17 @@ class AdminAnalyticsController extends Controller
         ]);
     }
 
+    private const EVENT_FLOW_LABELS = [
+        'preview_started' => 'Preview started',
+        'preview_ready' => 'Preview ready',
+        'claim_store_clicked' => 'Claim store',
+        'preview_signup_completed' => 'Signed up',
+    ];
+
+    private const TERMINAL_FLOW_KEYS = [
+        'event:preview_signup_completed',
+    ];
+
     private function distinctEventSessions(string $event, ?\DateTimeInterface $since = null): int
     {
         $query = PlatformEvent::query()
@@ -303,6 +315,251 @@ class AdminAnalyticsController extends Controller
         return (int) $query
             ->selectRaw('COUNT(DISTINCT session_id) as aggregate')
             ->value('aggregate');
+    }
+
+    /**
+     * Prefix tree of where sessions went next (pages + funnel events) until drop-off.
+     *
+     * @return array{
+     *     id: string,
+     *     key: string,
+     *     label: string,
+     *     kind: string,
+     *     count: int,
+     *     share_of_parent: float|null,
+     *     children: list<array<string, mixed>>
+     * }
+     */
+    private function sessionFlowTree(\DateTimeInterface $since, int $maxDepth = 6, int $maxChildren = 5): array
+    {
+        $sequences = $this->sessionFlowSequences($since);
+        $total = count($sequences);
+
+        return [
+            'id' => 'root',
+            'key' => 'root',
+            'label' => 'Unique sessions',
+            'kind' => 'root',
+            'count' => $total,
+            'share_of_parent' => null,
+            'children' => $total > 0
+                ? $this->buildSessionFlowChildren($sequences, 0, 'root', $maxDepth, $maxChildren)
+                : [],
+        ];
+    }
+
+    /**
+     * @return list<list<array{key: string, label: string, kind: string}>>
+     */
+    private function sessionFlowSequences(\DateTimeInterface $since): array
+    {
+        /** @var array<string, list<array{at: int, key: string, label: string, kind: string}>> $timelines */
+        $timelines = [];
+
+        $visits = PlatformVisit::query()
+            ->where('visited_at', '>=', $since)
+            ->whereNotNull('session_id')
+            ->where('session_id', '!=', '')
+            ->orderBy('visited_at')
+            ->get(['session_id', 'path', 'visited_at']);
+
+        foreach ($visits as $visit) {
+            $path = $this->normalizeFlowPath((string) $visit->path);
+            $timelines[(string) $visit->session_id][] = [
+                'at' => $visit->visited_at?->getTimestamp() ?? 0,
+                'key' => 'path:'.$path,
+                'label' => $this->flowPathLabel($path),
+                'kind' => 'path',
+            ];
+        }
+
+        $events = PlatformEvent::query()
+            ->where('occurred_at', '>=', $since)
+            ->whereNotNull('session_id')
+            ->where('session_id', '!=', '')
+            ->whereIn('event', array_keys(self::EVENT_FLOW_LABELS))
+            ->orderBy('occurred_at')
+            ->get(['session_id', 'event', 'occurred_at']);
+
+        foreach ($events as $event) {
+            $eventName = (string) $event->event;
+            $timelines[(string) $event->session_id][] = [
+                'at' => $event->occurred_at?->getTimestamp() ?? 0,
+                'key' => 'event:'.$eventName,
+                'label' => self::EVENT_FLOW_LABELS[$eventName] ?? $eventName,
+                'kind' => 'event',
+            ];
+        }
+
+        $sequences = [];
+        foreach ($timelines as $steps) {
+            usort($steps, static fn (array $a, array $b): int => $a['at'] <=> $b['at']);
+
+            $deduped = [];
+            $previousKey = null;
+            foreach ($steps as $step) {
+                if ($step['key'] === $previousKey) {
+                    continue;
+                }
+                $deduped[] = [
+                    'key' => $step['key'],
+                    'label' => $step['label'],
+                    'kind' => $step['kind'],
+                ];
+                $previousKey = $step['key'];
+            }
+
+            if ($deduped !== []) {
+                $sequences[] = $deduped;
+            }
+        }
+
+        return $sequences;
+    }
+
+    /**
+     * @param  list<list<array{key: string, label: string, kind: string}>>  $sequences
+     * @return list<array{
+     *     id: string,
+     *     key: string,
+     *     label: string,
+     *     kind: string,
+     *     count: int,
+     *     share_of_parent: float|null,
+     *     children: list<array<string, mixed>>
+     * }>
+     */
+    private function buildSessionFlowChildren(
+        array $sequences,
+        int $depth,
+        string $parentId,
+        int $maxDepth,
+        int $maxChildren,
+    ): array {
+        if ($depth >= $maxDepth || $sequences === []) {
+            return [];
+        }
+
+        if ($depth > 0) {
+            $parentKey = $sequences[0][$depth - 1]['key'] ?? null;
+            if ($parentKey !== null && in_array($parentKey, self::TERMINAL_FLOW_KEYS, true)) {
+                return [];
+            }
+        }
+
+        $parentCount = count($sequences);
+        /** @var array<string, array{label: string, kind: string, sequences: list<list<array{key: string, label: string, kind: string}>>}> $groups */
+        $groups = [];
+        $dropped = 0;
+
+        foreach ($sequences as $sequence) {
+            if (! isset($sequence[$depth])) {
+                $dropped++;
+                continue;
+            }
+
+            $step = $sequence[$depth];
+            $key = $step['key'];
+            if (! isset($groups[$key])) {
+                $groups[$key] = [
+                    'label' => $step['label'],
+                    'kind' => $step['kind'],
+                    'sequences' => [],
+                ];
+            }
+            $groups[$key]['sequences'][] = $sequence;
+        }
+
+        uasort(
+            $groups,
+            static fn (array $a, array $b): int => count($b['sequences']) <=> count($a['sequences'])
+        );
+
+        $children = [];
+        $index = 0;
+        $otherSequences = [];
+
+        foreach ($groups as $key => $group) {
+            $count = count($group['sequences']);
+            if ($index < $maxChildren) {
+                $id = $parentId.'/'.$key;
+                $children[] = [
+                    'id' => $id,
+                    'key' => $key,
+                    'label' => $group['label'],
+                    'kind' => $group['kind'],
+                    'count' => $count,
+                    'share_of_parent' => $this->conversionRate($count, $parentCount),
+                    'children' => $this->buildSessionFlowChildren(
+                        $group['sequences'],
+                        $depth + 1,
+                        $id,
+                        $maxDepth,
+                        $maxChildren
+                    ),
+                ];
+            } else {
+                array_push($otherSequences, ...$group['sequences']);
+            }
+            $index++;
+        }
+
+        if ($otherSequences !== []) {
+            $otherCount = count($otherSequences);
+            $id = $parentId.'/other';
+            $children[] = [
+                'id' => $id,
+                'key' => 'other',
+                'label' => 'Other paths',
+                'kind' => 'other',
+                'count' => $otherCount,
+                'share_of_parent' => $this->conversionRate($otherCount, $parentCount),
+                'children' => $this->buildSessionFlowChildren(
+                    $otherSequences,
+                    $depth + 1,
+                    $id,
+                    $maxDepth,
+                    $maxChildren
+                ),
+            ];
+        }
+
+        if ($dropped > 0) {
+            $children[] = [
+                'id' => $parentId.'/dropped',
+                'key' => 'dropped',
+                'label' => 'Dropped off',
+                'kind' => 'dropped',
+                'count' => $dropped,
+                'share_of_parent' => $this->conversionRate($dropped, $parentCount),
+                'children' => [],
+            ];
+        }
+
+        return $children;
+    }
+
+    private function normalizeFlowPath(string $path): string
+    {
+        $path = trim($path);
+        if ($path === '') {
+            return '/';
+        }
+
+        if (! str_starts_with($path, '/')) {
+            $path = '/'.$path;
+        }
+
+        return strlen($path) > 80 ? substr($path, 0, 77).'...' : $path;
+    }
+
+    private function flowPathLabel(string $path): string
+    {
+        if ($path === '/') {
+            return 'Home';
+        }
+
+        return $path;
     }
 
     /**

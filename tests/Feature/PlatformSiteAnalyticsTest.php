@@ -76,42 +76,42 @@ it('returns site analytics for admins', function () {
         'path' => '/',
         'referrer' => 'https://twitter.com',
         'utm_source' => 'twitter',
-        'visited_at' => now(),
+        'visited_at' => now()->subMinutes(10),
     ]);
     PlatformVisit::create([
         'session_id' => 's1',
         'path' => '/signup',
-        'visited_at' => now(),
+        'visited_at' => now()->subMinutes(8),
     ]);
     PlatformVisit::create([
         'session_id' => 's2',
         'path' => '/',
-        'visited_at' => now(),
+        'visited_at' => now()->subMinutes(9),
     ]);
 
     PlatformEvent::create([
         'session_id' => 's1',
         'event' => 'preview_started',
         'source' => 'landing',
-        'occurred_at' => now(),
+        'occurred_at' => now()->subMinutes(7),
     ]);
     PlatformEvent::create([
         'session_id' => 's1',
         'event' => 'preview_ready',
         'source' => 'landing',
-        'occurred_at' => now(),
+        'occurred_at' => now()->subMinutes(6),
     ]);
     PlatformEvent::create([
         'session_id' => 's1',
         'event' => 'claim_store_clicked',
         'source' => 'landing',
-        'occurred_at' => now(),
+        'occurred_at' => now()->subMinutes(5),
     ]);
     PlatformEvent::create([
         'session_id' => 's1',
         'event' => 'preview_signup_completed',
         'source' => 'signup',
-        'occurred_at' => now(),
+        'occurred_at' => now()->subMinutes(4),
     ]);
 
     $owner = User::factory()->create([
@@ -153,8 +153,18 @@ it('returns site analytics for admins', function () {
         ->assertJsonCount(5, 'data.preview_funnel')
         ->assertJsonPath('data.preview_funnel.1.key', 'preview_started')
         ->assertJsonPath('data.preview_funnel.3.key', 'claim_store_clicked')
+        ->assertJsonPath('data.session_flow.count', 2)
+        ->assertJsonPath('data.session_flow.kind', 'root')
         ->assertJsonStructure([
             'data' => [
+                'session_flow' => [
+                    'id',
+                    'key',
+                    'label',
+                    'kind',
+                    'count',
+                    'children',
+                ],
                 'charts' => [
                     'visits_by_day',
                     'signups_by_day',
@@ -171,6 +181,23 @@ it('returns site analytics for admins', function () {
                 ],
             ],
         ]);
+
+    $flow = $this->actingAs($admin, 'sanctum')
+        ->getJson('/api/admin/analytics/site?days=30')
+        ->json('data.session_flow');
+
+    expect($flow['children'])->not->toBeEmpty();
+    $homeBranch = collect($flow['children'])->firstWhere('key', 'path:/');
+    expect($homeBranch)->not->toBeNull()
+        ->and($homeBranch['count'])->toBe(2)
+        ->and(collect($homeBranch['children'])->pluck('key')->all())
+        ->toContain('path:/signup')
+        ->toContain('dropped');
+
+    $signupBranch = collect($homeBranch['children'])->firstWhere('key', 'path:/signup');
+    expect($signupBranch)->not->toBeNull()
+        ->and(collect($signupBranch['children'])->pluck('key')->all())
+        ->toContain('event:preview_started');
 });
 
 it('blocks non-admins from site analytics', function () {
