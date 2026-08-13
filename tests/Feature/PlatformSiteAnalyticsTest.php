@@ -6,11 +6,13 @@ use App\Models\PlatformVisit;
 use App\Models\Store;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use function Pest\Laravel\actingAs;
+use function Pest\Laravel\postJson;
 
 uses(RefreshDatabase::class);
 
 it('records a public platform visit', function () {
-    $this->postJson('/api/storehause/public/platform/visits', [
+    postJson('/api/storehause/public/platform/visits', [
         'session_id' => 'sess-abc-123',
         'path' => '/',
         'referrer' => 'https://google.com',
@@ -33,7 +35,7 @@ it('records a public platform visit', function () {
 });
 
 it('records a public platform event', function () {
-    $this->postJson('/api/storehause/public/platform/events', [
+    postJson('/api/storehause/public/platform/events', [
         'event' => 'preview_started',
         'session_id' => 'sess-preview-1',
         'source' => 'landing',
@@ -53,14 +55,14 @@ it('records a public platform event', function () {
 });
 
 it('rejects unknown platform events', function () {
-    $this->postJson('/api/storehause/public/platform/events', [
+    postJson('/api/storehause/public/platform/events', [
         'event' => 'not_a_real_event',
         'session_id' => 'sess-1',
     ])->assertStatus(422);
 });
 
 it('validates platform visit payload', function () {
-    $this->postJson('/api/storehause/public/platform/visits', [
+    postJson('/api/storehause/public/platform/visits', [
         'path' => str_repeat('a', 3000),
     ])->assertStatus(422);
 });
@@ -135,7 +137,7 @@ it('returns site analytics for admins', function () {
         'primary_domain' => 'analytics-co.example.test',
     ]);
 
-    $this->actingAs($admin, 'sanctum')
+    actingAs($admin, 'sanctum')
         ->getJson('/api/admin/analytics/site?days=30')
         ->assertOk()
         ->assertJsonPath('success', true)
@@ -182,7 +184,7 @@ it('returns site analytics for admins', function () {
             ],
         ]);
 
-    $flow = $this->actingAs($admin, 'sanctum')
+    $flow = actingAs($admin, 'sanctum')
         ->getJson('/api/admin/analytics/site?days=30')
         ->json('data.session_flow');
 
@@ -203,7 +205,7 @@ it('returns site analytics for admins', function () {
 it('blocks non-admins from site analytics', function () {
     $user = User::factory()->create(['is_admin' => false]);
 
-    $this->actingAs($user, 'sanctum')
+    actingAs($user, 'sanctum')
         ->getJson('/api/admin/analytics/site')
         ->assertStatus(403);
 });
