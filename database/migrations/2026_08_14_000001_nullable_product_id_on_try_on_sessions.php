@@ -13,29 +13,22 @@ return new class extends Migration
             return;
         }
 
+        $this->dropProductIdForeignKeys();
+
         $driver = Schema::getConnection()->getDriverName();
 
         if ($driver === 'mysql') {
-            Schema::table('try_on_sessions', function (Blueprint $table) {
-                $table->dropForeign(['product_id']);
-            });
             DB::statement('ALTER TABLE try_on_sessions MODIFY product_id CHAR(36) NULL');
+        } else {
             Schema::table('try_on_sessions', function (Blueprint $table) {
-                $table->foreign('product_id')
-                    ->references('id')
-                    ->on('store_products')
-                    ->nullOnDelete();
+                $table->uuid('product_id')->nullable()->change();
             });
+        }
 
+        if ($this->hasProductIdForeignKey()) {
             return;
         }
 
-        Schema::table('try_on_sessions', function (Blueprint $table) {
-            $table->dropForeign(['product_id']);
-        });
-        Schema::table('try_on_sessions', function (Blueprint $table) {
-            $table->uuid('product_id')->nullable()->change();
-        });
         Schema::table('try_on_sessions', function (Blueprint $table) {
             $table->foreign('product_id')
                 ->references('id')
@@ -47,5 +40,29 @@ return new class extends Migration
     public function down(): void
     {
         // Catalog looks may have null product_id; leave the column nullable.
+    }
+
+    private function dropProductIdForeignKeys(): void
+    {
+        foreach (Schema::getForeignKeys('try_on_sessions') as $foreign) {
+            if (! in_array('product_id', $foreign['columns'], true)) {
+                continue;
+            }
+
+            Schema::table('try_on_sessions', function (Blueprint $table) use ($foreign) {
+                $table->dropForeign($foreign['name']);
+            });
+        }
+    }
+
+    private function hasProductIdForeignKey(): bool
+    {
+        foreach (Schema::getForeignKeys('try_on_sessions') as $foreign) {
+            if (in_array('product_id', $foreign['columns'], true)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 };
