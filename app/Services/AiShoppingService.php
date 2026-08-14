@@ -2,26 +2,30 @@
 
 namespace App\Services;
 
-use App\Agents\ShoppingPlannerAgent;
+use App\Agents\ShoppingShopperAgent;
+use App\Models\ShopperSession;
 use App\Models\Store;
-use App\Services\AgentExecutionLogService;
-use App\Support\ShoppingQueryHeuristics;
 use Illuminate\Support\Str;
 
 class AiShoppingService
 {
+    private const MAX_TOOL_ROUNDS = 4;
+
+    private const LLM_HISTORY = 16;
+
     /** @var list<array{agent: string, phase: string, title: string, detail?: string}> */
     private array $thinking = [];
 
     public function __construct(
-        private readonly ShoppingPlannerAgent $planner,
+        private readonly ShoppingShopperAgent $shopperAgent,
         private readonly LookBuilderService $looks,
         private readonly ProductRecommendationService $recommendations,
         private readonly ProductStyleEnrichmentService $enrichment,
         private readonly StoreShoppingContextService $shoppingContext,
         private readonly AgentExecutionLogService $agentLogs,
-        private readonly ShoppingSearchService $shoppingSearch,
+        private readonly StoreCatalogSearchService $catalogSearch,
         private readonly ShopperIntentLogService $intentLog,
+        private readonly ShopperSessionService $sessions,
     ) {}
 
     /**
@@ -33,6 +37,26 @@ class AiShoppingService
     }
 
     /**
+     * @return array<string, mixed>
+     */
+    public function sessionSnapshot(Store $store, ?string $sessionId): array
+    {
+        $shopper = $this->shoppingContext->forStore($store);
+        $session = $this->sessions->findOrCreate($store, $sessionId, $shopper);
+
+        return [
+            'shopper' => $shopper,
+            'session_id' => $session->client_key,
+            'messages' => $session->transcript(),
+            'recommendation' => $session->last_recommendation,
+            'look' => $session->last_recommendation,
+            'suggestions' => is_array($session->suggestions) && $session->suggestions !== []
+                ? $session->suggestions
+                : ($shopper['default_suggestions'] ?? []),
+        ];
+    }
+
+    /**
      * @param  array<string, mixed>  $input
      * @return array<string, mixed>
      */
@@ -41,8 +65,6 @@ class AiShoppingService
         $this->thinking = [];
         $message = trim((string) ($input['message'] ?? ''));
         $chips = is_array($input['chips'] ?? null) ? $input['chips'] : [];
-        $previousIntent = is_array($input['intent'] ?? null) ? $input['intent'] : null;
-        $previousLook = is_array($input['look'] ?? null) ? $input['look'] : null;
         $sessionId = is_string($input['session_id'] ?? null) ? trim($input['session_id']) : null;
         $shopper = $this->shoppingContext->forStore($store);
 
@@ -50,61 +72,69 @@ class AiShoppingService
             'store_id' => $store->id,
             'merchant_id' => $store->merchant_id,
             'source' => 'ai_shopper',
-        ], function () use ($store, $message, $chips, $previousIntent, $previousLook, $shopper, $sessionId) {
-            $this->think('ShoppingPlanner', 'start', 'Understanding your request', $message !== '' ? $message : 'Quick picks');
+        ], function () use ($store, $message, $chips, $sessionId, $shopper, $input) {
+            $session = $this->sessions->findOrCreate($store, $sessionId, $shopper);
+            $userText = $message !== '' ? $message : $this->chipsToMessage($chips);
+            $this->sessions->append($session, 'user', $userText);
 
-            [$intent, $interpretation, $plan] = $this->resolveIntent($store, $shopper, $message, $chips, $previousIntent);
-
-            if (is_array($interpretation)) {
-                $this->think(
-                    'ShoppingPlanner',
-                    'analyze',
-                    'What you want',
-                    (string) ($interpretation['task_summary'] ?? ''),
-                );
+            $intent = $this->mergeIntent(
+                $this->defaultIntent($shopper),
+                is_array($session->last_intent) ? $session->last_intent : [],
+            );
+            $intent = $this->mergeIntent($intent, $this->intentFromChips($chips));
+            if (is_array($input['intent'] ?? null) && $session->last_intent === null) {
+                $intent = $this->mergeIntent($intent, $input['intent']);
+            }
+            if (($intent['budget_max'] ?? null) === null && $message !== '') {
+                $intent['budget_max'] = $this->parseBudgetFromMessage($message);
             }
 
-            $action = is_string($intent['action'] ?? null) ? $intent['action'] : 'search_products';
-            $this->think('ShoppingPlanner', 'plan', 'Next step', (string) ($plan['intent_summary'] ?? $action));
+            $previousLook = is_array($session->last_recommendation)
+                ? $session->last_recommendation
+                : (is_array($input['look'] ?? null) ? $input['look'] : null);
 
-            $recommendation = null;
-            $shouldRecommend = $this->shouldExecuteRecommendation($intent, $message, $action);
+            $this->think('ShoppingShopper', 'start', 'Understanding your request', $userText);
 
-            if ($shouldRecommend) {
-                $this->think('Catalog', 'search', 'Searching the catalog', $this->searchDetail($action, $intent));
-                $recommendation = $this->buildRecommendation($store, $shopper, $intent, $previousLook, $action, $message);
-                $this->think(
-                    'Catalog',
-                    'complete',
-                    $recommendation ? 'Found matches' : 'No exact match',
-                    $recommendation
-                        ? count($recommendation['items'] ?? []).' option(s)'
-                        : 'Will explain what is available instead.',
-                );
-            }
+            $turn = $this->runShopperTurn($store, $shopper, $session, $userText, $intent, $previousLook);
+            $reply = $turn['reply'];
+            $recommendation = $turn['recommendation'];
+            $intent = $turn['intent'];
+            $action = $turn['action'];
 
-            $reply = $this->composeReply($shopper, $intent, $recommendation, $message, $action);
+            $suggestions = $this->suggestions($shopper, $intent, $recommendation, $action);
+            $this->sessions->append($session, 'assistant', $reply);
+            $this->sessions->persistTurn($session, $recommendation, $intent, $suggestions);
 
             $this->intentLog->record(
                 $store,
-                $message,
+                $userText,
                 $chips,
                 $intent,
-                $interpretation,
+                ['task_summary' => $turn['task_summary']],
                 $recommendation,
-                $sessionId,
+                $session->client_key,
             );
 
             return [
                 'reply' => $reply,
                 'intent' => $intent,
-                'interpretation' => $interpretation,
-                'plan' => $plan,
+                'interpretation' => [
+                    'task_summary' => $turn['task_summary'],
+                    'steps' => $turn['tools_used'],
+                    'constraints' => [],
+                ],
+                'plan' => [
+                    'action' => $action,
+                    'intent_summary' => $turn['task_summary'],
+                    'plan_steps' => [],
+                ],
                 'thinking' => $this->thinking,
                 'shopper' => $shopper,
                 'look' => $recommendation,
                 'recommendation' => $recommendation,
-                'suggestions' => $this->suggestions($shopper, $intent, $recommendation, $action),
+                'suggestions' => $suggestions,
+                'session_id' => $session->client_key,
+                'messages' => $session->transcript(),
                 'catalog_enriched' => true,
             ];
         });
@@ -122,149 +152,593 @@ class AiShoppingService
 
     /**
      * @param  array<string, mixed>  $shopper
-     * @param  list<mixed>  $chips
-     * @param  array<string, mixed>|null  $previousIntent
-     * @return array<string, mixed>
+     * @param  array<string, mixed>  $intent
+     * @param  array<string, mixed>|null  $previousLook
+     * @return array{
+     *   reply: string,
+     *   recommendation: array<string, mixed>|null,
+     *   intent: array<string, mixed>,
+     *   action: string,
+     *   task_summary: string,
+     *   tools_used: list<string>
+     * }
      */
+    private function runShopperTurn(
+        Store $store,
+        array $shopper,
+        ShopperSession $session,
+        string $userText,
+        array $intent,
+        ?array $previousLook,
+    ): array {
+        $recommendation = $previousLook;
+        $action = 'search_products';
+        $toolsUsed = [];
+        $lastSearchIds = [];
+
+        if (! $this->shopperAgent->available()) {
+            $this->think('ShoppingShopper', 'fallback', 'Catalog search', 'Assistant unavailable, searching directly');
+            $fallback = $this->fallbackSearch($store, $shopper, $userText, $intent);
+            $intent['action'] = $fallback['recommendation'] ? 'search_products' : 'clarify';
+            $intent['product_query'] = $userText;
+            $intent['reply'] = $fallback['reply'];
+
+            return [
+                'reply' => $fallback['reply'],
+                'recommendation' => $fallback['recommendation'] ?? $previousLook,
+                'intent' => $intent,
+                'action' => $intent['action'],
+                'task_summary' => 'Catalog fallback without the assistant model.',
+                'tools_used' => ['search_catalog'],
+            ];
+        }
+
+        $messages = $this->llmMessages($shopper, $session, $previousLook);
+        $tools = $this->shopperAgent->tools($shopper);
+
+        for ($round = 1; $round <= self::MAX_TOOL_ROUNDS; $round++) {
+            $result = $this->shopperAgent->complete($messages, $tools);
+            if (! is_array($result)) {
+                break;
+            }
+
+            $toolCalls = is_array($result['tool_calls'] ?? null) ? $result['tool_calls'] : [];
+            if ($toolCalls === []) {
+                $reply = is_string($result['content'] ?? null) ? trim($result['content']) : '';
+                if ($reply !== '') {
+                    $intent['reply'] = $reply;
+                    $intent['action'] = $action;
+
+                    return [
+                        'reply' => $reply,
+                        'recommendation' => $recommendation,
+                        'intent' => $intent,
+                        'action' => $action,
+                        'task_summary' => $this->taskSummary($toolsUsed, $userText),
+                        'tools_used' => $toolsUsed,
+                    ];
+                }
+                break;
+            }
+
+            $messages[] = [
+                'role' => 'assistant',
+                'content' => is_string($result['content'] ?? null) ? $result['content'] : null,
+                'tool_calls' => $toolCalls,
+            ];
+
+            foreach ($toolCalls as $toolCall) {
+                if (! is_array($toolCall)) {
+                    continue;
+                }
+                $callId = is_string($toolCall['id'] ?? null) ? $toolCall['id'] : (string) Str::uuid();
+                $function = is_array($toolCall['function'] ?? null) ? $toolCall['function'] : [];
+                $name = is_string($function['name'] ?? null) ? $function['name'] : '';
+                $argumentsRaw = $function['arguments'] ?? '{}';
+                $arguments = json_decode(is_string($argumentsRaw) ? $argumentsRaw : '{}', true);
+                if (! is_array($arguments)) {
+                    $arguments = [];
+                }
+
+                $toolsUsed[] = $name;
+                $this->think('ShoppingShopper', 'tool', $this->toolTitle($name), $this->toolDetail($name, $arguments));
+
+                $executed = $this->executeTool(
+                    $store,
+                    $shopper,
+                    $name,
+                    $arguments,
+                    $intent,
+                    $previousLook,
+                    $lastSearchIds,
+                );
+                $intent = $executed['intent'];
+                $action = $executed['action'];
+                if (in_array($name, ['search_catalog', 'show_products', 'build_look', 'catalog_overview'], true)) {
+                    $recommendation = $executed['recommendation'];
+                    $previousLook = $recommendation;
+                }
+                if ($executed['search_ids'] !== []) {
+                    $lastSearchIds = $executed['search_ids'];
+                }
+
+                $messages[] = [
+                    'role' => 'tool',
+                    'tool_call_id' => $callId,
+                    'content' => json_encode($executed['result'], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE),
+                ];
+            }
+        }
+
+        $nudge = $this->shopperAgent->complete(array_merge($messages, [[
+            'role' => 'user',
+            'content' => 'Reply to the shopper now in natural language using only the catalog results above. Do not mention tools.',
+        ]]), []);
+
+        $reply = is_array($nudge) && is_string($nudge['content'] ?? null)
+            ? trim($nudge['content'])
+            : '';
+
+        if ($reply === '') {
+            $reply = $this->replyFromRecommendation($shopper, $recommendation, $userText);
+        }
+
+        $intent['reply'] = $reply;
+        $intent['action'] = $action;
+
+        return [
+            'reply' => $reply,
+            'recommendation' => $recommendation,
+            'intent' => $intent,
+            'action' => $action,
+            'task_summary' => $this->taskSummary($toolsUsed, $userText),
+            'tools_used' => $toolsUsed,
+        ];
+    }
+
     /**
      * @param  array<string, mixed>  $shopper
-     * @param  list<mixed>  $chips
-     * @param  array<string, mixed>|null  $previousIntent
-     * @return array{0: array<string, mixed>, 1: array<string, mixed>|null, 2: array<string, mixed>|null}
+     * @param  array<string, mixed>|null  $previousLook
+     * @return list<array<string, mixed>>
      */
-    private function resolveIntent(Store $store, array $shopper, string $message, array $chips, ?array $previousIntent): array
+    private function llmMessages(array $shopper, ShopperSession $session, ?array $previousLook): array
     {
-        $chipIntent = $this->intentFromChips($chips);
-        $planResult = null;
+        $history = array_slice($session->transcript(), -self::LLM_HISTORY);
+        $storeBlob = [
+            'store_name' => $shopper['store_name'] ?? '',
+            'mode' => $shopper['mode'] ?? 'general',
+            'supports_looks' => (bool) ($shopper['supports_looks'] ?? false),
+            'supports_try_on' => (bool) ($shopper['supports_try_on'] ?? false),
+            'categories' => $shopper['categories'] ?? [],
+            'currency' => 'NGN',
+            'current_recommendation' => $this->compactRecommendation($previousLook),
+        ];
 
-        if ($message !== '' || $chips !== []) {
-            $planResult = $this->planner->execute([
-                'message' => $message !== '' ? $message : $this->chipsToMessage($chips),
-                'chips' => $chips,
-                'previous_intent' => $previousIntent,
-                'store_currency' => 'NGN',
-                'store_context' => $shopper,
-            ]);
+        return [
+            [
+                'role' => 'system',
+                'content' => $this->shopperAgent->systemPrompt()."\n\n## This store\n".json_encode(
+                    $storeBlob,
+                    JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE,
+                ),
+            ],
+            ...$history,
+        ];
+    }
+
+    /**
+     * @param  array<string, mixed>  $shopper
+     * @param  array<string, mixed>  $arguments
+     * @param  array<string, mixed>  $intent
+     * @param  array<string, mixed>|null  $previousLook
+     * @param  list<string>  $lastSearchIds
+     * @return array{
+     *   result: array<string, mixed>,
+     *   recommendation: array<string, mixed>|null,
+     *   intent: array<string, mixed>,
+     *   action: string,
+     *   search_ids: list<string>
+     * }
+     */
+    private function executeTool(
+        Store $store,
+        array $shopper,
+        string $name,
+        array $arguments,
+        array $intent,
+        ?array $previousLook,
+        array $lastSearchIds,
+    ): array {
+        return match ($name) {
+            'search_catalog' => $this->toolSearchCatalog($store, $arguments, $intent),
+            'show_products' => $this->toolShowProducts($store, $arguments, $intent, $lastSearchIds),
+            'build_look' => $this->toolBuildLook($store, $shopper, $arguments, $intent, $previousLook),
+            'catalog_overview' => $this->toolCatalogOverview($store, $shopper, $intent),
+            default => [
+                'result' => ['ok' => false, 'error' => 'Unknown tool.'],
+                'recommendation' => null,
+                'intent' => $intent,
+                'action' => $intent['action'] ?? 'search_products',
+                'search_ids' => [],
+            ],
+        };
+    }
+
+    /**
+     * @param  array<string, mixed>  $arguments
+     * @param  array<string, mixed>  $intent
+     * @return array<string, mixed>
+     */
+    private function toolSearchCatalog(Store $store, array $arguments, array $intent): array
+    {
+        $query = trim((string) ($arguments['query'] ?? ''));
+        $budgetMax = isset($arguments['budget_max']) && is_numeric($arguments['budget_max'])
+            ? (float) $arguments['budget_max']
+            : ($intent['budget_max'] ?? null);
+        $attributes = is_array($arguments['attributes'] ?? null) ? $arguments['attributes'] : [];
+
+        $intent['product_query'] = $query !== '' ? $query : $intent['product_query'];
+        $intent['budget_max'] = $budgetMax;
+        $intent['attributes'] = $attributes !== [] ? $this->tags($attributes) : ($intent['attributes'] ?? []);
+        $intent['action'] = 'search_products';
+        $intent['needs_clarification'] = false;
+
+        $searchParams = [
+            'query' => $query !== '' ? $query : (string) ($intent['product_query'] ?? ''),
+            'budget_max' => $budgetMax,
+            'attributes' => $intent['attributes'],
+            'limit' => 12,
+        ];
+
+        $results = $this->catalogSearch->search($store, $searchParams);
+        $relaxedBudget = false;
+        if ($results === [] && $budgetMax !== null) {
+            $relaxed = $searchParams;
+            $relaxed['budget_max'] = null;
+            $results = $this->catalogSearch->search($store, $relaxed);
+            $relaxedBudget = $results !== [];
         }
 
-        $merged = $this->defaultIntent($shopper);
-        if (is_array($previousIntent)) {
-            $merged = $this->mergeIntent($merged, $previousIntent);
+        $ids = array_values(array_filter(array_map(
+            fn ($row) => is_array($row) ? (string) ($row['id'] ?? '') : '',
+            $results,
+        )));
+
+        $shown = $this->recommendations->fromProductIds(
+            $store,
+            array_slice($ids, 0, 3),
+            $intent,
+            $budgetMax === null || ! $relaxedBudget,
+            $query,
+        );
+        if ($shown && $relaxedBudget) {
+            $shown['within_budget'] = false;
         }
-        $merged = $this->mergeIntent($merged, $chipIntent);
 
-        $interpretation = is_array($planResult['interpretation'] ?? null) ? $planResult['interpretation'] : null;
-        $plan = is_array($planResult['plan'] ?? null) ? $planResult['plan'] : null;
+        $this->think(
+            'Catalog',
+            'complete',
+            $results === [] ? 'No exact match' : 'Found matches',
+            $results === [] ? 'No catalog hits for this query.' : count($results).' product(s)',
+        );
 
-        if (is_array($planResult['intent'] ?? null)) {
-            $merged = $this->mergeIntent($merged, $planResult['intent']);
-            if (is_string($planResult['intent']['reply'] ?? null) && trim($planResult['intent']['reply']) !== '') {
-                $merged['reply'] = trim($planResult['intent']['reply']);
+        return [
+            'result' => [
+                'ok' => $results !== [],
+                'query' => $searchParams['query'],
+                'relaxed_budget' => $relaxedBudget,
+                'count' => count($results),
+                'products' => array_map(fn (array $row) => [
+                    'id' => $row['id'] ?? null,
+                    'name' => $row['name'] ?? null,
+                    'price' => $row['price'] ?? null,
+                    'currency' => $row['currency'] ?? 'NGN',
+                    'category' => $row['category'] ?? null,
+                    'within_budget' => $row['within_budget'] ?? true,
+                ], $results),
+                'shown_on_card' => $shown !== null,
+            ],
+            'recommendation' => $shown,
+            'intent' => $intent,
+            'action' => 'search_products',
+            'search_ids' => $ids,
+        ];
+    }
+
+    /**
+     * @param  array<string, mixed>  $arguments
+     * @param  array<string, mixed>  $intent
+     * @param  list<string>  $lastSearchIds
+     * @return array<string, mixed>
+     */
+    private function toolShowProducts(Store $store, array $arguments, array $intent, array $lastSearchIds): array
+    {
+        $requested = is_array($arguments['product_ids'] ?? null) ? $arguments['product_ids'] : [];
+        $ids = array_values(array_filter(array_map(
+            fn ($id) => is_string($id) ? $id : '',
+            $requested,
+        )));
+
+        if ($lastSearchIds !== []) {
+            $allowed = array_flip($lastSearchIds);
+            $ids = array_values(array_filter($ids, fn (string $id) => isset($allowed[$id])));
+        }
+
+        $ids = array_slice($ids, 0, 3);
+        $title = is_string($arguments['title'] ?? null) ? trim($arguments['title']) : '';
+        $shown = $this->recommendations->fromProductIds(
+            $store,
+            $ids,
+            $intent,
+            true,
+            $title !== '' ? $title : (string) ($intent['product_query'] ?? ''),
+        );
+
+        return [
+            'result' => [
+                'ok' => $shown !== null,
+                'shown_count' => $shown ? count($shown['items'] ?? []) : 0,
+                'products' => ($this->compactRecommendation($shown) ?? [])['items'] ?? [],
+            ],
+            'recommendation' => $shown,
+            'intent' => $intent,
+            'action' => 'search_products',
+            'search_ids' => [],
+        ];
+    }
+
+    /**
+     * @param  array<string, mixed>  $shopper
+     * @param  array<string, mixed>  $arguments
+     * @param  array<string, mixed>  $intent
+     * @param  array<string, mixed>|null  $previousLook
+     * @return array<string, mixed>
+     */
+    private function toolBuildLook(
+        Store $store,
+        array $shopper,
+        array $arguments,
+        array $intent,
+        ?array $previousLook,
+    ): array {
+        if (! ($shopper['supports_looks'] ?? false)) {
+            return [
+                'result' => ['ok' => false, 'error' => 'Looks are not available for this store.'],
+                'recommendation' => null,
+                'intent' => $intent,
+                'action' => 'search_products',
+                'search_ids' => [],
+            ];
+        }
+
+        foreach (['occasion', 'gender', 'revision'] as $key) {
+            if (array_key_exists($key, $arguments) && $arguments[$key] !== null && $arguments[$key] !== '') {
+                $intent[$key] = is_string($arguments[$key])
+                    ? Str::lower(str_replace(' ', '_', trim($arguments[$key])))
+                    : $arguments[$key];
             }
         }
-
-        $merged['action'] = is_string($plan['action'] ?? null) ? $plan['action'] : 'search_products';
-
-        if (($merged['budget_max'] ?? null) === null && $message !== '') {
-            $merged['budget_max'] = $this->parseBudgetFromMessage($message);
+        if (isset($arguments['styles']) && is_array($arguments['styles'])) {
+            $intent['styles'] = $this->tags($arguments['styles']);
         }
-
-        if (empty($merged['attributes']) && str_contains(Str::lower($message), 'wireless')) {
-            $merged['attributes'] = array_values(array_unique([
-                ...($merged['attributes'] ?? []),
-                'wireless',
-            ]));
+        if (array_key_exists('budget_max', $arguments) && $arguments['budget_max'] !== null) {
+            $intent['budget_max'] = is_numeric($arguments['budget_max']) ? (float) $arguments['budget_max'] : null;
         }
+        $intent['action'] = 'build_look';
+        $intent['needs_clarification'] = false;
 
-        if (ShoppingQueryHeuristics::isCatalogOverviewQuestion($message)) {
-            $merged['action'] = 'catalog_overview';
-            $merged['product_query'] = null;
-            $merged['needs_clarification'] = false;
-            if (trim((string) ($merged['reply'] ?? '')) === '') {
-                $categoryNames = array_values(array_filter(array_map(
-                    fn ($category) => is_array($category) ? (string) ($category['name'] ?? '') : '',
-                    $shopper['categories'] ?? [],
-                )));
-                $merged['reply'] = ShoppingQueryHeuristics::catalogOverviewReply($shopper, $categoryNames);
-            }
-        } else {
-            $merged['product_query'] = $this->normalizeProductQuery(
-                is_string($merged['product_query'] ?? null) ? trim($merged['product_query']) : '',
-                $message,
-            );
-        }
+        $look = $this->looks->build($store, $intent, $previousLook);
+        $this->think(
+            'Catalog',
+            'complete',
+            $look ? 'Look ready' : 'Could not build a look',
+            $look ? count($look['items'] ?? []).' piece(s)' : 'No matching pieces',
+        );
 
-        $merged['needs_clarification'] = (bool) ($merged['needs_clarification'] ?? false);
-        if ($this->hasExplicitBrowseIntent($merged, $message) || in_array($merged['action'], ['search_products', 'catalog_overview', 'build_look'], true)) {
-            $merged['needs_clarification'] = false;
-        }
-        if ($this->shouldAskClarification($shopper, $merged, $message, $chips)) {
-            $merged['needs_clarification'] = true;
-            $merged['action'] = 'clarify';
-            $merged['reply'] = $shopper['welcome_message'];
-        }
-
-        return [$merged, $interpretation, $plan];
+        return [
+            'result' => [
+                'ok' => $look !== null,
+                'look' => $this->compactRecommendation($look),
+            ],
+            'recommendation' => $look,
+            'intent' => $intent,
+            'action' => 'build_look',
+            'search_ids' => [],
+        ];
     }
 
     /**
      * @param  array<string, mixed>  $shopper
      * @param  array<string, mixed>  $intent
-     * @param  array<string, mixed>|null  $previousLook
+     * @return array<string, mixed>
+     */
+    private function toolCatalogOverview(Store $store, array $shopper, array $intent): array
+    {
+        $intent['action'] = 'catalog_overview';
+        $intent['product_query'] = null;
+        $intent['needs_clarification'] = false;
+
+        $overview = $this->recommendations->catalogOverview($store, $intent);
+        $categoryNames = array_values(array_filter(array_map(
+            fn ($category) => is_array($category) ? (string) ($category['name'] ?? '') : '',
+            $shopper['categories'] ?? [],
+        )));
+
+        return [
+            'result' => [
+                'ok' => $overview !== null,
+                'categories' => $categoryNames,
+                'highlights' => ($this->compactRecommendation($overview) ?? [])['items'] ?? [],
+            ],
+            'recommendation' => $overview,
+            'intent' => $intent,
+            'action' => 'catalog_overview',
+            'search_ids' => [],
+        ];
+    }
+
+    /**
+     * @param  array<string, mixed>  $shopper
+     * @param  array<string, mixed>  $intent
+     * @return array{reply: string, recommendation: array<string, mixed>|null}
+     */
+    private function fallbackSearch(Store $store, array $shopper, string $userText, array $intent): array
+    {
+        $query = trim((string) ($intent['product_query'] ?? '')) ?: $userText;
+        $results = $this->catalogSearch->search($store, [
+            'query' => $query,
+            'budget_max' => $intent['budget_max'] ?? null,
+            'attributes' => $intent['attributes'] ?? [],
+            'limit' => 12,
+        ]);
+        $ids = array_slice(array_values(array_filter(array_map(
+            fn ($row) => is_array($row) ? (string) ($row['id'] ?? '') : '',
+            $results,
+        ))), 0, 3);
+        $recommendation = $this->recommendations->fromProductIds($store, $ids, $intent, true, $query);
+
+        return [
+            'reply' => $this->replyFromRecommendation($shopper, $recommendation, $userText),
+            'recommendation' => $recommendation,
+        ];
+    }
+
+    /**
+     * Last-resort copy when the model returns no text. Built from real catalog rows only.
+     *
+     * @param  array<string, mixed>  $shopper
+     * @param  array<string, mixed>|null  $recommendation
+     */
+    private function replyFromRecommendation(array $shopper, ?array $recommendation, string $userText): string
+    {
+        if (! is_array($recommendation) || empty($recommendation['items'])) {
+            $storeName = (string) ($shopper['store_name'] ?? 'this store');
+
+            return "I couldn’t find a match in {$storeName} for that. Tell me a product type, budget, or occasion and I’ll look again.";
+        }
+
+        $names = [];
+        foreach ($recommendation['items'] as $item) {
+            if (! is_array($item)) {
+                continue;
+            }
+            $name = is_array($item['product'] ?? null) ? (string) ($item['product']['name'] ?? '') : '';
+            if ($name !== '') {
+                $names[] = $name;
+            }
+        }
+
+        if ($names === []) {
+            return 'Here are the closest pieces I found in the catalog.';
+        }
+
+        $listed = $this->joinNames($names);
+        $isLook = ($recommendation['type'] ?? '') === 'look';
+        $total = number_format((float) ($recommendation['total_price'] ?? 0), 0);
+        $currency = $recommendation['currency'] ?? 'NGN';
+
+        if ($isLook) {
+            return "I put this together from the catalog: {$listed}. The look comes to {$currency} {$total}.";
+        }
+
+        if (count($names) === 1) {
+            return "From what we have, I’d go with {$listed} at {$currency} {$total}.";
+        }
+
+        return "Closest matches I found: {$listed}. They start at {$currency} {$total}.";
+    }
+
+    /**
+     * @param  list<string>  $names
+     */
+    private function joinNames(array $names): string
+    {
+        $names = array_values($names);
+        if (count($names) === 1) {
+            return $names[0];
+        }
+        if (count($names) === 2) {
+            return $names[0].' and '.$names[1];
+        }
+
+        $last = array_pop($names);
+
+        return implode(', ', $names).', and '.$last;
+    }
+
+    /**
+     * @param  array<string, mixed>|null  $recommendation
      * @return array<string, mixed>|null
      */
-    private function buildRecommendation(Store $store, array $shopper, array $intent, ?array $previousLook, string $action, string $message = ''): ?array
+    private function compactRecommendation(?array $recommendation): ?array
     {
-        if ($action === 'catalog_overview') {
-            return $this->recommendations->catalogOverview($store, $intent);
-        }
-
-        if ($action === 'build_look' || $this->shouldBuildLook($shopper, $intent, $previousLook)) {
-            return $this->looks->build($store, $intent, $previousLook);
-        }
-
-        if (! in_array($action, ['search_products'], true)) {
+        if (! is_array($recommendation) || empty($recommendation['items'])) {
             return null;
         }
 
-        return $this->shoppingSearch->searchAndPick(
-            $store,
-            $message,
-            $intent,
-            $shopper,
-            fn (string $agent, string $phase, string $title, string $detail = '') => $this->think($agent, $phase, $title, $detail),
-        );
+        $items = [];
+        foreach ($recommendation['items'] as $item) {
+            if (! is_array($item)) {
+                continue;
+            }
+            $product = is_array($item['product'] ?? null) ? $item['product'] : [];
+            $items[] = [
+                'role' => $item['role'] ?? null,
+                'id' => $item['product_id'] ?? null,
+                'name' => $product['name'] ?? null,
+                'price' => $product['effective_price'] ?? $product['sale_price'] ?? $product['price'] ?? null,
+            ];
+        }
+
+        return [
+            'type' => $recommendation['type'] ?? 'products',
+            'name' => $recommendation['name'] ?? null,
+            'total_price' => $recommendation['total_price'] ?? null,
+            'currency' => $recommendation['currency'] ?? 'NGN',
+            'within_budget' => $recommendation['within_budget'] ?? true,
+            'items' => $items,
+        ];
     }
 
     /**
-     * @param  array<string, mixed>  $intent
+     * @param  list<string>  $toolsUsed
      */
-    private function shouldExecuteRecommendation(array $intent, string $message, string $action): bool
+    private function taskSummary(array $toolsUsed, string $userText): string
     {
-        if (in_array($action, ['greeting', 'clarify'], true)) {
-            return false;
+        if ($toolsUsed === []) {
+            return Str::limit($userText, 120, '');
         }
 
-        if ($action === 'catalog_overview' || $action === 'build_look' || $action === 'search_products') {
-            return true;
-        }
+        return 'Used '.implode(', ', array_unique($toolsUsed));
+    }
 
-        if ($intent['needs_clarification'] ?? false) {
-            return $this->hasExplicitBrowseIntent($intent, $message);
-        }
-
-        return true;
+    private function toolTitle(string $name): string
+    {
+        return match ($name) {
+            'search_catalog' => 'Searching the catalog',
+            'show_products' => 'Choosing what to show',
+            'build_look' => 'Building a look',
+            'catalog_overview' => 'Reviewing what this store sells',
+            default => $name,
+        };
     }
 
     /**
-     * @param  array<string, mixed>  $intent
+     * @param  array<string, mixed>  $arguments
      */
-    private function searchDetail(string $action, array $intent): string
+    private function toolDetail(string $name, array $arguments): string
     {
-        return match ($action) {
-            'catalog_overview' => 'Picking highlights across categories',
-            'build_look' => 'Building a complete look',
-            default => trim((string) ($intent['product_query'] ?? '')) ?: 'Matching products to your request',
+        return match ($name) {
+            'search_catalog' => (string) ($arguments['query'] ?? ''),
+            'show_products' => implode(', ', array_filter(array_map(
+                fn ($id) => is_string($id) ? $id : '',
+                is_array($arguments['product_ids'] ?? null) ? $arguments['product_ids'] : [],
+            ))),
+            'build_look' => trim(implode(' · ', array_filter([
+                is_string($arguments['occasion'] ?? null) ? $arguments['occasion'] : null,
+                is_string($arguments['revision'] ?? null) ? $arguments['revision'] : null,
+            ]))),
+            default => '',
         };
     }
 
@@ -278,176 +752,6 @@ class AiShoppingService
         ];
         $this->thinking[] = $entry;
         $this->agentLogs->recordPhase($agent, $phase, $title, $detail);
-    }
-
-    /**
-     * @param  array<string, mixed>  $shopper
-     * @param  array<string, mixed>  $intent
-     * @param  array<string, mixed>|null  $previousLook
-     */
-    private function shouldBuildLook(array $shopper, array $intent, ?array $previousLook): bool
-    {
-        if (! ($shopper['supports_looks'] ?? false)) {
-            return false;
-        }
-
-        if ($this->intentWantsProductSearch($intent)) {
-            return false;
-        }
-
-        if (filled($intent['occasion'] ?? null) || ! empty($intent['styles'])) {
-            return true;
-        }
-
-        $fashionRevisions = [
-            'change_bag', 'change_shoes', 'change_dress', 'change_accessories',
-            'more_elegant', 'more_casual',
-        ];
-        if (in_array($intent['revision'] ?? null, $fashionRevisions, true)) {
-            return true;
-        }
-
-        if (is_array($previousLook) && ($previousLook['type'] ?? '') === 'look') {
-            return in_array($intent['revision'] ?? null, ['cheaper', 'more_expensive', ...$fashionRevisions], true);
-        }
-
-        $query = Str::lower(trim((string) ($intent['product_query'] ?? '')));
-        foreach (['outfit', 'complete look', 'what should i wear', 'style me', 'put together a look'] as $phrase) {
-            if (str_contains($query, $phrase)) {
-                return true;
-            }
-        }
-
-        return false;
-    }
-
-    /**
-     * @param  array<string, mixed>  $intent
-     */
-    private function intentWantsProductSearch(array $intent): bool
-    {
-        if (in_array($intent['action'] ?? null, ['catalog_overview', 'greeting', 'clarify'], true)) {
-            return false;
-        }
-
-        if (ShoppingQueryHeuristics::isCatalogOverviewQuestion((string) ($intent['product_query'] ?? ''))) {
-            return false;
-        }
-
-        if (filled($intent['occasion'] ?? null) || ! empty($intent['styles'])) {
-            return false;
-        }
-
-        $query = Str::lower(trim((string) ($intent['product_query'] ?? '')));
-        $productSignals = [
-            'headphone', 'earbud', 'earphone', 'airpod', 'laptop', 'macbook', 'notebook',
-            'camera', 'dslr', 'mirrorless', 'phone', 'iphone', 'samsung', 'tablet', 'ipad',
-            'speaker', 'soundbar', 'ps5', 'xbox', 'nintendo', 'controller', 'pad', 'console',
-            'charger', 'cable', 'monitor', 'keyboard', 'mouse', 'watch', 'smartwatch',
-            'serum', 'moisturizer', 'cleanser', 'lipstick', 'makeup', 'skincare', 'perfume',
-            'boubou', 'gown', 'dress', 'suit', 'shirt', 'shoe', 'bag',
-        ];
-
-        foreach ($productSignals as $signal) {
-            if ($query !== '' && str_contains($query, $signal)) {
-                foreach (['outfit', 'complete look', 'style me', 'what to wear'] as $phrase) {
-                    if (str_contains($query, $phrase)) {
-                        return false;
-                    }
-                }
-
-                return true;
-            }
-        }
-
-        foreach ($this->tags($intent['categories'] ?? []) as $category) {
-            if (in_array($category, ['laptop', 'camera', 'phone', 'audio', 'headphone', 'electronics', 'tablet', 'gaming'], true)) {
-                return true;
-            }
-        }
-
-        if (! empty($intent['attributes']) || filled($intent['use_case'] ?? null)) {
-            return true;
-        }
-
-        return $query !== '' && ! str_contains($query, 'look') && ! str_contains($query, 'outfit');
-    }
-
-    /**
-     * @param  array<string, mixed>  $intent
-     */
-    private function hasExplicitBrowseIntent(array $intent, string $message): bool
-    {
-        if (! $this->intentWantsProductSearch($intent)) {
-            return false;
-        }
-
-        $messageLower = Str::lower(trim($message));
-        $query = Str::lower(trim((string) ($intent['product_query'] ?? '')));
-
-        foreach ([
-            'show me', 'show the', 'show all', 'show my', 'list', 'browse', 'see the', 'see all',
-            'what laptops', 'what phones', 'what cameras', 'what do you have', 'in the store', 'in this store',
-        ] as $phrase) {
-            if (($messageLower !== '' && str_contains($messageLower, $phrase))
-                || ($query !== '' && str_contains($query, $phrase))) {
-                return true;
-            }
-        }
-
-        if (! empty($intent['categories'])) {
-            return $query !== '' || $messageLower !== '';
-        }
-
-        return false;
-    }
-
-    private function parseBudgetFromMessage(string $message): ?float
-    {
-        $value = Str::lower($message);
-
-        if (preg_match('/under\s*[₦]?\s*(\d+(?:\.\d+)?)\s*k/i', $value, $m)) {
-            return (float) $m[1] * 1000;
-        }
-        if (preg_match('/under\s*[₦]?\s*([\d,]+)/i', $value, $m)) {
-            return (float) str_replace(',', '', $m[1]);
-        }
-        if (preg_match('/[₦]\s*([\d,]+)/i', $value, $m)) {
-            return (float) str_replace(',', '', $m[1]);
-        }
-        if (preg_match('/(\d+)\s*k\b/i', $value, $m)) {
-            return (float) $m[1] * 1000;
-        }
-
-        return null;
-    }
-
-    private function normalizeProductQuery(string $fromAi, string $message): string
-    {
-        $message = trim($message);
-        if ($message === '') {
-            return $fromAi;
-        }
-
-        if ($fromAi === '' || strlen($fromAi) < 3) {
-            return $message;
-        }
-
-        // Prefer the shopper's exact words when the model returns a vague paraphrase.
-        $aiLower = Str::lower($fromAi);
-        $msgLower = Str::lower($message);
-        $productNouns = [
-            'laptop', 'headphone', 'camera', 'phone', 'tablet', 'watch', 'console', 'monitor',
-            'keyboard', 'mouse', 'dress', 'gown', 'suit', 'shirt', 'shoe', 'bag',
-        ];
-
-        foreach ($productNouns as $noun) {
-            if (str_contains($msgLower, $noun) && ! str_contains($aiLower, $noun)) {
-                return $message;
-            }
-        }
-
-        return $fromAi;
     }
 
     /**
@@ -486,33 +790,6 @@ class AiShoppingService
             'revision' => null,
             'needs_clarification' => false,
         ];
-    }
-
-    /**
-     * @param  array<string, mixed>  $shopper
-     * @param  array<string, mixed>  $intent
-     * @param  list<mixed>  $chips
-     */
-    private function shouldAskClarification(array $shopper, array $intent, string $message, array $chips): bool
-    {
-        if ($message !== '' || $chips !== []) {
-            return false;
-        }
-
-        if (($intent['needs_clarification'] ?? false) === true) {
-            return true;
-        }
-
-        if ($shopper['mode'] === StoreShoppingContextService::MODE_FASHION) {
-            return $intent['occasion'] === null
-                && ($intent['styles'] ?? []) === []
-                && $intent['budget_max'] === null;
-        }
-
-        return $intent['product_query'] === null
-            && ($intent['categories'] ?? []) === []
-            && $intent['use_case'] === null
-            && $intent['budget_max'] === null;
     }
 
     /**
@@ -570,11 +847,32 @@ class AiShoppingService
             if (is_string($chip)) {
                 $parts[] = $chip;
             } elseif (is_array($chip)) {
-                $parts[] = trim(($chip['type'] ?? '').' '.($chip['value'] ?? ''));
+                $label = trim((string) ($chip['label'] ?? ''));
+                $parts[] = $label !== '' ? $label : trim(($chip['type'] ?? '').' '.($chip['value'] ?? ''));
             }
         }
 
         return trim(implode(', ', array_filter($parts)));
+    }
+
+    private function parseBudgetFromMessage(string $message): ?float
+    {
+        $value = Str::lower($message);
+
+        if (preg_match('/under\s*[₦]?\s*(\d+(?:\.\d+)?)\s*k/i', $value, $m)) {
+            return (float) $m[1] * 1000;
+        }
+        if (preg_match('/under\s*[₦]?\s*([\d,]+)/i', $value, $m)) {
+            return (float) str_replace(',', '', $m[1]);
+        }
+        if (preg_match('/[₦]\s*([\d,]+)/i', $value, $m)) {
+            return (float) str_replace(',', '', $m[1]);
+        }
+        if (preg_match('/(\d+)\s*k\b/i', $value, $m)) {
+            return (float) $m[1] * 1000;
+        }
+
+        return null;
     }
 
     private function parseBudget(string $value): ?float
@@ -607,7 +905,7 @@ class AiShoppingService
      */
     private function mergeIntent(array $base, array $overlay): array
     {
-        foreach (['occasion', 'currency', 'gender', 'revision', 'reply', 'use_case', 'product_query'] as $key) {
+        foreach (['occasion', 'currency', 'gender', 'revision', 'reply', 'use_case', 'product_query', 'action'] as $key) {
             if (array_key_exists($key, $overlay) && $overlay[$key] !== null && $overlay[$key] !== '') {
                 $base[$key] = $overlay[$key];
             }
@@ -629,110 +927,7 @@ class AiShoppingService
             }
         }
 
-        if (
-            is_string($base['product_query'] ?? null)
-            && trim((string) $base['product_query']) === ''
-            && is_string($overlay['message'] ?? null)
-        ) {
-            $base['product_query'] = trim($overlay['message']);
-        }
-
         return $base;
-    }
-
-    /**
-     * @param  array<string, mixed>  $shopper
-     * @param  array<string, mixed>  $intent
-     * @param  array<string, mixed>|null  $recommendation
-     */
-    private function composeReply(array $shopper, array $intent, ?array $recommendation, string $message, string $action): string
-    {
-        if (is_string($intent['reply'] ?? null) && trim($intent['reply']) !== '') {
-            $base = trim($intent['reply']);
-        } else {
-            $base = 'Here’s what I’d recommend.';
-        }
-
-        if ($recommendation === null) {
-            if ($intent['needs_clarification'] ?? false) {
-                return $base;
-            }
-
-            if (in_array($action, ['catalog_overview', 'greeting', 'clarify'], true)) {
-                return $base;
-            }
-
-            $query = trim((string) ($intent['product_query'] ?? ''));
-            if ($query !== '' && $this->intentWantsProductSearch($intent)) {
-                $clean = $this->cleanProductLabel($query);
-                $budget = isset($intent['budget_max']) && is_numeric($intent['budget_max'])
-                    ? (float) $intent['budget_max']
-                    : null;
-
-                if ($budget !== null) {
-                    return "I found {$clean} at {$shopper['store_name']}, but nothing under ₦".number_format($budget, 0)." right now. Say “raise my budget” or “show alternatives” and I’ll adjust.";
-                }
-
-                return "I couldn’t find any {$clean} in {$shopper['store_name']}’s catalog right now. Try browsing categories or ask what this store sells.";
-            }
-
-            return $base;
-        }
-
-        $count = count($recommendation['items'] ?? []);
-        $total = number_format((float) ($recommendation['total_price'] ?? 0), 0);
-        $currency = $recommendation['currency'] ?? 'NGN';
-        $isLook = ($recommendation['type'] ?? '') === 'look';
-        $isOverview = (bool) ($recommendation['overview'] ?? false);
-
-        if ($isLook) {
-            $suffix = " I put together a {$count}-piece look for {$currency} {$total}.";
-            if (($recommendation['within_budget'] ?? true) === false) {
-                $suffix .= ' It’s a little over budget — say “make it cheaper” and I’ll adjust.';
-            } elseif ($shopper['supports_try_on']) {
-                $suffix .= ' Want to see it on you, or tweak the bag/shoes?';
-            } else {
-                $suffix .= ' Want to change anything?';
-            }
-        } else {
-            $suffix = $isOverview
-                ? " Here are {$count} highlights from {$shopper['store_name']} starting at {$currency} {$total}."
-                : " I found {$count} option".($count === 1 ? '' : 's').' from this store';
-            if (! $isOverview) {
-                if ($count > 1) {
-                    $suffix .= " starting at {$currency} {$total}";
-                } else {
-                    $suffix .= " at {$currency} {$total}";
-                }
-            }
-            $suffix .= '.';
-            if (($recommendation['within_budget'] ?? true) === false) {
-                $budget = isset($intent['budget_max']) && is_numeric($intent['budget_max'])
-                    ? number_format((float) $intent['budget_max'], 0)
-                    : null;
-                if ($budget !== null) {
-                    $suffix .= " These are above your ₦{$budget} budget — say “cheaper options” if you want me to keep looking.";
-                } else {
-                    $suffix .= ' These are slightly over budget — say “cheaper options”.';
-                }
-            } elseif (! $isOverview) {
-                $suffix .= ' Say “show alternatives” if you want more choices.';
-            }
-        }
-
-        if (str_contains(Str::lower($base), 'recommend') || str_contains(Str::lower($base), 'found')) {
-            return $base.$suffix;
-        }
-
-        return $base.$suffix;
-    }
-
-    private function cleanProductLabel(string $query): string
-    {
-        $clean = preg_replace('/under\s+[₦\d,.k\s]+/iu', '', $query) ?? $query;
-        $clean = preg_replace('/\b(show me|show the|show all|in the store|in this store)\b/iu', '', $clean) ?? $clean;
-
-        return trim($clean) ?: trim($query);
     }
 
     /**
@@ -743,17 +938,13 @@ class AiShoppingService
      */
     private function suggestions(array $shopper, array $intent, ?array $recommendation, string $action): array
     {
-        if ($action === 'catalog_overview') {
-            return array_slice($shopper['default_suggestions'], 0, 3);
-        }
-
-        if ($recommendation === null) {
-            return $shopper['default_suggestions'];
+        if ($action === 'catalog_overview' || $recommendation === null) {
+            return array_slice($shopper['default_suggestions'] ?? [], 0, 3);
         }
 
         if (($recommendation['type'] ?? '') === 'look') {
             $suggestions = ['Make it cheaper', 'More elegant', 'Change the bag'];
-            if ($shopper['supports_try_on']) {
+            if ($shopper['supports_try_on'] ?? false) {
                 $suggestions[] = 'See it on me';
             }
 

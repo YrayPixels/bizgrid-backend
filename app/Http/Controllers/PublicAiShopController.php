@@ -49,16 +49,17 @@ class PublicAiShopController extends Controller
         return response()->json($result);
     }
 
-    public function config(string $slug): JsonResponse
+    public function config(Request $request, string $slug): JsonResponse
     {
         $store = $this->resolvePublishedStore($slug);
         if ($store instanceof JsonResponse) {
             return $store;
         }
 
-        return response()->json([
-            'shopper' => $this->shopping->context($store),
-        ]);
+        $sessionId = $request->query('session_id');
+        $sessionId = is_string($sessionId) ? $sessionId : null;
+
+        return response()->json($this->shopping->sessionSnapshot($store, $sessionId));
     }
 
     public function enrich(Request $request, string $slug): JsonResponse

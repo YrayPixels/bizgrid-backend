@@ -102,13 +102,17 @@ abstract class BaseAgent implements AgentInterface
         $model = $this->aiConfig()->chatModel();
 
         try {
-            $response = $this->aiChat()->chatCompletions([
+            $payload = [
                 'model' => $model,
                 'temperature' => $temp,
                 'messages' => $messages,
-                'tools' => $tools,
-                'tool_choice' => 'auto',
-            ]);
+            ];
+            if ($tools !== []) {
+                $payload['tools'] = $tools;
+                $payload['tool_choice'] = 'auto';
+            }
+
+            $response = $this->aiChat()->chatCompletions($payload);
 
             $this->logCall($response, $model, $temp);
 
