@@ -248,6 +248,10 @@ Route::prefix('storehause')->group(function () {
             Route::post('/products', [StoreProductController::class, 'store']);
             Route::post('/products/import', [StoreProductController::class, 'import']);
             Route::post('/products/enrich-style-profiles', [StoreProductController::class, 'enrichStyleProfiles']);
+            Route::get('/try-on/fabric-templates', [StoreProductController::class, 'fabricTemplates']);
+            Route::get('/try-on/models', [StoreProductController::class, 'catalogModels']);
+            Route::post('/try-on/model-looks', [StoreProductController::class, 'createCatalogLook'])->middleware('throttle:20,1');
+            Route::get('/try-on/model-looks/{sessionId}', [StoreProductController::class, 'showCatalogLook'])->middleware('throttle:60,1');
             Route::post('/products/{productId}/duplicate', [StoreProductController::class, 'duplicate']);
             Route::patch('/products/{productId}', [StoreProductController::class, 'update']);
             Route::delete('/products/{productId}', [StoreProductController::class, 'destroy']);

@@ -15,12 +15,43 @@ use RuntimeException;
 
 class TryOnService
 {
+    public const MODES = [
+        'bag',
+        'clothes',
+        'hat',
+        'shoes',
+        'nail',
+        'watch',
+        'necklace',
+        'fabric',
+    ];
+
+    public const GENDER_STYLE_MODES = ['bag', 'hat', 'shoes'];
+
     public const BAG_STYLES = [
         'random',
         'style_parisian_chic',
         'style_urban_chic',
         'style_mediterranean_chic',
         'style_art_deco_style',
+    ];
+
+    public const HAT_STYLES = [
+        'random',
+        'style_sporty_casual',
+        'style_urban_fashion',
+        'style_vacation_casual',
+        'style_warm_cozy',
+        'style_bohemian',
+    ];
+
+    public const SHOES_STYLES = [
+        'random',
+        'style_minimalist',
+        'style_bohemian',
+        'style_cottagecore',
+        'style_french_elegance',
+        'style_retro_fashion',
     ];
 
     public const GARMENT_CATEGORIES = [
@@ -31,6 +62,58 @@ class TryOnService
         'outerwear',
         'shoes',
     ];
+
+    public const NAIL_FINGERS = ['thumb', 'index', 'middle', 'ring', 'pinky'];
+
+    public const NAIL_EFFECT_TYPES = ['nail_polish', 'press_on_nails'];
+
+    public const NAIL_SUB_TYPES = ['color', 'design'];
+
+    public const NAIL_POLISH_TEXTURES = [
+        'matte', 'cream', 'metallic', 'jelly', 'sheer', 'pearl',
+        'textured', 'shimmer_coarse', 'shimmer_fine',
+    ];
+
+    public const NAIL_PRESS_ON_TEXTURES = ['matte', 'cream', 'metallic'];
+
+    public const NAIL_SHAPES = [
+        'square_oval', 'square_square', 'square_squoval',
+        'squoval_oval', 'squoval_square', 'squoval_squoval',
+        'oval_oval', 'oval_square', 'oval_squoval',
+        'almond_oval', 'almond_square', 'almond_squoval',
+        'stiletto_oval', 'stiletto_square', 'stiletto_squoval',
+    ];
+
+    /** @return list<array{id: string, name: string, gender: string, image_url: string}> */
+    public function catalogModels(): array
+    {
+        return [
+            [
+                'id' => 'model_amara',
+                'name' => 'Amara',
+                'gender' => 'female',
+                'image_url' => 'https://plugins-media.makeupar.com/smb/blog/post/2024-05-07/b103976d-1b0e-4bed-aab4-9307308b84d7.jpg',
+            ],
+            [
+                'id' => 'model_leila',
+                'name' => 'Leila',
+                'gender' => 'female',
+                'image_url' => 'https://bcw-media.s3.ap-northeast-1.amazonaws.com/strapi/assets/fca6a904_b13a_4c90_bc52_d9200a473c70_4d994afa3e.jpg',
+            ],
+            [
+                'id' => 'model_zuri',
+                'name' => 'Zuri',
+                'gender' => 'female',
+                'image_url' => 'https://bcw-media.s3.ap-northeast-1.amazonaws.com/strapi/assets/5f42385b_6aef_44cd_b576_2ec10e31305d_824cc2019b.jpg',
+            ],
+            [
+                'id' => 'model_kofi',
+                'name' => 'Kofi',
+                'gender' => 'male',
+                'image_url' => 'https://bcw-media.s3.ap-northeast-1.amazonaws.com/strapi/assets/cc55fe0d_aec9_4ead_b2e9_bc70f48c58b9_670a875b29.jpg',
+            ],
+        ];
+    }
 
     public function __construct(
         private PerfectCorpClient $perfectCorp,
@@ -44,7 +127,10 @@ class TryOnService
         }
 
         $enabled = (bool) ($raw['enabled'] ?? false);
-        $mode = ($raw['mode'] ?? 'bag') === 'clothes' ? 'clothes' : 'bag';
+        $mode = is_string($raw['mode'] ?? null) ? $raw['mode'] : 'bag';
+        if (! in_array($mode, self::MODES, true)) {
+            $mode = 'bag';
+        }
 
         $config = [
             'enabled' => $enabled,
@@ -55,13 +141,14 @@ class TryOnService
             $config['ref_image_url'] = trim($raw['ref_image_url']);
         }
 
-        if ($mode === 'bag') {
+        if (in_array($mode, self::GENDER_STYLE_MODES, true)) {
             $gender = $raw['bag_gender_default'] ?? 'ask';
             $config['bag_gender_default'] = in_array($gender, ['female', 'male', 'ask'], true)
                 ? $gender
                 : 'ask';
+            $styles = $this->stylesForMode($mode);
             $style = is_string($raw['bag_style'] ?? null) ? $raw['bag_style'] : 'random';
-            $config['bag_style'] = in_array($style, self::BAG_STYLES, true) ? $style : 'random';
+            $config['bag_style'] = in_array($style, $styles, true) ? $style : 'random';
         }
 
         if ($mode === 'clothes') {
@@ -71,7 +158,51 @@ class TryOnService
                 : 'auto';
         }
 
+        if ($mode === 'nail') {
+            $effectType = is_string($raw['nail_effect_type'] ?? null) ? $raw['nail_effect_type'] : 'nail_polish';
+            $config['nail_effect_type'] = in_array($effectType, self::NAIL_EFFECT_TYPES, true)
+                ? $effectType
+                : 'nail_polish';
+
+            $subType = is_string($raw['nail_sub_type'] ?? null) ? $raw['nail_sub_type'] : 'color';
+            $config['nail_sub_type'] = in_array($subType, self::NAIL_SUB_TYPES, true)
+                ? $subType
+                : 'color';
+
+            $color = is_string($raw['nail_color'] ?? null) ? strtolower(trim($raw['nail_color'])) : '#c41e3a';
+            $config['nail_color'] = preg_match('/^#[0-9a-f]{6}$/', $color) ? $color : '#c41e3a';
+
+            $textures = $config['nail_effect_type'] === 'press_on_nails'
+                ? self::NAIL_PRESS_ON_TEXTURES
+                : self::NAIL_POLISH_TEXTURES;
+            $texture = is_string($raw['nail_texture'] ?? null) ? $raw['nail_texture'] : 'cream';
+            $config['nail_texture'] = in_array($texture, $textures, true) ? $texture : 'cream';
+
+            $shape = is_string($raw['nail_shape'] ?? null) ? $raw['nail_shape'] : 'square_oval';
+            $config['nail_shape'] = in_array($shape, self::NAIL_SHAPES, true) ? $shape : 'square_oval';
+
+            $length = is_numeric($raw['nail_length'] ?? null) ? (float) $raw['nail_length'] : 1.0;
+            $config['nail_length'] = max(0.8, min(2.15, $length));
+        }
+
+        if ($mode === 'fabric') {
+            $templateId = is_string($raw['fabric_template_id'] ?? null) ? trim($raw['fabric_template_id']) : '';
+            if ($templateId !== '') {
+                $config['fabric_template_id'] = $templateId;
+            }
+        }
+
         return $config;
+    }
+
+    /** @return list<string> */
+    public function stylesForMode(string $mode): array
+    {
+        return match ($mode) {
+            'hat' => self::HAT_STYLES,
+            'shoes' => self::SHOES_STYLES,
+            default => self::BAG_STYLES,
+        };
     }
 
     public function resolveRefImageUrl(StoreProduct $product, ?array $tryOn = null): ?string
@@ -109,6 +240,19 @@ class TryOnService
         $tryOn = is_array($product->try_on) ? $product->try_on : null;
         if (! ($tryOn['enabled'] ?? false)) {
             return false;
+        }
+
+        $mode = is_string($tryOn['mode'] ?? null) ? $tryOn['mode'] : 'bag';
+        if (! in_array($mode, self::MODES, true)) {
+            return false;
+        }
+
+        if ($mode === 'fabric') {
+            return filled($tryOn['fabric_template_id'] ?? null);
+        }
+
+        if ($mode === 'nail' && ($tryOn['nail_sub_type'] ?? 'color') === 'color') {
+            return true;
         }
 
         return $this->resolveRefImageUrl($product, $tryOn) !== null;
@@ -152,11 +296,19 @@ class TryOnService
         }
 
         $tryOn = is_array($product->try_on) ? $product->try_on : [];
-        $mode = ($tryOn['mode'] ?? 'bag') === 'clothes' ? 'clothes' : 'bag';
+        $mode = is_string($tryOn['mode'] ?? null) ? $tryOn['mode'] : 'bag';
+        if (! in_array($mode, self::MODES, true)) {
+            $mode = 'bag';
+        }
 
+        $needsRef = $this->modeNeedsRefImage($mode, $tryOn);
         $refUrl = $this->resolveRefImageUrl($product, $tryOn);
-        if ($refUrl === null) {
+        if ($needsRef && $refUrl === null) {
             throw new RuntimeException('Product is missing a try-on reference image.');
+        }
+
+        if ($mode === 'fabric' && ! filled($tryOn['fabric_template_id'] ?? null)) {
+            throw new RuntimeException('This fabric look is missing a template.');
         }
 
         $srcUrl = $this->storeShopperImage($store, $srcImage, $input['src_image_url'] ?? null);
@@ -166,38 +318,13 @@ class TryOnService
         $garmentCategory = null;
 
         try {
-            if ($this->perfectCorp->isStub()) {
-                $srcRef = 'stub';
-                $refRef = 'stub';
-            } else {
-                $srcRef = $this->perfectCorp->uploadFromUrl($srcUrl);
-                $refRef = $this->perfectCorp->uploadFromUrl($refUrl);
+            $srcRef = $this->perfectCorp->isStub() ? 'stub' : $this->perfectCorp->uploadFromUrl($srcUrl);
+            $refRef = null;
+            if ($needsRef && $refUrl) {
+                $refRef = $this->perfectCorp->isStub() ? 'stub' : $this->perfectCorp->uploadFromUrl($refUrl);
             }
 
-            if ($mode === 'clothes') {
-                $garmentCategory = is_string($input['garment_category'] ?? null)
-                    ? $input['garment_category']
-                    : ($tryOn['garment_category'] ?? 'auto');
-                if (! in_array($garmentCategory, self::GARMENT_CATEGORIES, true)) {
-                    $garmentCategory = 'auto';
-                }
-
-                $task = $this->perfectCorp->createClothTask($srcRef, $refRef, $garmentCategory);
-            } else {
-                $genderDefault = $tryOn['bag_gender_default'] ?? 'ask';
-                $gender = $input['gender'] ?? null;
-                if (! in_array($gender, ['female', 'male'], true)) {
-                    $gender = in_array($genderDefault, ['female', 'male'], true) ? $genderDefault : 'female';
-                }
-
-                $styleDefault = is_string($tryOn['bag_style'] ?? null) ? $tryOn['bag_style'] : 'random';
-                $style = $input['style'] ?? $styleDefault;
-                if (! in_array($style, self::BAG_STYLES, true)) {
-                    $style = 'random';
-                }
-
-                $task = $this->perfectCorp->createBagTask($srcRef, $refRef, $gender, $style);
-            }
+            $task = $this->startProviderTask($mode, $tryOn, $input, $srcRef, $refRef, $gender, $style, $garmentCategory);
         } catch (\Throwable $e) {
             throw new RuntimeException(
                 'Could not start try-on: '.$e->getMessage(),
@@ -221,6 +348,8 @@ class TryOnService
             'meta' => [
                 'stub' => $this->perfectCorp->isStub(),
                 'product_name' => $product->name,
+                'fabric_template_id' => $tryOn['fabric_template_id'] ?? null,
+                'nail_effect_type' => $tryOn['nail_effect_type'] ?? null,
             ],
         ]);
 
@@ -267,7 +396,9 @@ class TryOnService
 
             $session->update([
                 'status' => 'success',
-                'result_url' => $session->ref_image_url ?: $session->src_image_url,
+                'result_url' => data_get($session->meta, 'purpose') === 'catalog_model'
+                    ? ($session->src_image_url ?: $session->ref_image_url)
+                    : ($session->ref_image_url ?: $session->src_image_url),
                 'error_code' => null,
                 'error_message' => null,
             ]);
@@ -276,9 +407,7 @@ class TryOnService
         }
 
         try {
-            $status = $session->mode === 'clothes'
-                ? $this->perfectCorp->getClothTask($taskId)
-                : $this->perfectCorp->getBagTask($taskId);
+            $status = $this->perfectCorp->getTaskStatus((string) $session->mode, $taskId);
         } catch (\Throwable $e) {
             if ($session->poll_attempts >= (int) config('perfectcorp.max_poll_attempts', 40)) {
                 $session->update([
@@ -360,9 +489,85 @@ class TryOnService
             'style' => $session->style,
             'garment_category' => $session->garment_category,
             'stub' => (bool) data_get($session->meta, 'stub', false),
+            'purpose' => data_get($session->meta, 'purpose'),
             'created_at' => optional($session->created_at)?->toIso8601String(),
             'updated_at' => optional($session->updated_at)?->toIso8601String(),
         ];
+    }
+
+    /**
+     * Dress a model in a garment photo for merchant catalog imagery.
+     *
+     * @return TryOnSession
+     */
+    public function createCatalogLook(
+        Store $store,
+        string $garmentImageUrl,
+        string $modelImageUrl,
+        string $garmentCategory = 'auto',
+        ?string $productId = null,
+        ?string $modelId = null,
+    ): TryOnSession {
+        if (! $this->perfectCorp->isConfigured()) {
+            throw new RuntimeException('Try-on provider is not configured.');
+        }
+
+        $garmentImageUrl = trim($garmentImageUrl);
+        $modelImageUrl = trim($modelImageUrl);
+        if ($garmentImageUrl === '' || $modelImageUrl === '') {
+            throw new RuntimeException('A product photo and a model photo are required.');
+        }
+
+        if (! in_array($garmentCategory, self::GARMENT_CATEGORIES, true)) {
+            $garmentCategory = 'auto';
+        }
+
+        try {
+            if ($this->perfectCorp->isStub()) {
+                $srcRef = 'stub';
+                $refRef = 'stub';
+            } else {
+                $srcRef = $this->perfectCorp->uploadFromUrl($modelImageUrl);
+                $refRef = $this->perfectCorp->uploadFromUrl($garmentImageUrl);
+            }
+
+            $task = $this->perfectCorp->createClothTask($srcRef, $refRef, $garmentCategory);
+        } catch (\Throwable $e) {
+            throw new RuntimeException(
+                'Could not start model look: '.$e->getMessage(),
+                previous: $e,
+            );
+        }
+
+        $session = TryOnSession::create([
+            'store_id' => $store->id,
+            'customer_id' => null,
+            'product_id' => $productId,
+            'mode' => 'clothes',
+            'status' => 'processing',
+            'provider' => 'perfectcorp',
+            'provider_task_id' => $task['task_id'],
+            'src_image_url' => $modelImageUrl,
+            'ref_image_url' => $garmentImageUrl,
+            'garment_category' => $garmentCategory,
+            'meta' => [
+                'stub' => $this->perfectCorp->isStub(),
+                'purpose' => 'catalog_model',
+                'model_id' => $modelId,
+            ],
+        ]);
+
+        $delay = $this->perfectCorp->isStub()
+            ? (int) config('perfectcorp.stub_delay_seconds', 4)
+            : (int) config('perfectcorp.poll_interval_seconds', 3);
+
+        try {
+            PollTryOnSessionStatus::dispatch($session->id)->delay(now()->addSeconds(max(1, $delay)));
+        } catch (\Throwable) {
+            // Client polling via GET still drives completion when the queue is offline.
+        }
+
+        return $session;
     }
 
     private function persistResultImage(TryOnSession $session, string $remoteUrl): ?string
@@ -404,8 +609,147 @@ class TryOnService
             'error_invalid_src', 'error_invalid_ref', 'error_apply_region_mismatch' => 'This photo or product image isn’t try-on ready — try another photo.',
             'error_nsfw_content_detected' => 'Couldn’t create this look — try a different photo.',
             'error_download_image' => 'Couldn’t load one of the images — try again.',
+            'PHOTO_DETECTION_FAIL' => 'We couldn’t find the right body area in this photo — try another angle.',
+            'OBJECT_DETECTION_FAIL' => 'We couldn’t read the product image — try a clearer product photo.',
+            'PHOTO_CHECK_INVALID' => 'This pose or crop isn’t try-on ready — try a clearer photo.',
+            'error_apply_region_not_detected' => 'We couldn’t find clothing in this photo — try a standing full-body shot.',
             default => 'Couldn\'t create this look — try a different photo.',
         };
+    }
+
+    /**
+     * @param  array<string, mixed>  $tryOn
+     */
+    private function modeNeedsRefImage(string $mode, array $tryOn): bool
+    {
+        if ($mode === 'fabric') {
+            return false;
+        }
+
+        if ($mode === 'nail' && ($tryOn['nail_sub_type'] ?? 'color') === 'color') {
+            return false;
+        }
+
+        return true;
+    }
+
+    /**
+     * @param  array<string, mixed>  $tryOn
+     * @param  array<string, mixed>  $input
+     * @return array{task_id: string}
+     */
+    private function startProviderTask(
+        string $mode,
+        array $tryOn,
+        array $input,
+        string $srcRef,
+        ?string $refRef,
+        ?string &$gender,
+        ?string &$style,
+        ?string &$garmentCategory,
+    ): array {
+        if ($mode === 'clothes') {
+            $garmentCategory = is_string($input['garment_category'] ?? null)
+                ? $input['garment_category']
+                : ($tryOn['garment_category'] ?? 'auto');
+            if (! in_array($garmentCategory, self::GARMENT_CATEGORIES, true)) {
+                $garmentCategory = 'auto';
+            }
+
+            return $this->perfectCorp->createClothTask($srcRef, (string) $refRef, $garmentCategory);
+        }
+
+        if (in_array($mode, self::GENDER_STYLE_MODES, true)) {
+            $genderDefault = $tryOn['bag_gender_default'] ?? 'ask';
+            $gender = $input['gender'] ?? null;
+            if (! in_array($gender, ['female', 'male'], true)) {
+                $gender = in_array($genderDefault, ['female', 'male'], true) ? $genderDefault : 'female';
+            }
+
+            $allowedStyles = $this->stylesForMode($mode);
+            $styleDefault = is_string($tryOn['bag_style'] ?? null) ? $tryOn['bag_style'] : 'random';
+            $style = $input['style'] ?? $styleDefault;
+            if (! in_array($style, $allowedStyles, true)) {
+                $style = 'random';
+            }
+
+            return match ($mode) {
+                'hat' => $this->perfectCorp->createHatTask($srcRef, (string) $refRef, $gender, $style),
+                'shoes' => $this->perfectCorp->createShoesTask($srcRef, (string) $refRef, $gender, $style),
+                default => $this->perfectCorp->createBagTask($srcRef, (string) $refRef, $gender, $style),
+            };
+        }
+
+        if ($mode === 'nail') {
+            return $this->perfectCorp->createNailTask($this->nailPayload($tryOn, $srcRef, $refRef));
+        }
+
+        if ($mode === 'watch') {
+            return $this->perfectCorp->createWatchTask($srcRef, (string) $refRef);
+        }
+
+        if ($mode === 'necklace') {
+            return $this->perfectCorp->createNecklaceTask($srcRef, (string) $refRef);
+        }
+
+        return $this->perfectCorp->createFabricTask($srcRef, (string) ($tryOn['fabric_template_id'] ?? ''));
+    }
+
+    /**
+     * @param  array<string, mixed>  $tryOn
+     * @return array<string, mixed>
+     */
+    private function nailPayload(array $tryOn, string $srcRef, ?string $refRef): array
+    {
+        $effectType = in_array($tryOn['nail_effect_type'] ?? null, self::NAIL_EFFECT_TYPES, true)
+            ? $tryOn['nail_effect_type']
+            : 'nail_polish';
+        $subType = in_array($tryOn['nail_sub_type'] ?? null, self::NAIL_SUB_TYPES, true)
+            ? $tryOn['nail_sub_type']
+            : 'color';
+        $texture = is_string($tryOn['nail_texture'] ?? null) ? $tryOn['nail_texture'] : 'cream';
+        $color = is_string($tryOn['nail_color'] ?? null) ? $tryOn['nail_color'] : '#c41e3a';
+        $shape = is_string($tryOn['nail_shape'] ?? null) ? $tryOn['nail_shape'] : 'square_oval';
+        $length = is_numeric($tryOn['nail_length'] ?? null) ? (float) $tryOn['nail_length'] : 1.0;
+
+        $payload = [
+            'version' => '1.0',
+            'src_file_id' => $srcRef,
+            'effect_type' => $effectType,
+            'effects' => [],
+        ];
+
+        if ($subType === 'design' && filled($refRef)) {
+            $payload['ref_file_ids'] = [$refRef];
+        }
+
+        foreach (self::NAIL_FINGERS as $finger) {
+            $effect = [
+                'sub_type' => $subType,
+                'finger' => $finger,
+                'texture' => $texture,
+                'reflection' => $subType === 'design' ? 100 : 50,
+                'contrast' => 50,
+                'roughness' => 0,
+            ];
+
+            if ($subType === 'color') {
+                $effect['color'] = $color;
+                if ($effectType === 'nail_polish') {
+                    $effect['transparency'] = 0;
+                }
+                if ($effectType === 'press_on_nails') {
+                    $effect['shape'] = $shape;
+                    $effect['length'] = $length;
+                }
+            } else {
+                $effect['ref_file_index'] = 0;
+            }
+
+            $payload['effects'][] = $effect;
+        }
+
+        return $payload;
     }
 
     private function storeShopperImage(Store $store, ?UploadedFile $file, ?string $srcImageUrl): string
