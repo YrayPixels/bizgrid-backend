@@ -9,7 +9,6 @@ use App\Models\StoreProduct;
 use App\Models\TryOnSession;
 use App\Services\PerfectCorp\PerfectCorpClient;
 use Illuminate\Http\UploadedFile;
-use Illuminate\Support\Facades\File;
 use Illuminate\Support\Str;
 use RuntimeException;
 
@@ -117,6 +116,7 @@ class TryOnService
 
     public function __construct(
         private PerfectCorpClient $perfectCorp,
+        private MediaStorageService $media,
     ) {}
 
     /** @return array<string, mixed>|null */
@@ -497,8 +497,6 @@ class TryOnService
 
     /**
      * Dress a model in a garment photo for merchant catalog imagery.
-     *
-     * @return TryOnSession
      */
     public function createCatalogLook(
         Store $store,
@@ -590,12 +588,9 @@ class TryOnService
                 default => 'jpg',
             };
 
-            $dir = public_path('storehause/try-on/'.$session->store_id.'/results');
-            File::ensureDirectoryExists($dir);
-            $name = $session->id.'.'.$ext;
-            File::put($dir.'/'.$name, $bytes);
+            $relative = 'storehause/try-on/'.$session->store_id.'/results/'.$session->id.'.'.$ext;
 
-            return url('storehause/try-on/'.$session->store_id.'/results/'.$name);
+            return $this->media->store($relative, $bytes, $mime);
         } catch (\Throwable) {
             return $remoteUrl;
         }
@@ -755,12 +750,10 @@ class TryOnService
     private function storeShopperImage(Store $store, ?UploadedFile $file, ?string $srcImageUrl): string
     {
         if ($file instanceof UploadedFile) {
-            $dir = public_path('storehause/try-on/'.$store->id);
-            File::ensureDirectoryExists($dir);
-            $name = Str::uuid()->toString().'.'.$file->getClientOriginalExtension();
-            $file->move($dir, $name);
+            $ext = strtolower((string) $file->getClientOriginalExtension()) ?: 'jpg';
+            $name = Str::uuid()->toString().'.'.$ext;
 
-            return url('storehause/try-on/'.$store->id.'/'.$name);
+            return $this->media->storeUpload('storehause/try-on/'.$store->id, $file, $name);
         }
 
         $url = is_string($srcImageUrl) ? trim($srcImageUrl) : '';
@@ -792,11 +785,14 @@ class TryOnService
             throw new RuntimeException('Photo must be under 10MB.');
         }
 
-        $dir = public_path('storehause/try-on/'.$store->id);
-        File::ensureDirectoryExists($dir);
         $name = Str::uuid()->toString().'.'.$ext;
-        File::put($dir.'/'.$name, $binary);
+        $mime = match ($ext) {
+            'png' => 'image/png',
+            'webp' => 'image/webp',
+            'heic' => 'image/heic',
+            default => 'image/jpeg',
+        };
 
-        return url('storehause/try-on/'.$store->id.'/'.$name);
+        return $this->media->store('storehause/try-on/'.$store->id.'/'.$name, $binary, $mime);
     }
 }

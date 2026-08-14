@@ -16,6 +16,7 @@ class VisionAgent
         private readonly AiChatClient $aiChat,
         private readonly AgentExecutionLogService $executionLogs,
     ) {}
+
     /**
      * Analyze a product image using a vision-capable model.
      *
@@ -25,11 +26,12 @@ class VisionAgent
     public function analyzeProductImage(string $imageUrl, array $context = []): ?array
     {
         if (! $this->aiConfig->visionAvailable()) {
-            Log::warning('VisionAgent: OpenAI API key not configured.');
+            Log::warning('VisionAgent: no vision-capable provider configured.');
 
             return ['error' => 'Vision model not configured.'];
         }
 
+        $provider = $this->aiConfig->visionProvider();
         $model = $this->aiConfig->visionModel();
 
         // Resolve the image URL: for HTTP URLs, download and convert to base64
@@ -53,7 +55,7 @@ class VisionAgent
             'If you cannot determine something, use null.',
         ]);
 
-        $userContent = "Analyze this product image.";
+        $userContent = 'Analyze this product image.';
         if ($businessName) {
             $userContent .= " Store: {$businessName}.";
         }
@@ -82,7 +84,7 @@ class VisionAgent
                         ],
                     ],
                 ],
-            ], 'openai');
+            ], $provider);
 
             if (! $response->successful()) {
                 $msg = $response->json('error.message') ?? 'Vision model unavailable';
@@ -96,7 +98,7 @@ class VisionAgent
                     'agent' => 'vision-agent',
                     'title' => 'Product image analysis failed',
                     'detail' => Str::limit((string) $msg, 500),
-                    'provider' => 'openai',
+                    'provider' => $provider,
                     'model' => $model,
                     'http_status' => $response->status(),
                     'status' => 'error',
@@ -126,6 +128,7 @@ class VisionAgent
 
             $usage = $response->json('usage');
             Log::info('VisionAgent: image analyzed', [
+                'provider' => $provider,
                 'model' => $model,
                 'product_name' => $name ?: '(unnamed)',
                 'prompt_tokens' => $usage['prompt_tokens'] ?? null,
@@ -137,7 +140,7 @@ class VisionAgent
                 'agent' => 'vision-agent',
                 'title' => 'Product image analyzed',
                 'detail' => $name !== '' ? "Detected: {$name}" : 'Image analyzed',
-                'provider' => 'openai',
+                'provider' => $provider,
                 'model' => $model,
                 'prompt_tokens' => $usage['prompt_tokens'] ?? null,
                 'completion_tokens' => $usage['completion_tokens'] ?? null,

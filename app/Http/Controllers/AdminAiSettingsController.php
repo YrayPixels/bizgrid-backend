@@ -32,12 +32,18 @@ class AdminAiSettingsController extends Controller
     public function update(Request $request): JsonResponse
     {
         $validator = Validator::make($request->all(), [
-            'provider' => 'sometimes|string|in:openai,deepseek',
+            'provider' => 'sometimes|string|in:openai,deepseek,gemini',
             'openai_api_key' => 'nullable|string|max:500',
             'deepseek_api_key' => 'nullable|string|max:500',
+            'gemini_api_key' => 'nullable|string|max:500',
             'openai_chat_model' => ['nullable', 'string', 'max:120', Rule::in($this->aiConfig->allowedChatModels('openai'))],
             'deepseek_chat_model' => ['nullable', 'string', 'max:120', Rule::in($this->aiConfig->allowedChatModels('deepseek'))],
-            'openai_vision_model' => ['nullable', 'string', 'max:120', Rule::in($this->aiConfig->allowedVisionModels())],
+            'gemini_chat_model' => ['nullable', 'string', 'max:120', Rule::in($this->aiConfig->allowedChatModels('gemini'))],
+            'openai_vision_model' => ['nullable', 'string', 'max:120', Rule::in($this->aiConfig->allowedVisionModels('openai'))],
+            'gemini_vision_model' => ['nullable', 'string', 'max:120', Rule::in($this->aiConfig->allowedVisionModels('gemini'))],
+            'shopper_provider' => 'sometimes|string|in:openai,deepseek,gemini',
+            'marketing_provider' => 'sometimes|string|in:openai,deepseek,gemini',
+            'vision_provider' => 'sometimes|string|in:openai,gemini',
         ]);
 
         if ($validator->fails()) {
@@ -57,6 +63,7 @@ class AdminAiSettingsController extends Controller
 
         $this->audit->log($request, 'platform.ai_settings.updated', 'platform_setting', null, [
             'provider' => $data['provider'],
+            'features' => $data['feature_preferences'] ?? $data['features'] ?? null,
         ]);
 
         $this->invalidateAdminApiCache();

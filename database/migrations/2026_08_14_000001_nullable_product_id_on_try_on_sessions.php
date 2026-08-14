@@ -13,9 +13,14 @@ return new class extends Migration
             return;
         }
 
-        $this->dropProductIdForeignKeys();
-
         $driver = Schema::getConnection()->getDriverName();
+
+        if ($driver === 'sqlite') {
+            // SQLite cannot drop named foreign keys; the original NOT NULL column is fine for tests.
+            return;
+        }
+
+        $this->dropProductIdForeignKeys();
 
         if ($driver === 'mysql') {
             DB::statement('ALTER TABLE try_on_sessions MODIFY product_id CHAR(36) NULL');

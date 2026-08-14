@@ -1,16 +1,42 @@
 <?php
 
 return [
-  /*
+    /*
     |--------------------------------------------------------------------------
     | Default AI provider
     |--------------------------------------------------------------------------
     |
-    | Supported: "openai", "deepseek"
+    | Used by the website builder and any agent without a feature override.
+    | Supported: "openai", "deepseek", "gemini"
     | Can be overridden in platform admin settings.
     |
     */
     'provider' => env('AI_PROVIDER', 'openai'),
+
+    /*
+    |--------------------------------------------------------------------------
+    | Feature-level providers (shopper, marketing, vision)
+    |--------------------------------------------------------------------------
+    |
+    | Defaults before anything is saved in platform admin → AI settings.
+    | Admin preferences are stored in platform_settings and take precedence.
+    | If the chosen provider has no API key, the builder provider is used
+    | (OpenAI for vision when Gemini is missing).
+    |
+    */
+    'features' => [
+        'shopper' => env('AI_SHOPPER_PROVIDER', 'gemini'),
+        'marketing' => env('AI_MARKETING_PROVIDER', 'gemini'),
+        'vision' => env('AI_VISION_PROVIDER', 'gemini'),
+    ],
+
+    'agent_features' => [
+        'shopping-shopper-agent' => 'shopper',
+        'shopping-intent-agent' => 'shopper',
+        'shopping-planner-agent' => 'shopper',
+        'shopping-product-picker-agent' => 'shopper',
+        'marketing-agent' => 'marketing',
+    ],
 
     'providers' => [
         'openai' => [
@@ -23,6 +49,12 @@ return [
             'api_key' => env('DEEPSEEK_API_KEY'),
             'base_url' => env('DEEPSEEK_BASE_URL', 'https://api.deepseek.com/v1'),
             'chat_model' => env('DEEPSEEK_CHAT_MODEL', 'deepseek-v4-pro'),
+        ],
+        'gemini' => [
+            'api_key' => env('GEMINI_API_KEY'),
+            'base_url' => env('GEMINI_BASE_URL', 'https://generativelanguage.googleapis.com/v1beta/openai'),
+            'chat_model' => env('GEMINI_CHAT_MODEL', 'gemini-2.5-flash'),
+            'vision_model' => env('GEMINI_VISION_MODEL', 'gemini-2.5-flash'),
         ],
     ],
 
@@ -50,6 +82,19 @@ return [
                 ['id' => 'deepseek-coder', 'label' => 'DeepSeek Coder', 'description' => 'Optimized for code generation'],
                 ['id' => 'deepseek-v3.2', 'label' => 'DeepSeek V3.2', 'description' => 'Coding and tool use'],
                 ['id' => 'deepseek-v3.2-speciale', 'label' => 'DeepSeek V3.2 Speciale', 'description' => 'High-compute variant'],
+            ],
+        ],
+        'gemini' => [
+            'chat' => [
+                ['id' => 'gemini-2.5-flash', 'label' => 'Gemini 2.5 Flash', 'description' => 'Default for shopper, vision, and marketing'],
+                ['id' => 'gemini-2.5-pro', 'label' => 'Gemini 2.5 Pro', 'description' => 'Higher quality reasoning'],
+                ['id' => 'gemini-2.0-flash', 'label' => 'Gemini 2.0 Flash', 'description' => 'Fast multimodal Flash'],
+                ['id' => 'gemini-2.5-flash-lite', 'label' => 'Gemini 2.5 Flash-Lite', 'description' => 'Lowest-cost Gemini'],
+            ],
+            'vision' => [
+                ['id' => 'gemini-2.5-flash', 'label' => 'Gemini 2.5 Flash', 'description' => 'Product photo → name, price, description'],
+                ['id' => 'gemini-2.5-pro', 'label' => 'Gemini 2.5 Pro', 'description' => 'Higher quality image understanding'],
+                ['id' => 'gemini-2.0-flash', 'label' => 'Gemini 2.0 Flash', 'description' => 'Fast multimodal Flash'],
             ],
         ],
     ],

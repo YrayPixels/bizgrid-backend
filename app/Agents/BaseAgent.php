@@ -29,7 +29,7 @@ abstract class BaseAgent implements AgentInterface
     }
 
     /**
-     * Call OpenAI with JSON schema structured output.
+     * Call the configured LLM with JSON schema structured output.
      *
      * @param  list<array{role: string, content: string}>  $messages
      * @param  array<string, mixed>  $jsonSchema
@@ -41,8 +41,9 @@ abstract class BaseAgent implements AgentInterface
             return null;
         }
 
+        $provider = $this->llmProvider();
         $temp = $temperature ?? $this->temperature();
-        $model = $this->aiConfig()->chatModel();
+        $model = $this->aiConfig()->chatModel($provider);
 
         try {
             $response = $this->aiChat()->chatCompletions([
@@ -57,9 +58,9 @@ abstract class BaseAgent implements AgentInterface
                         'schema' => $jsonSchema,
                     ],
                 ],
-            ]);
+            ], $provider);
 
-            $this->logCall($response, $model, $temp);
+            $this->logCall($response, $model, $temp, $provider);
 
             if (! $response->successful()) {
                 Log::warning("Agent [{$this->name()}] request failed", [
@@ -86,7 +87,7 @@ abstract class BaseAgent implements AgentInterface
     }
 
     /**
-     * Call OpenAI with tools (function calling).
+     * Call the configured LLM with tools (function calling).
      *
      * @param  list<array{role: string, content: string}>  $messages
      * @param  list<array<string, mixed>>  $tools
@@ -98,8 +99,9 @@ abstract class BaseAgent implements AgentInterface
             return null;
         }
 
+        $provider = $this->llmProvider();
         $temp = $temperature ?? $this->temperature();
-        $model = $this->aiConfig()->chatModel();
+        $model = $this->aiConfig()->chatModel($provider);
 
         try {
             $payload = [
@@ -112,9 +114,9 @@ abstract class BaseAgent implements AgentInterface
                 $payload['tool_choice'] = 'auto';
             }
 
-            $response = $this->aiChat()->chatCompletions($payload);
+            $response = $this->aiChat()->chatCompletions($payload, $provider);
 
-            $this->logCall($response, $model, $temp);
+            $this->logCall($response, $model, $temp, $provider);
 
             if (! $response->successful()) {
                 Log::warning("Agent [{$this->name()}] tool request failed", [
@@ -155,8 +157,9 @@ abstract class BaseAgent implements AgentInterface
             return null;
         }
 
+        $provider = $this->llmProvider();
         $temp = $temperature ?? $this->temperature();
-        $model = $this->aiConfig()->chatModel();
+        $model = $this->aiConfig()->chatModel($provider);
 
         try {
             $response = $this->aiChat()->chatCompletions([
@@ -164,9 +167,9 @@ abstract class BaseAgent implements AgentInterface
                 'temperature' => $temp,
                 'response_format' => ['type' => 'json_object'],
                 'messages' => $messages,
-            ]);
+            ], $provider);
 
-            $this->logCall($response, $model, $temp);
+            $this->logCall($response, $model, $temp, $provider);
 
             if (! $response->successful()) {
                 Log::warning("Agent [{$this->name()}] json request failed", [
@@ -197,7 +200,12 @@ abstract class BaseAgent implements AgentInterface
      */
     public function available(): bool
     {
-        return $this->aiConfig()->available();
+        return $this->aiConfig()->available($this->llmProvider());
+    }
+
+    protected function llmProvider(): string
+    {
+        return $this->aiConfig()->providerForAgent($this->name());
     }
 
     /**
@@ -215,10 +223,10 @@ abstract class BaseAgent implements AgentInterface
      *
      * @param  \Illuminate\Http\Client\Response  $response
      */
-    protected function logCall($response, string $model, float $temperature): void
+    protected function logCall($response, string $model, float $temperature, ?string $provider = null): void
     {
         $usage = $response->json('usage');
-        $provider = $this->aiConfig()->provider();
+        $provider ??= $this->llmProvider();
 
         Log::info("Agent [{$this->name()}] call", [
             'agent' => $this->name(),

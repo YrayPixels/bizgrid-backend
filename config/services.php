@@ -35,4 +35,13 @@ return [
         'redirect' => env('GOOGLE_REDIRECT_URI'),
     ],
 
+    'gcs' => [
+        'project_id' => env('GOOGLE_CLOUD_PROJECT_ID'),
+        'bucket' => env('GOOGLE_CLOUD_STORAGE_BUCKET'),
+        'path_prefix' => env('GOOGLE_CLOUD_STORAGE_PATH_PREFIX', 'bizgrid'),
+        'public_url' => env('GOOGLE_CLOUD_STORAGE_PUBLIC_URL'),
+        'key_file' => env('GOOGLE_CLOUD_KEY_FILE'),
+        'credentials' => env('GOOGLE_CLOUD_CREDENTIALS'),
+    ],
+
 ];

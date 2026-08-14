@@ -11,8 +11,11 @@ class PlatformAiConfigService
 {
     private const CACHE_KEY = 'platform.ai.config';
 
-  /** @var list<string> */
-    private const PROVIDERS = ['openai', 'deepseek'];
+    /** @var list<string> */
+    private const PROVIDERS = ['openai', 'deepseek', 'gemini'];
+
+    /** @var list<string> */
+    private const FEATURES = ['shopper', 'marketing', 'vision'];
 
     public function supportedProviders(): array
     {
@@ -24,6 +27,43 @@ class PlatformAiConfigService
         $provider = $this->stored('ai.provider') ?? config('ai.provider', 'openai');
 
         return in_array($provider, self::PROVIDERS, true) ? $provider : 'openai';
+    }
+
+    public function preferredFeatureProvider(string $feature): string
+    {
+        $preferred = $this->stored("ai.features.{$feature}") ?? config("ai.features.{$feature}");
+
+        if (is_string($preferred) && in_array($preferred, self::PROVIDERS, true)) {
+            return $preferred;
+        }
+
+        return $this->provider();
+    }
+
+    public function featureProvider(string $feature): string
+    {
+        $preferred = $this->preferredFeatureProvider($feature);
+
+        if ($this->available($preferred)) {
+            return $preferred;
+        }
+
+        if ($feature === 'vision' && $this->available('openai')) {
+            return 'openai';
+        }
+
+        return $this->provider();
+    }
+
+    public function providerForAgent(string $agentName): string
+    {
+        $feature = config("ai.agent_features.{$agentName}");
+
+        if (is_string($feature) && $feature !== '') {
+            return $this->featureProvider($feature);
+        }
+
+        return $this->provider();
     }
 
     public function chatModel(?string $provider = null): string
@@ -38,15 +78,23 @@ class PlatformAiConfigService
         return (string) config("ai.providers.{$provider}.chat_model", 'gpt-4o-mini');
     }
 
+    public function visionProvider(): string
+    {
+        return $this->featureProvider('vision');
+    }
+
     public function visionModel(): string
     {
-        $stored = $this->stored('ai.openai.vision_model');
+        $provider = $this->visionProvider();
+        $stored = $this->stored("ai.{$provider}.vision_model");
 
         if (filled($stored)) {
             return $stored;
         }
 
-        return (string) config('ai.providers.openai.vision_model', 'gpt-4o');
+        $fallback = $provider === 'openai' ? 'gpt-4o' : $this->chatModel($provider);
+
+        return (string) config("ai.providers.{$provider}.vision_model", $fallback);
     }
 
     public function apiKey(?string $provider = null): ?string
@@ -77,12 +125,18 @@ class PlatformAiConfigService
 
     public function available(?string $provider = null): bool
     {
+        $provider ??= $this->provider();
+
+        if (! in_array($provider, self::PROVIDERS, true)) {
+            return false;
+        }
+
         return filled($this->apiKey($provider));
     }
 
     public function visionAvailable(): bool
     {
-        return $this->available('openai');
+        return $this->available('gemini') || $this->available('openai');
     }
 
     /**
@@ -109,11 +163,15 @@ class PlatformAiConfigService
     /**
      * @return list<string>
      */
-    public function allowedVisionModels(): array
+    public function allowedVisionModels(?string $provider = null): array
     {
-        return collect($this->modelOptions()['openai']['vision'] ?? [])
-            ->pluck('id')
-            ->all();
+        $provider ??= 'openai';
+
+        $options = $this->modelOptions()[$provider]['vision']
+            ?? $this->modelOptions()[$provider]['chat']
+            ?? [];
+
+        return collect($options)->pluck('id')->all();
     }
 
     public function assertAllowedChatModel(string $provider, string $model): void
@@ -123,10 +181,10 @@ class PlatformAiConfigService
         }
     }
 
-    public function assertAllowedVisionModel(string $model): void
+    public function assertAllowedVisionModel(string $provider, string $model): void
     {
-        if (! in_array($model, $this->allowedVisionModels(), true)) {
-            throw new \InvalidArgumentException('Unsupported OpenAI vision model.');
+        if (! in_array($model, $this->allowedVisionModels($provider), true)) {
+            throw new \InvalidArgumentException("Unsupported {$provider} vision model.");
         }
     }
 
@@ -135,8 +193,10 @@ class PlatformAiConfigService
      *     provider: string,
      *     chat_model: string,
      *     vision_model: string,
+     *     vision_provider: string,
      *     available: bool,
      *     vision_available: bool,
+     *     features: array<string, string>,
      *     providers: array<string, array{
      *         configured: bool,
      *         chat_model: string,
@@ -153,6 +213,7 @@ class PlatformAiConfigService
             $providers[$name] = [
                 'configured' => filled($apiKey),
                 'chat_model' => $this->chatModel($name),
+                'vision_model' => $this->providerVisionModel($name),
                 'api_key_configured' => filled($apiKey),
             ];
         }
@@ -161,8 +222,11 @@ class PlatformAiConfigService
             'provider' => $this->provider(),
             'chat_model' => $this->chatModel(),
             'vision_model' => $this->visionModel(),
+            'vision_provider' => $this->visionProvider(),
             'available' => $this->available(),
             'vision_available' => $this->visionAvailable(),
+            'features' => $this->resolvedFeatures(),
+            'feature_preferences' => $this->preferredFeatures(),
             'providers' => $providers,
             'model_options' => $this->modelOptions(),
         ];
@@ -175,8 +239,10 @@ class PlatformAiConfigService
      *     provider: string,
      *     chat_model: string,
      *     vision_model: string,
+     *     vision_provider: string,
      *     available: bool,
      *     vision_available: bool,
+     *     features: array<string, string>,
      *     providers: array<string, array{
      *         configured: bool,
      *         chat_model: string,
@@ -194,6 +260,7 @@ class PlatformAiConfigService
             $providers[$name] = [
                 'configured' => filled($apiKey),
                 'chat_model' => $this->chatModel($name),
+                'vision_model' => $this->providerVisionModel($name),
                 'api_key_configured' => filled($apiKey),
                 'api_key_preview' => $this->maskSecret($apiKey),
             ];
@@ -203,8 +270,11 @@ class PlatformAiConfigService
             'provider' => $this->provider(),
             'chat_model' => $this->chatModel(),
             'vision_model' => $this->visionModel(),
+            'vision_provider' => $this->visionProvider(),
             'available' => $this->available(),
             'vision_available' => $this->visionAvailable(),
+            'features' => $this->resolvedFeatures(),
+            'feature_preferences' => $this->preferredFeatures(),
             'providers' => $providers,
             'model_options' => $this->modelOptions(),
         ];
@@ -215,9 +285,15 @@ class PlatformAiConfigService
      *     provider?: string,
      *     openai_api_key?: string|null,
      *     deepseek_api_key?: string|null,
+     *     gemini_api_key?: string|null,
      *     openai_chat_model?: string|null,
      *     deepseek_chat_model?: string|null,
-     *     openai_vision_model?: string|null
+     *     gemini_chat_model?: string|null,
+     *     openai_vision_model?: string|null,
+     *     gemini_vision_model?: string|null,
+     *     shopper_provider?: string|null,
+     *     marketing_provider?: string|null,
+     *     vision_provider?: string|null
      * }  $input
      */
     public function update(array $input): array
@@ -237,6 +313,7 @@ class PlatformAiConfigService
 
         $this->maybePersistSecret('ai.openai.api_key', $input['openai_api_key'] ?? null);
         $this->maybePersistSecret('ai.deepseek.api_key', $input['deepseek_api_key'] ?? null);
+        $this->maybePersistSecret('ai.gemini.api_key', $input['gemini_api_key'] ?? null);
 
         if (array_key_exists('openai_chat_model', $input) && filled($input['openai_chat_model'])) {
             $this->assertAllowedChatModel('openai', (string) $input['openai_chat_model']);
@@ -248,9 +325,37 @@ class PlatformAiConfigService
             $this->maybePersistValue('ai.deepseek.chat_model', $input['deepseek_chat_model']);
         }
 
+        if (array_key_exists('gemini_chat_model', $input) && filled($input['gemini_chat_model'])) {
+            $this->assertAllowedChatModel('gemini', (string) $input['gemini_chat_model']);
+            $this->maybePersistValue('ai.gemini.chat_model', $input['gemini_chat_model']);
+        }
+
         if (array_key_exists('openai_vision_model', $input) && filled($input['openai_vision_model'])) {
-            $this->assertAllowedVisionModel((string) $input['openai_vision_model']);
+            $this->assertAllowedVisionModel('openai', (string) $input['openai_vision_model']);
             $this->maybePersistValue('ai.openai.vision_model', $input['openai_vision_model']);
+        }
+
+        if (array_key_exists('gemini_vision_model', $input) && filled($input['gemini_vision_model'])) {
+            $this->assertAllowedVisionModel('gemini', (string) $input['gemini_vision_model']);
+            $this->maybePersistValue('ai.gemini.vision_model', $input['gemini_vision_model']);
+        }
+
+        foreach (['shopper', 'marketing', 'vision'] as $feature) {
+            $field = $feature.'_provider';
+            if (! array_key_exists($field, $input) || ! filled($input[$field])) {
+                continue;
+            }
+
+            $chosen = (string) $input[$field];
+            if (! in_array($chosen, self::PROVIDERS, true)) {
+                throw new \InvalidArgumentException("Unsupported {$feature} provider.");
+            }
+
+            if ($feature === 'vision' && $chosen === 'deepseek') {
+                throw new \InvalidArgumentException('Vision does not support DeepSeek.');
+            }
+
+            $this->persist("ai.features.{$feature}", $chosen);
         }
 
         $this->clearCache();
@@ -263,9 +368,53 @@ class PlatformAiConfigService
         Cache::forget(self::CACHE_KEY);
     }
 
+    private function providerVisionModel(string $provider): ?string
+    {
+        if (! in_array($provider, ['openai', 'gemini'], true)) {
+            return null;
+        }
+
+        $stored = $this->stored("ai.{$provider}.vision_model");
+        if (filled($stored)) {
+            return $stored;
+        }
+
+        $fallback = $provider === 'openai' ? 'gpt-4o' : $this->chatModel($provider);
+
+        return (string) config("ai.providers.{$provider}.vision_model", $fallback);
+    }
+
+    /**
+     * @return array<string, string>
+     */
+    private function preferredFeatures(): array
+    {
+        $features = [];
+
+        foreach (self::FEATURES as $feature) {
+            $features[$feature] = $this->preferredFeatureProvider($feature);
+        }
+
+        return $features;
+    }
+
+    /**
+     * @return array<string, string>
+     */
+    private function resolvedFeatures(): array
+    {
+        $features = [];
+
+        foreach (self::FEATURES as $feature) {
+            $features[$feature] = $this->featureProvider($feature);
+        }
+
+        return $features;
+    }
+
     private function hasIncomingKey(array $input, string $provider): bool
     {
-        $field = $provider === 'openai' ? 'openai_api_key' : 'deepseek_api_key';
+        $field = $provider.'_api_key';
 
         return array_key_exists($field, $input) && filled($input[$field]);
     }
@@ -318,11 +467,18 @@ class PlatformAiConfigService
                     'ai.provider',
                     'ai.openai.api_key',
                     'ai.deepseek.api_key',
+                    'ai.gemini.api_key',
                     'ai.openai.chat_model',
                     'ai.deepseek.chat_model',
+                    'ai.gemini.chat_model',
                     'ai.openai.vision_model',
+                    'ai.gemini.vision_model',
                     'ai.openai.base_url',
                     'ai.deepseek.base_url',
+                    'ai.gemini.base_url',
+                    'ai.features.shopper',
+                    'ai.features.marketing',
+                    'ai.features.vision',
                 ])
                 ->pluck('value', 'key')
                 ->all();

@@ -9,15 +9,15 @@ use App\Models\Merchant;
 use App\Models\Store;
 use App\Models\StorefrontBuilderSession;
 use App\Models\StorefrontTemplate;
+use App\Services\MediaStorageService;
 use App\Services\MerchantUsageEnforcementService;
 use App\Services\PlatformNotificationService;
-use App\Services\StoreNotificationService;
 use App\Services\StorefrontBuilderService;
 use App\Services\StorefrontPublishService;
+use App\Services\StoreNotificationService;
 use App\Services\StoreProductService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\File;
 use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
 
@@ -30,6 +30,7 @@ class StoreController extends Controller
         private readonly StoreProductService $productService,
         private readonly StorefrontPublishService $publishService,
         private readonly MerchantUsageEnforcementService $enforcement,
+        private readonly MediaStorageService $media,
         private readonly PlatformNotificationService $notifications,
         private readonly StoreNotificationService $storeNotifications,
     ) {}
@@ -339,17 +340,11 @@ class StoreController extends Controller
         ];
 
         $extension = $extensionMap[$mime] ?? 'bin';
-        $directory = public_path("storehause/uploads/{$store->id}");
-
-        if (! File::exists($directory)) {
-            File::makeDirectory($directory, 0755, true);
-        }
-
         $filename = Str::uuid().'.'.$extension;
-        $file->move($directory, $filename);
+        $url = $this->media->storeUpload("storehause/uploads/{$store->id}", $file, $filename);
 
         return response()->json([
-            'url' => url("storehause/uploads/{$store->id}/{$filename}"),
+            'url' => $url,
         ], 201);
     }
 

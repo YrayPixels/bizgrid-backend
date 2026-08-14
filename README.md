@@ -26,8 +26,8 @@ git clone https://github.com/YrayPixels/storehouseadmin.git storehouseadmin   # 
 
 - Merchant registration, email verification, Google OAuth, Sanctum sessions
 - Store and storefront management (draft, publish, images)
-- AI storefront generation and builder chat (OpenAI or DeepSeek)
-- Shopping agents (intent, planner, product picker) and vision analysis
+- AI storefront generation and builder chat (OpenAI, DeepSeek, or Gemini)
+- Shopping agents, product vision, and marketing copy (Gemini when `GEMINI_API_KEY` is set)
 - Public storefront API (catalog, orders, visit tracking, AI shopper)
 - Paystack checkout and Dodo subscription billing
 - Platform admin API (merchants, templates, agent execution logs, health)
@@ -38,7 +38,7 @@ git clone https://github.com/YrayPixels/storehouseadmin.git storehouseadmin   # 
 - PHP 8.2+
 - MySQL 5.7+ / 8.x
 - Composer 2.x
-- OpenAI **or** DeepSeek API key (for AI storefront generation and shopping agents)
+- OpenAI, DeepSeek, and/or Gemini API key (Gemini is used for shopper, vision, and marketing when set)
 
 Optional: Redis (`docker compose up -d` in this repo), queue worker, Paystack / Dodo / Google OAuth keys.
 
@@ -101,7 +101,8 @@ See [`.env.example`](./.env.example) for the full list. Common groups:
 
 | Area | Variables |
 |------|-----------|
-| AI | `AI_PROVIDER` (`openai` or `deepseek`), `OPENAI_API_KEY`, `DEEPSEEK_API_KEY` |
+| AI | `AI_PROVIDER` (`openai`, `deepseek`, or `gemini`), `OPENAI_API_KEY`, `DEEPSEEK_API_KEY`, `GEMINI_API_KEY` |
+| Media | `GOOGLE_CLOUD_STORAGE_BUCKET`, `GOOGLE_CLOUD_CREDENTIALS` (optional; local `public/` fallback) |
 | Platform | `STOREHAUSE_APP_URL`, `STOREHAUSE_PLATFORM_DOMAIN`, `STOREHAUSE_BRAND_NAME` |
 | Admin seed | `STOREHAUSE_ADMIN_EMAIL`, `STOREHAUSE_ADMIN_PASSWORD` |
 | Demo merchant | `STOREHAUSE_DEMO_LOGIN`, `STOREHAUSE_DEMO_EMAIL` |

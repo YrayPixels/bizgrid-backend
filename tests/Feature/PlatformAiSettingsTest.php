@@ -10,6 +10,7 @@ uses(RefreshDatabase::class);
 
 beforeEach(function () {
     PlatformSetting::query()->delete();
+    app(\App\Services\PlatformAiConfigService::class)->clearCache();
 });
 
 it('returns public ai config for admins', function () {
@@ -29,10 +30,12 @@ it('returns public ai config for admins', function () {
                 'model_options' => [
                     'openai' => ['chat', 'vision'],
                     'deepseek' => ['chat'],
+                    'gemini' => ['chat', 'vision'],
                 ],
                 'providers' => [
                     'openai' => ['configured', 'chat_model', 'api_key_configured', 'api_key_preview'],
                     'deepseek' => ['configured', 'chat_model', 'api_key_configured', 'api_key_preview'],
+                    'gemini' => ['configured', 'chat_model', 'api_key_configured', 'api_key_preview'],
                 ],
             ],
         ]);
@@ -129,6 +132,60 @@ it('proxies chat completions through the configured provider', function () {
         return $request->url() === 'https://api.deepseek.com/v1/chat/completions'
             && $request->hasHeader('Authorization', 'Bearer test-deepseek-key');
     });
+});
+
+it('lets super admins save a gemini key without switching the builder provider', function () {
+    config([
+        'ai.providers.openai.api_key' => 'test-openai-key',
+        'ai.providers.gemini.api_key' => null,
+    ]);
+
+    $admin = User::factory()->create([
+        'is_admin' => true,
+        'admin_role' => 'super_admin',
+    ]);
+
+    $response = $this->actingAs($admin)->patchJson('/api/admin/ai-settings', [
+        'gemini_api_key' => 'test-gemini-key',
+        'gemini_chat_model' => 'gemini-2.5-flash',
+    ]);
+
+    $response->assertOk()
+        ->assertJsonPath('data.provider', 'openai')
+        ->assertJsonPath('data.providers.gemini.configured', true)
+        ->assertJsonPath('data.features.shopper', 'gemini')
+        ->assertJsonPath('data.vision_provider', 'gemini');
+});
+
+it('lets super admins route shopper vision and marketing from ai settings', function () {
+    config([
+        'ai.providers.openai.api_key' => 'test-openai-key',
+        'ai.providers.gemini.api_key' => 'test-gemini-key',
+        'ai.features.shopper' => 'openai',
+        'ai.features.marketing' => 'openai',
+        'ai.features.vision' => 'openai',
+    ]);
+
+    $admin = User::factory()->create([
+        'is_admin' => true,
+        'admin_role' => 'super_admin',
+    ]);
+
+    $response = $this->actingAs($admin)->patchJson('/api/admin/ai-settings', [
+        'shopper_provider' => 'gemini',
+        'marketing_provider' => 'gemini',
+        'vision_provider' => 'gemini',
+    ]);
+
+    $response->assertOk()
+        ->assertJsonPath('data.provider', 'openai')
+        ->assertJsonPath('data.feature_preferences.shopper', 'gemini')
+        ->assertJsonPath('data.feature_preferences.marketing', 'gemini')
+        ->assertJsonPath('data.feature_preferences.vision', 'gemini')
+        ->assertJsonPath('data.features.shopper', 'gemini')
+        ->assertJsonPath('data.vision_provider', 'gemini');
+
+    expect(\App\Models\PlatformSetting::query()->where('key', 'ai.features.shopper')->value('value'))->toBe('gemini');
 });
 
 it('exposes ai config to authenticated merchants without secrets', function () {
