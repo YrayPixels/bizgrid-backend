@@ -350,3 +350,84 @@ it('keeps uploads on the local public disk when the storage driver is local', fu
 
     Http::assertNothingSent();
 });
+
+it('parses google cloud storage object names from public urls', function () {
+    config([
+        'services.gcs.driver' => 'gcs',
+        'services.gcs.bucket' => 'bizgrid-media',
+        'services.gcs.path_prefix' => 'bizgrid',
+        'services.gcs.public_url' => null,
+        'services.gcs.credentials' => geminiServiceAccountJson(),
+    ]);
+    app(PlatformGcsConfigService::class)->clearCache();
+
+    $gcs = app(GoogleCloudStorageClient::class);
+
+    expect($gcs->objectNameFromUrl('https://storage.googleapis.com/bizgrid-media/bizgrid/storehause/try-on/1/look.jpg'))
+        ->toBe('bizgrid/storehause/try-on/1/look.jpg')
+        ->and($gcs->objectNameFromUrl('https://bizgrid-media.storage.googleapis.com/bizgrid/storehause/try-on/1/look.jpg?generation=1'))
+        ->toBe('bizgrid/storehause/try-on/1/look.jpg');
+});
+
+it('fetches private google cloud storage images with the service account for try-on', function () {
+    config([
+        'services.gcs.driver' => 'gcs',
+        'services.gcs.bucket' => 'bizgrid-media',
+        'services.gcs.path_prefix' => 'bizgrid',
+        'services.gcs.public_url' => null,
+        'services.gcs.credentials' => geminiServiceAccountJson(),
+    ]);
+    app(PlatformGcsConfigService::class)->clearCache();
+
+    $jpeg = (string) UploadedFile::fake()->image('look.jpg', 48, 48)->getContent();
+
+    Http::fake(function ($request) use ($jpeg) {
+        if (str_contains($request->url(), 'oauth2.googleapis.com/token')) {
+            return Http::response([
+                'access_token' => 'ya29.tryon-token',
+                'expires_in' => 3600,
+            ], 200);
+        }
+
+        if (str_contains($request->url(), 'storage.googleapis.com/storage/v1/b/bizgrid-media/o/')
+            && str_contains($request->url(), 'alt=media')) {
+            return Http::response($jpeg, 200, ['Content-Type' => 'image/jpeg']);
+        }
+
+        return Http::response('not found', 404);
+    });
+
+    $image = app(\App\Services\PerfectCorp\PerfectCorpClient::class)->resolveImageForUpload(
+        'https://storage.googleapis.com/bizgrid-media/bizgrid/storehause/try-on/1/look.jpg',
+    );
+
+    expect($image['content_type'])->toBe('image/jpg')
+        ->and(str_starts_with($image['bytes'], "\xFF\xD8\xFF"))->toBeTrue();
+
+    Http::assertSent(function ($request) {
+        return str_contains($request->url(), 'alt=media')
+            && $request->hasHeader('Authorization', 'Bearer ya29.tryon-token');
+    });
+});
+
+it('signs private google cloud storage urls so the browser can load try-on results', function () {
+    config([
+        'services.gcs.driver' => 'gcs',
+        'services.gcs.bucket' => 'biz-bucket-grid',
+        'services.gcs.path_prefix' => 'bizgrid',
+        'services.gcs.public_url' => null,
+        'services.gcs.credentials' => geminiServiceAccountJson(),
+    ]);
+    app(PlatformGcsConfigService::class)->clearCache();
+
+    $url = app(GoogleCloudStorageClient::class)->browserUrl(
+        'https://storage.googleapis.com/biz-bucket-grid/bizgrid/storehause/try-on/10/results/a2825281-2adf-43da-8c57-2a9ac2d42f77.jpg',
+    );
+
+    expect($url)
+        ->toContain('https://storage.googleapis.com/biz-bucket-grid/bizgrid/storehause/try-on/10/results/')
+        ->toContain('X-Goog-Algorithm=GOOG4-RSA-SHA256')
+        ->toContain('X-Goog-Signature=')
+        ->toContain('X-Goog-Expires=');
+});
+

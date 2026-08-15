@@ -54,6 +54,15 @@ class MediaStorageService
         return $this->store($directory.'/'.$filename, $contents, $mime);
     }
 
+    public function browserUrl(?string $url): ?string
+    {
+        if (! $this->usingCloud()) {
+            return $url;
+        }
+
+        return $this->gcs->browserUrl($url);
+    }
+
     private function objectName(string $relativePath): string
     {
         $prefix = $this->gcsConfig->pathPrefix();

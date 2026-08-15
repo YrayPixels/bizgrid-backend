@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
 use RuntimeException;
 
@@ -27,10 +28,11 @@ class GoogleCloudStorageClient
         $token = $this->accessToken();
         $encodedName = rawurlencode($objectName);
 
+        $encodedType = rawurlencode($contentType);
         $response = Http::withToken($token)
             ->withBody($contents, $contentType)
             ->timeout(60)
-            ->post("https://storage.googleapis.com/upload/storage/v1/b/{$bucket}/o?uploadType=media&name={$encodedName}");
+            ->post("https://storage.googleapis.com/upload/storage/v1/b/{$bucket}/o?uploadType=media&name={$encodedName}&contentType={$encodedType}");
 
         if (! $response->successful()) {
             throw new RuntimeException(
@@ -39,6 +41,75 @@ class GoogleCloudStorageClient
         }
 
         return $this->publicUrl($objectName);
+    }
+
+    /**
+     * @return array{bytes: string, content_type: string}
+     */
+    public function get(string $objectName): array
+    {
+        $bucket = $this->config->bucket();
+        if ($bucket === null) {
+            throw new RuntimeException('Google Cloud Storage bucket is not configured.');
+        }
+
+        $token = $this->accessToken();
+        $encodedName = rawurlencode($objectName);
+
+        $response = Http::withToken($token)
+            ->withHeaders(['Accept' => '*/*'])
+            ->timeout(60)
+            ->get("https://storage.googleapis.com/storage/v1/b/{$bucket}/o/{$encodedName}?alt=media");
+
+        if (! $response->successful()) {
+            throw new RuntimeException(
+                'Could not read image from Google Cloud Storage: '.$response->status()
+            );
+        }
+
+        $bytes = $response->body();
+        if ($bytes === '') {
+            throw new RuntimeException('Google Cloud Storage returned an empty file.');
+        }
+
+        $mime = strtolower((string) ($response->header('Content-Type') ?: 'application/octet-stream'));
+        $mime = trim(explode(';', $mime)[0]);
+
+        return [
+            'bytes' => $bytes,
+            'content_type' => $mime,
+        ];
+    }
+
+    public function objectNameFromUrl(string $url): ?string
+    {
+        $url = trim($url);
+        $url = strtok($url, '?') ?: $url;
+        if ($url === '' || ! $this->configured()) {
+            return null;
+        }
+
+        $bucket = $this->config->bucket();
+        if ($bucket === null) {
+            return null;
+        }
+
+        $custom = $this->config->publicUrl();
+        if ($custom !== null && str_starts_with($url, $custom.'/')) {
+            return rawurldecode(ltrim(substr($url, strlen($custom)), '/'));
+        }
+
+        $xmlHost = 'https://storage.googleapis.com/'.$bucket.'/';
+        if (str_starts_with($url, $xmlHost)) {
+            return rawurldecode(substr($url, strlen($xmlHost)));
+        }
+
+        $virtualHost = 'https://'.$bucket.'.storage.googleapis.com/';
+        if (str_starts_with($url, $virtualHost)) {
+            return rawurldecode(substr($url, strlen($virtualHost)));
+        }
+
+        return null;
     }
 
     public function publicUrl(string $objectName): string
@@ -51,6 +122,93 @@ class GoogleCloudStorageClient
         $bucket = $this->config->bucket() ?? '';
 
         return 'https://storage.googleapis.com/'.$bucket.'/'.ltrim($objectName, '/');
+    }
+
+    /**
+     * Time-limited URL the browser can load when the bucket is private.
+     */
+    public function signedUrl(string $objectName, int $ttlSeconds = 604800): string
+    {
+        $objectName = ltrim($objectName, '/');
+        if ($objectName === '') {
+            throw new RuntimeException('Missing Cloud Storage object name.');
+        }
+
+        $ttlSeconds = max(60, min(604800, $ttlSeconds));
+        $bucket = $this->config->bucket() ?? '';
+        $cacheKey = 'gcs.signed-url.'.hash('sha256', $bucket.'|'.$objectName.'|'.$ttlSeconds);
+        $cached = Cache::get($cacheKey);
+        if (is_string($cached) && $cached !== '') {
+            return $cached;
+        }
+
+        $url = $this->buildSignedUrl($objectName, $ttlSeconds);
+        Cache::put($cacheKey, $url, 3000);
+
+        return $url;
+    }
+
+    public function browserUrl(?string $url): ?string
+    {
+        if (! is_string($url) || trim($url) === '') {
+            return $url;
+        }
+
+        $objectName = $this->objectNameFromUrl($url);
+        if ($objectName === null) {
+            return $url;
+        }
+
+        try {
+            return $this->signedUrl($objectName);
+        } catch (\Throwable) {
+            return $url;
+        }
+    }
+
+    private function buildSignedUrl(string $objectName, int $ttlSeconds): string
+    {
+        $account = $this->config->serviceAccount();
+        $bucket = $this->config->bucket();
+        if ($account === null || $bucket === null) {
+            throw new RuntimeException('Google Cloud Storage credentials are not configured.');
+        }
+
+        $now = new \DateTimeImmutable('now', new \DateTimeZone('UTC'));
+        $datestamp = $now->format('Ymd');
+        $timestamp = $now->format('Ymd\THis\Z');
+        $scope = $datestamp.'/auto/storage/goog4_request';
+        $credential = $account['client_email'].'/'.$scope;
+        $encodedObject = $this->encodeObjectPath($objectName);
+        $canonicalUri = '/'.$bucket.'/'.$encodedObject;
+
+        $query = [
+            'X-Goog-Algorithm' => 'GOOG4-RSA-SHA256',
+            'X-Goog-Credential' => $credential,
+            'X-Goog-Date' => $timestamp,
+            'X-Goog-Expires' => (string) $ttlSeconds,
+            'X-Goog-SignedHeaders' => 'host',
+        ];
+        ksort($query);
+
+        $canonicalQuery = http_build_query($query, '', '&', PHP_QUERY_RFC3986);
+        $canonicalRequest = "GET\n{$canonicalUri}\n{$canonicalQuery}\nhost:storage.googleapis.com\n\nhost\nUNSIGNED-PAYLOAD";
+        $stringToSign = "GOOG4-RSA-SHA256\n{$timestamp}\n{$scope}\n".hash('sha256', $canonicalRequest);
+
+        $signature = '';
+        $ok = openssl_sign($stringToSign, $signature, $account['private_key'], OPENSSL_ALGO_SHA256);
+        if (! $ok) {
+            throw new RuntimeException('Could not sign Google Cloud Storage URL.');
+        }
+
+        $query['X-Goog-Signature'] = bin2hex($signature);
+
+        return 'https://storage.googleapis.com/'.$bucket.'/'.$encodedObject.'?'.http_build_query($query, '', '&', PHP_QUERY_RFC3986);
+    }
+
+    private function encodeObjectPath(string $objectName): string
+    {
+        return implode('/', array_map('rawurlencode', explode('/', $objectName)));
     }
 
     /**

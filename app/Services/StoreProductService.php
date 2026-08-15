@@ -330,7 +330,7 @@ class StoreProductService
             'price' => $price,
             'sale_price' => $salePrice,
             'currency' => $product->currency,
-            'image_url' => $product->image_url,
+            'image_url' => $this->browserImageUrl($product->image_url),
             'images' => $this->formatImages($product),
             'sku' => $product->sku,
             'barcode' => $product->barcode,
@@ -343,7 +343,7 @@ class StoreProductService
             'low_stock' => $this->isLowStock($product),
             'variants' => app(ProductVariantResolver::class)->normalizeGroups($product->variants),
             'perks' => $product->perks,
-            'try_on' => app(TryOnService::class)->normalizeTryOnConfig($product->try_on),
+            'try_on' => $this->formatTryOn($product),
             'style_profile' => is_array($product->style_profile) ? $product->style_profile : null,
         ];
     }
@@ -472,22 +472,47 @@ class StoreProductService
 
         foreach ($images as $url) {
             $trimmed = trim((string) $url);
-            if ($trimmed === '' || in_array($trimmed, $normalized, true)) {
+            if ($trimmed === '') {
                 continue;
             }
-            $normalized[] = $trimmed;
+            $signed = $this->browserImageUrl($trimmed) ?? $trimmed;
+            if (in_array($signed, $normalized, true)) {
+                continue;
+            }
+            $normalized[] = $signed;
         }
 
         $cover = is_string($product->image_url) ? trim($product->image_url) : '';
-        if ($cover !== '' && ! in_array($cover, $normalized, true)) {
-            array_unshift($normalized, $cover);
+        $signedCover = $cover !== '' ? ($this->browserImageUrl($cover) ?? $cover) : '';
+        if ($signedCover !== '' && ! in_array($signedCover, $normalized, true)) {
+            array_unshift($normalized, $signedCover);
         }
 
-        if ($normalized === [] && $cover !== '') {
-            return [$cover];
+        if ($normalized === [] && $signedCover !== '') {
+            return [$signedCover];
         }
 
         return $normalized;
+    }
+
+    /** @return array<string, mixed>|null */
+    private function formatTryOn(StoreProduct $product): ?array
+    {
+        $config = app(TryOnService::class)->normalizeTryOnConfig($product->try_on);
+        if (! is_array($config)) {
+            return $config;
+        }
+
+        if (is_string($config['ref_image_url'] ?? null) && $config['ref_image_url'] !== '') {
+            $config['ref_image_url'] = $this->browserImageUrl($config['ref_image_url']);
+        }
+
+        return $config;
+    }
+
+    private function browserImageUrl(?string $url): ?string
+    {
+        return app(MediaStorageService::class)->browserUrl($url);
     }
 
     /** @param array<string, mixed> $data */

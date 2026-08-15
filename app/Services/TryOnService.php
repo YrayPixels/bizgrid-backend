@@ -311,17 +311,27 @@ class TryOnService
             throw new RuntimeException('This fabric look is missing a template.');
         }
 
-        $srcUrl = $this->storeShopperImage($store, $srcImage, $input['src_image_url'] ?? null);
+        $src = $this->storeShopperImage($store, $srcImage, $input['src_image_url'] ?? null);
+        $srcUrl = $src['url'];
 
         $gender = null;
         $style = null;
         $garmentCategory = null;
 
         try {
-            $srcRef = $this->perfectCorp->isStub() ? 'stub' : $this->perfectCorp->uploadFromUrl($srcUrl);
-            $refRef = null;
-            if ($needsRef && $refUrl) {
-                $refRef = $this->perfectCorp->isStub() ? 'stub' : $this->perfectCorp->uploadFromUrl($refUrl);
+            if ($this->perfectCorp->isStub()) {
+                $srcRef = 'stub';
+                $refRef = $needsRef ? 'stub' : null;
+            } else {
+                $srcRef = $this->perfectCorp->uploadImageBytes(
+                    $src['bytes'],
+                    $src['content_type'],
+                    $src['file_name'],
+                );
+                $refRef = null;
+                if ($needsRef && $refUrl) {
+                    $refRef = $this->perfectCorp->uploadFromUrl($refUrl);
+                }
             }
 
             $task = $this->startProviderTask($mode, $tryOn, $input, $srcRef, $refRef, $gender, $style, $garmentCategory);
@@ -482,7 +492,7 @@ class TryOnService
             'product_id' => $session->product_id,
             'mode' => $session->mode,
             'status' => $session->status,
-            'result_url' => $session->result_url,
+            'result_url' => $this->media->browserUrl($session->result_url),
             'error_code' => $session->error_code,
             'error_message' => $session->error_message,
             'gender' => $session->gender,
@@ -603,7 +613,7 @@ class TryOnService
             'error_pose' => 'We need a clearer standing photo facing the camera.',
             'error_invalid_src', 'error_invalid_ref', 'error_apply_region_mismatch' => 'This photo or product image isn’t try-on ready — try another photo.',
             'error_nsfw_content_detected' => 'Couldn’t create this look — try a different photo.',
-            'error_download_image' => 'Couldn’t load one of the images — try again.',
+            'error_download_image' => 'Couldn’t load one of the photos from storage — try again in a moment.',
             'PHOTO_DETECTION_FAIL' => 'We couldn’t find the right body area in this photo — try another angle.',
             'OBJECT_DETECTION_FAIL' => 'We couldn’t read the product image — try a clearer product photo.',
             'PHOTO_CHECK_INVALID' => 'This pose or crop isn’t try-on ready — try a clearer photo.',
@@ -747,18 +757,39 @@ class TryOnService
         return $payload;
     }
 
-    private function storeShopperImage(Store $store, ?UploadedFile $file, ?string $srcImageUrl): string
+    /**
+     * @return array{url: string, bytes: string, content_type: string, file_name: string}
+     */
+    private function storeShopperImage(Store $store, ?UploadedFile $file, ?string $srcImageUrl): array
     {
         if ($file instanceof UploadedFile) {
             $ext = strtolower((string) $file->getClientOriginalExtension()) ?: 'jpg';
             $name = Str::uuid()->toString().'.'.$ext;
+            $bytes = $file->getContent();
+            if ($bytes === '') {
+                throw new RuntimeException('Could not read the uploaded photo.');
+            }
+            $mime = $file->getMimeType() ?: 'image/jpeg';
+            $url = $this->media->storeUpload('storehause/try-on/'.$store->id, $file, $name);
 
-            return $this->media->storeUpload('storehause/try-on/'.$store->id, $file, $name);
+            return [
+                'url' => $url,
+                'bytes' => $bytes,
+                'content_type' => $mime,
+                'file_name' => $name,
+            ];
         }
 
         $url = is_string($srcImageUrl) ? trim($srcImageUrl) : '';
         if ($url !== '' && (str_starts_with($url, 'http://') || str_starts_with($url, 'https://'))) {
-            return $url;
+            $image = $this->perfectCorp->resolveImageForUpload($url);
+
+            return [
+                'url' => $url,
+                'bytes' => $image['bytes'],
+                'content_type' => $image['content_type'],
+                'file_name' => $image['file_name'],
+            ];
         }
 
         // data:image/...;base64,...
@@ -769,7 +800,10 @@ class TryOnService
         throw new RuntimeException('A shopper photo is required.');
     }
 
-    private function storeDataUrl(Store $store, string $dataUrl): string
+    /**
+     * @return array{url: string, bytes: string, content_type: string, file_name: string}
+     */
+    private function storeDataUrl(Store $store, string $dataUrl): array
     {
         if (! preg_match('#^data:image/(jpeg|jpg|png|webp|heic);base64,(.+)$#i', $dataUrl, $matches)) {
             throw new RuntimeException('Invalid photo data.');
@@ -793,6 +827,13 @@ class TryOnService
             default => 'image/jpeg',
         };
 
-        return $this->media->store('storehause/try-on/'.$store->id.'/'.$name, $binary, $mime);
+        $storedUrl = $this->media->store('storehause/try-on/'.$store->id.'/'.$name, $binary, $mime);
+
+        return [
+            'url' => $storedUrl,
+            'bytes' => $binary,
+            'content_type' => $mime,
+            'file_name' => $name,
+        ];
     }
 }

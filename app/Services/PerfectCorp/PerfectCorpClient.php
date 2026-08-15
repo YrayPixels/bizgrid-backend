@@ -2,6 +2,7 @@
 
 namespace App\Services\PerfectCorp;
 
+use App\Services\GoogleCloudStorageClient;
 use Illuminate\Http\Client\PendingRequest;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Str;
@@ -9,6 +10,10 @@ use RuntimeException;
 
 class PerfectCorpClient
 {
+    public function __construct(
+        private readonly GoogleCloudStorageClient $gcs,
+    ) {}
+
     public function isStub(): bool
     {
         return (bool) config('perfectcorp.stub', true);
@@ -40,6 +45,13 @@ class PerfectCorpClient
         if ($size > 10 * 1024 * 1024) {
             throw new RuntimeException('Image must be under 10MB.');
         }
+
+        $contentType = $this->normalizeContentType($contentType);
+        $detected = $this->detectImageContentType($bytes);
+        if ($detected === null) {
+            throw new RuntimeException('Could not read a valid photo from storage. If Google Cloud Storage is private, try-on will fetch it with the service account.');
+        }
+        $contentType = $detected;
 
         $response = $this->http()->post('/s2s/v2.0/file', [
             'files' => [[
@@ -94,6 +106,17 @@ class PerfectCorpClient
             ];
         }
 
+        $objectName = $this->gcs->objectNameFromUrl($url);
+        if ($objectName !== null) {
+            $object = $this->gcs->get($objectName);
+
+            return [
+                'bytes' => $object['bytes'],
+                'content_type' => $this->normalizeContentType($object['content_type']),
+                'file_name' => 'upload_'.Str::uuid()->toString().'.'.$this->extensionForContentType($object['content_type']),
+            ];
+        }
+
         $response = Http::timeout(30)->get($url);
         if (! $response->successful()) {
             throw new RuntimeException('Could not download image for try-on upload.');
@@ -101,17 +124,15 @@ class PerfectCorpClient
 
         $bytes = $response->body();
         $mime = $response->header('Content-Type') ?: 'image/jpeg';
-        $ext = match (true) {
-            str_contains($mime, 'png') => 'png',
-            str_contains($mime, 'webp') => 'webp',
-            str_contains($mime, 'heic') => 'heic',
-            default => 'jpg',
-        };
+        $detected = $this->detectImageContentType($bytes);
+        if ($detected === null) {
+            throw new RuntimeException('Could not download image for try-on upload.');
+        }
 
         return [
             'bytes' => $bytes,
-            'content_type' => $this->normalizeContentType($mime),
-            'file_name' => 'upload_'.Str::uuid()->toString().'.'.$ext,
+            'content_type' => $detected,
+            'file_name' => 'upload_'.Str::uuid()->toString().'.'.$this->extensionForContentType($detected),
         ];
     }
 
@@ -403,6 +424,46 @@ class PerfectCorpClient
             'image/heic' => 'image/heic',
             default => 'image/jpg',
         };
+    }
+
+    private function extensionForContentType(string $mime): string
+    {
+        $mime = $this->normalizeContentType($mime);
+
+        return match ($mime) {
+            'image/png' => 'png',
+            'image/webp' => 'webp',
+            'image/heic' => 'heic',
+            default => 'jpg',
+        };
+    }
+
+    private function detectImageContentType(string $bytes): ?string
+    {
+        if (strlen($bytes) < 12) {
+            return null;
+        }
+
+        $header = substr($bytes, 0, 12);
+        if (str_starts_with($header, "\xFF\xD8\xFF")) {
+            return 'image/jpg';
+        }
+        if (str_starts_with($header, "\x89PNG\r\n\x1A\n")) {
+            return 'image/png';
+        }
+        if (str_starts_with($header, 'RIFF') && substr($bytes, 8, 4) === 'WEBP') {
+            return 'image/webp';
+        }
+        if (str_contains(substr($bytes, 4, 8), 'ftyp')) {
+            return 'image/heic';
+        }
+
+        $trimmed = ltrim($bytes);
+        if (str_starts_with($trimmed, '<') || str_starts_with($trimmed, '{')) {
+            return null;
+        }
+
+        return null;
     }
 
     private function localPathFromAppUrl(string $url): ?string
