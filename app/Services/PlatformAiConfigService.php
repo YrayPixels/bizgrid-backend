@@ -17,6 +17,14 @@ class PlatformAiConfigService
     /** @var list<string> */
     private const FEATURES = ['shopper', 'marketing', 'vision'];
 
+    /** @var array<string, string> */
+    private const GEMINI_RETIRED_MODELS = [
+        'gemini-2.0-flash' => 'gemini-3.6-flash',
+        'gemini-2.5-flash' => 'gemini-3.6-flash',
+        'gemini-2.5-flash-lite' => 'gemini-3.1-flash-lite',
+        'gemini-2.5-pro' => 'gemini-3.1-pro-preview',
+    ];
+
     public function supportedProviders(): array
     {
         return self::PROVIDERS;
@@ -72,10 +80,13 @@ class PlatformAiConfigService
         $stored = $this->stored("ai.{$provider}.chat_model");
 
         if (filled($stored)) {
-            return $stored;
+            return $this->resolveModel($provider, $stored);
         }
 
-        return (string) config("ai.providers.{$provider}.chat_model", 'gpt-4o-mini');
+        return $this->resolveModel(
+            $provider,
+            (string) config("ai.providers.{$provider}.chat_model", 'gpt-4o-mini'),
+        );
     }
 
     public function visionProvider(): string
@@ -89,12 +100,15 @@ class PlatformAiConfigService
         $stored = $this->stored("ai.{$provider}.vision_model");
 
         if (filled($stored)) {
-            return $stored;
+            return $this->resolveModel($provider, $stored);
         }
 
         $fallback = $provider === 'openai' ? 'gpt-4o' : $this->chatModel($provider);
 
-        return (string) config("ai.providers.{$provider}.vision_model", $fallback);
+        return $this->resolveModel(
+            $provider,
+            (string) config("ai.providers.{$provider}.vision_model", $fallback),
+        );
     }
 
     public function apiKey(?string $provider = null): ?string
@@ -103,12 +117,12 @@ class PlatformAiConfigService
         $stored = $this->stored("ai.{$provider}.api_key");
 
         if (filled($stored)) {
-            return $this->decryptSecret($stored);
+            return $this->normalizeApiKey($this->decryptSecret($stored));
         }
 
         $envKey = config("ai.providers.{$provider}.api_key");
 
-        return filled($envKey) ? (string) $envKey : null;
+        return filled($envKey) ? $this->normalizeApiKey((string) $envKey) : null;
     }
 
     public function baseUrl(?string $provider = null): string
@@ -313,6 +327,9 @@ class PlatformAiConfigService
 
         $this->maybePersistSecret('ai.openai.api_key', $input['openai_api_key'] ?? null);
         $this->maybePersistSecret('ai.deepseek.api_key', $input['deepseek_api_key'] ?? null);
+        if (array_key_exists('gemini_api_key', $input) && filled($input['gemini_api_key'])) {
+            $this->assertGeminiApiKey((string) $input['gemini_api_key']);
+        }
         $this->maybePersistSecret('ai.gemini.api_key', $input['gemini_api_key'] ?? null);
 
         if (array_key_exists('openai_chat_model', $input) && filled($input['openai_chat_model'])) {
@@ -376,12 +393,15 @@ class PlatformAiConfigService
 
         $stored = $this->stored("ai.{$provider}.vision_model");
         if (filled($stored)) {
-            return $stored;
+            return $this->resolveModel($provider, $stored);
         }
 
         $fallback = $provider === 'openai' ? 'gpt-4o' : $this->chatModel($provider);
 
-        return (string) config("ai.providers.{$provider}.vision_model", $fallback);
+        return $this->resolveModel(
+            $provider,
+            (string) config("ai.providers.{$provider}.vision_model", $fallback),
+        );
     }
 
     /**
@@ -489,13 +509,55 @@ class PlatformAiConfigService
         return is_string($value) && $value !== '' ? $value : null;
     }
 
-    private function decryptSecret(string $value): ?string
+    private function decryptSecret(?string $value): ?string
     {
+        if (! filled($value)) {
+            return null;
+        }
+
         try {
             return Crypt::decryptString($value);
         } catch (\Throwable) {
             return $value;
         }
+    }
+
+    private function normalizeApiKey(?string $value): ?string
+    {
+        if (! filled($value)) {
+            return null;
+        }
+
+        $key = trim($value);
+        $key = trim($key, "\"'");
+        if (str_starts_with($key, 'Bearer ')) {
+            $key = trim(substr($key, 7));
+        }
+
+        return $key !== '' ? $key : null;
+    }
+
+    private function assertGeminiApiKey(string $value): void
+    {
+        $trimmed = trim($value);
+        if ($trimmed === '') {
+            return;
+        }
+
+        if (str_starts_with($trimmed, '{') || str_contains($trimmed, 'private_key')) {
+            throw new \InvalidArgumentException(
+                'Gemini needs an API key from Google AI Studio, not a service-account JSON. Paste GCS credentials under Google Cloud Storage on this page.'
+            );
+        }
+    }
+
+    private function resolveModel(string $provider, string $model): string
+    {
+        if ($provider !== 'gemini') {
+            return $model;
+        }
+
+        return self::GEMINI_RETIRED_MODELS[$model] ?? $model;
     }
 
     private function maskSecret(?string $secret): ?string

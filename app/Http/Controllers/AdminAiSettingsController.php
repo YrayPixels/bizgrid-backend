@@ -6,6 +6,7 @@ namespace App\Http\Controllers;
 
 use App\Http\Controllers\Concerns\InvalidatesApiCache;
 use App\Services\AdminAuditService;
+use App\Services\AiChatClient;
 use App\Services\PlatformAiConfigService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -35,7 +36,7 @@ class AdminAiSettingsController extends Controller
             'provider' => 'sometimes|string|in:openai,deepseek,gemini',
             'openai_api_key' => 'nullable|string|max:500',
             'deepseek_api_key' => 'nullable|string|max:500',
-            'gemini_api_key' => 'nullable|string|max:500',
+            'gemini_api_key' => 'nullable|string|max:4000',
             'openai_chat_model' => ['nullable', 'string', 'max:120', Rule::in($this->aiConfig->allowedChatModels('openai'))],
             'deepseek_chat_model' => ['nullable', 'string', 'max:120', Rule::in($this->aiConfig->allowedChatModels('deepseek'))],
             'gemini_chat_model' => ['nullable', 'string', 'max:120', Rule::in($this->aiConfig->allowedChatModels('gemini'))],
@@ -72,6 +73,27 @@ class AdminAiSettingsController extends Controller
             'success' => true,
             'data' => $data,
             'message' => 'AI provider settings updated.',
+        ]);
+    }
+
+    public function probe(Request $request): JsonResponse
+    {
+        $validator = Validator::make($request->all(), [
+            'provider' => 'required|string|in:openai,deepseek,gemini',
+        ]);
+
+        if ($validator->fails()) {
+            return response()->json([
+                'message' => 'Validation failed',
+                'errors' => $validator->errors(),
+            ], 422);
+        }
+
+        $result = app(AiChatClient::class)->probe($validator->validated()['provider']);
+
+        return response()->json([
+            'success' => true,
+            'data' => $result,
         ]);
     }
 }

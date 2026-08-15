@@ -147,7 +147,7 @@ it('lets super admins save a gemini key without switching the builder provider',
 
     $response = $this->actingAs($admin)->patchJson('/api/admin/ai-settings', [
         'gemini_api_key' => 'test-gemini-key',
-        'gemini_chat_model' => 'gemini-2.5-flash',
+        'gemini_chat_model' => 'gemini-3.6-flash',
     ]);
 
     $response->assertOk()
@@ -210,4 +210,147 @@ it('exposes ai config to authenticated merchants without secrets', function () {
         ->assertJsonPath('data.provider', 'openai')
         ->assertJsonPath('data.providers.openai.configured', true)
         ->assertJsonMissing(['openai_api_key', 'deepseek_api_key']);
+});
+
+it('rejects a gemini key that looks like service account json', function () {
+    $admin = User::factory()->create([
+        'is_admin' => true,
+        'admin_role' => 'super_admin',
+    ]);
+
+    $response = $this->actingAs($admin)->patchJson('/api/admin/ai-settings', [
+        'gemini_api_key' => json_encode([
+            'type' => 'service_account',
+            'client_email' => 'bizgrid@test.iam.gserviceaccount.com',
+            'private_key' => 'secret',
+        ]),
+    ]);
+
+    $response->assertStatus(422)
+        ->assertJsonPath('message', 'Gemini needs an API key from Google AI Studio, not a service-account JSON. Paste GCS credentials under Google Cloud Storage on this page.');
+});
+
+it('probes gemini and explains a 403 from google', function () {
+    config([
+        'ai.providers.gemini.api_key' => 'test-gemini-key',
+    ]);
+
+    Http::fake([
+        'generativelanguage.googleapis.com/*' => Http::response([
+            'error' => [
+                'code' => 403,
+                'message' => 'Requests from referer <empty> are blocked.',
+                'status' => 'PERMISSION_DENIED',
+            ],
+        ], 403),
+    ]);
+
+    $admin = User::factory()->create([
+        'is_admin' => true,
+        'admin_role' => 'super_admin',
+    ]);
+
+    $response = $this->actingAs($admin)->postJson('/api/admin/ai-settings/probe', [
+        'provider' => 'gemini',
+    ]);
+
+    $response->assertOk()
+        ->assertJsonPath('data.ok', false)
+        ->assertJsonPath('data.http_status', 403)
+        ->assertJsonPath('data.message', 'Requests from referer <empty> are blocked.');
+
+    expect($response->json('data.hint'))->toContain('Google AI Studio');
+});
+
+it('explains when google blocks generativelanguage on the api key', function () {
+    config([
+        'ai.providers.gemini.api_key' => 'test-gemini-key',
+    ]);
+
+    Http::fake([
+        'generativelanguage.googleapis.com/*' => Http::response([
+            'error' => [
+                'code' => 403,
+                'message' => 'Requests to this API generativelanguage.googleapis.com method google.ai.generativelanguage.v1main.ModelService.ListModels are blocked.',
+                'status' => 'PERMISSION_DENIED',
+            ],
+        ], 403),
+    ]);
+
+    $admin = User::factory()->create([
+        'is_admin' => true,
+        'admin_role' => 'super_admin',
+    ]);
+
+    $response = $this->actingAs($admin)->postJson('/api/admin/ai-settings/probe', [
+        'provider' => 'gemini',
+    ]);
+
+    $response->assertOk()
+        ->assertJsonPath('data.ok', false)
+        ->assertJsonPath('data.http_status', 403);
+
+    expect($response->json('data.hint'))->toContain('Generative Language API');
+});
+
+it('explains when google rejects a retired gemini model', function () {
+    config([
+        'ai.providers.gemini.api_key' => 'test-gemini-key',
+    ]);
+
+    Http::fake([
+        'generativelanguage.googleapis.com/*' => Http::response([
+            'error' => [
+                'code' => 404,
+                'message' => 'This model models/gemini-2.5-flash is no longer available to new users.',
+                'status' => 'NOT_FOUND',
+            ],
+        ], 404),
+    ]);
+
+    $admin = User::factory()->create([
+        'is_admin' => true,
+        'admin_role' => 'super_admin',
+    ]);
+
+    $response = $this->actingAs($admin)->postJson('/api/admin/ai-settings/probe', [
+        'provider' => 'gemini',
+    ]);
+
+    $response->assertOk()
+        ->assertJsonPath('data.ok', false)
+        ->assertJsonPath('data.http_status', 404);
+
+    expect($response->json('data.hint'))->toContain('Gemini 3.6 Flash');
+});
+
+it('explains when gemini prepaid credits are depleted', function () {
+    config([
+        'ai.providers.gemini.api_key' => 'test-gemini-key',
+    ]);
+
+    Http::fake([
+        'generativelanguage.googleapis.com/*' => Http::response([
+            'error' => [
+                'code' => 429,
+                'message' => 'Your prepayment credits are depleted. Please go to AI Studio at https://ai.studio/projects to manage your project and billing.',
+                'status' => 'RESOURCE_EXHAUSTED',
+            ],
+        ], 429),
+    ]);
+
+    $admin = User::factory()->create([
+        'is_admin' => true,
+        'admin_role' => 'super_admin',
+    ]);
+
+    $response = $this->actingAs($admin)->postJson('/api/admin/ai-settings/probe', [
+        'provider' => 'gemini',
+    ]);
+
+    $response->assertOk()
+        ->assertJsonPath('data.ok', false)
+        ->assertJsonPath('data.http_status', 429);
+
+    expect($response->json('data.hint'))->toContain('prepaid credits');
 });

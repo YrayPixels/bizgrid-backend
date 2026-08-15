@@ -1,6 +1,7 @@
 <?php
 
 use App\Http\Controllers\AdminAiSettingsController;
+use App\Http\Controllers\AdminGcsSettingsController;
 use App\Http\Controllers\AdminAgentLogController;
 use App\Http\Controllers\AdminAnalyticsController;
 use App\Http\Controllers\AiConfigController;
@@ -115,6 +116,11 @@ Route::middleware('auth:sanctum')->group(function () {
 
             Route::get('/ai-settings', [AdminAiSettingsController::class, 'show']);
             Route::patch('/ai-settings', [AdminAiSettingsController::class, 'update']);
+            Route::post('/ai-settings/probe', [AdminAiSettingsController::class, 'probe']);
+
+            Route::get('/gcs-settings', [AdminGcsSettingsController::class, 'show']);
+            Route::patch('/gcs-settings', [AdminGcsSettingsController::class, 'update']);
+            Route::post('/gcs-settings/probe', [AdminGcsSettingsController::class, 'probe']);
 
             Route::get('/storefront-templates', [AdminStorefrontTemplateController::class, 'index']);
             Route::patch('/storefront-templates/{id}', [AdminStorefrontTemplateController::class, 'update']);

@@ -51,7 +51,23 @@ it('keeps the website builder on the default provider while shopper and vision p
         ->and($config->providerForAgent('marketing-agent'))->toBe('gemini')
         ->and($config->providerForAgent('storefront-writer-agent'))->toBe('openai')
         ->and($config->visionProvider())->toBe('gemini')
-        ->and($config->visionModel())->toBe('gemini-2.5-flash');
+        ->and($config->visionModel())->toBe('gemini-3.6-flash');
+});
+
+it('maps retired gemini models to current defaults', function () {
+    config([
+        'ai.provider' => 'openai',
+        'ai.providers.openai.api_key' => 'test-openai-key',
+        'ai.providers.gemini.api_key' => 'test-gemini-key',
+        'ai.providers.gemini.chat_model' => 'gemini-2.5-flash',
+        'ai.providers.gemini.vision_model' => 'gemini-2.5-pro',
+        'ai.features.vision' => 'gemini',
+    ]);
+
+    $config = app(PlatformAiConfigService::class);
+
+    expect($config->chatModel('gemini'))->toBe('gemini-3.6-flash')
+        ->and($config->visionModel())->toBe('gemini-3.1-pro-preview');
 });
 
 it('falls back to openai for shopper and vision when gemini is not configured', function () {
@@ -74,7 +90,7 @@ it('sends shopper agent calls to the gemini openai-compatible endpoint', functio
         'ai.provider' => 'openai',
         'ai.providers.openai.api_key' => 'test-openai-key',
         'ai.providers.gemini.api_key' => 'test-gemini-key',
-        'ai.providers.gemini.chat_model' => 'gemini-2.5-flash',
+        'ai.providers.gemini.chat_model' => 'gemini-3.6-flash',
         'ai.features.shopper' => 'gemini',
     ]);
 
@@ -102,7 +118,7 @@ it('sends shopper agent calls to the gemini openai-compatible endpoint', functio
     Http::assertSent(function ($request) {
         return str_contains($request->url(), 'generativelanguage.googleapis.com/v1beta/openai/chat/completions')
             && $request->hasHeader('Authorization', 'Bearer test-gemini-key')
-            && ($request['model'] ?? null) === 'gemini-2.5-flash';
+            && ($request['model'] ?? null) === 'gemini-3.6-flash';
     });
 
     expect(AgentExecutionLog::query()->where('provider', 'gemini')->where('agent', 'shopping-intent-agent')->exists())->toBeTrue();

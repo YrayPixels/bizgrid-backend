@@ -11,6 +11,7 @@ class MediaStorageService
 {
     public function __construct(
         private readonly GoogleCloudStorageClient $gcs,
+        private readonly PlatformGcsConfigService $gcsConfig,
     ) {}
 
     public function usingCloud(): bool
@@ -55,7 +56,7 @@ class MediaStorageService
 
     private function objectName(string $relativePath): string
     {
-        $prefix = trim((string) config('services.gcs.path_prefix', 'bizgrid'), '/');
+        $prefix = $this->gcsConfig->pathPrefix();
 
         return $prefix !== '' ? $prefix.'/'.$relativePath : $relativePath;
     }

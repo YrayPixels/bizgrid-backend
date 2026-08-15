@@ -251,6 +251,9 @@ abstract class BaseAgent implements AgentInterface
             'completion_tokens' => $usage['completion_tokens'] ?? null,
             'total_tokens' => $usage['total_tokens'] ?? null,
             'http_status' => $response->status(),
+            'detail' => $response->successful()
+                ? null
+                : Str::limit($this->aiChat()->errorMessage($response), 2000, ''),
         ]);
     }
 }

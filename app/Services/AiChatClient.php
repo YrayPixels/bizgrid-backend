@@ -43,6 +43,8 @@ class AiChatClient
             unset($payload['tool_choice']);
         }
 
+        $payload = $this->preparePayload($provider, $payload);
+
         return $this->postChatCompletions($provider, $apiKey, $payload);
     }
 
@@ -75,6 +77,8 @@ class AiChatClient
             // tool parameters.properties as "[] is not of type 'object'".
             $payload = $this->normalizeToolSchemas($payload);
         }
+
+        $payload = $this->preparePayload($provider, $payload);
 
         return $this->postChatCompletions($provider, $apiKey, $payload);
     }
@@ -162,6 +166,7 @@ class AiChatClient
             try {
                 return Http::withToken($apiKey)
                     ->acceptJson()
+                    ->withHeaders(['User-Agent' => 'Bizgrid-AI/1.0'])
                     ->connectTimeout(20)
                     ->timeout(180)
                     ->post($url, $payload);
@@ -230,6 +235,166 @@ class AiChatClient
         return (string) ($response->json('error.message') ?? $response->body() ?? 'AI service returned an error.');
     }
 
+    /**
+     * Lightweight live check that the stored key is accepted by the provider.
+     *
+     * @return array{ok: bool, provider: string, http_status: int|null, message: string, hint: string|null}
+     */
+    public function probe(string $provider): array
+    {
+        $apiKey = $this->config->apiKey($provider);
+        if (! filled($apiKey)) {
+            return [
+                'ok' => false,
+                'provider' => $provider,
+                'http_status' => null,
+                'message' => 'No API key is configured for '.$provider.'.',
+                'hint' => $provider === 'gemini'
+                    ? 'Paste a Gemini API key from Google AI Studio (aistudio.google.com/apikey), then save and test again.'
+                    : 'Save an API key for this provider first.',
+            ];
+        }
+
+        try {
+            $response = $this->postChatCompletions($provider, $apiKey, [
+                'model' => $this->config->chatModel($provider),
+                'max_tokens' => 8,
+                'messages' => [
+                    ['role' => 'user', 'content' => 'Reply with ok'],
+                ],
+            ]);
+        } catch (\Throwable $e) {
+            return [
+                'ok' => false,
+                'provider' => $provider,
+                'http_status' => null,
+                'message' => Str::limit($e->getMessage(), 300),
+                'hint' => 'The server could not reach the provider. Check outbound HTTPS from this host.',
+            ];
+        }
+
+        if ($response->successful()) {
+            return [
+                'ok' => true,
+                'provider' => $provider,
+                'http_status' => $response->status(),
+                'message' => strtoupper($provider).' accepted the key.',
+                'hint' => null,
+            ];
+        }
+
+        $message = $this->limitError($this->errorMessage($response), 400);
+
+        return [
+            'ok' => false,
+            'provider' => $provider,
+            'http_status' => $response->status(),
+            'message' => $message,
+            'hint' => $this->hintForFailure($provider, $response->status(), $message),
+        ];
+    }
+
+    /**
+     * @param  array<string, mixed>  $payload
+     * @return array<string, mixed>
+     */
+    private function preparePayload(string $provider, array $payload): array
+    {
+        if ($provider !== 'gemini' || ! isset($payload['tools']) || ! is_array($payload['tools'])) {
+            return $payload;
+        }
+
+        $payload['tools'] = $this->sanitizeGeminiTools($payload['tools']);
+
+        return $payload;
+    }
+
+    /**
+     * @param  list<mixed>  $tools
+     * @return list<mixed>
+     */
+    private function sanitizeGeminiTools(array $tools): array
+    {
+        foreach ($tools as $index => $tool) {
+            if (! is_array($tool)) {
+                continue;
+            }
+            $parameters = $tool['function']['parameters'] ?? null;
+            if (is_array($parameters)) {
+                $tools[$index]['function']['parameters'] = $this->sanitizeGeminiSchema($parameters);
+            }
+        }
+
+        return $tools;
+    }
+
+    /**
+     * @param  array<mixed>  $schema
+     * @return array<mixed>
+     */
+    private function sanitizeGeminiSchema(array $schema): array
+    {
+        if (isset($schema['type']) && is_array($schema['type'])) {
+            $nonNull = array_values(array_filter(
+                $schema['type'],
+                static fn ($type) => $type !== 'null',
+            ));
+            if (count($nonNull) === 1) {
+                $schema['type'] = $nonNull[0];
+            }
+        }
+
+        unset($schema['additionalProperties']);
+
+        foreach ($schema as $key => $value) {
+            if (is_array($value)) {
+                $schema[$key] = $this->sanitizeGeminiSchema($value);
+            }
+        }
+
+        return $schema;
+    }
+
+    private function hintForFailure(string $provider, int $status, string $message): ?string
+    {
+        if ($provider !== 'gemini') {
+            return null;
+        }
+
+        $lower = strtolower($message);
+
+        if (
+            str_contains($lower, 'api_key_service_blocked')
+            || (str_contains($lower, 'this api') && str_contains($lower, 'are blocked'))
+        ) {
+            return 'This key is not allowed to call the Gemini API. In Google Cloud → APIs & Services → Credentials, open this key and set API restrictions to Generative Language API only (generativelanguage.googleapis.com). Also enable that API on the project. Do not reuse a Cloud Storage or Maps key. Easiest path: create a new key at aistudio.google.com/apikey and paste that instead.';
+        }
+
+        if ($status === 403 || str_contains($lower, 'permission') || str_contains($lower, 'denied')) {
+            return 'Gemini 403 is the key, not the shopper. Create a new key in Google AI Studio (aistudio.google.com/apikey). Since June 2026 unrestricted Cloud Console keys are rejected. Do not use a Maps or Cloud Storage key, and turn off HTTP-referrer restrictions for this server key.';
+        }
+
+        if ($status === 400 && str_contains($lower, 'api key')) {
+            return 'The Gemini key was sent but Google rejected it. Create a fresh AI Studio key and paste it here.';
+        }
+
+        if ($status === 404 || str_contains($lower, 'no longer available') || str_contains($lower, 'not found')) {
+            return 'This Gemini model is retired for new API keys. Switch chat and vision to Gemini 3.6 Flash, save, then test again.';
+        }
+
+        if (
+            $status === 429
+            || str_contains($lower, 'resource_exhausted')
+            || str_contains($lower, 'prepayment')
+            || str_contains($lower, 'credits are depleted')
+            || str_contains($lower, 'quota')
+        ) {
+            return 'The Gemini key works, but this Google AI Studio project has no prepaid credits left. Add billing or credits at https://ai.studio/projects, or route shopper, vision, and marketing to OpenAI until Gemini is funded again.';
+        }
+
+        return null;
+    }
+
     public function limitError(string $message, int $limit = 500): string
     {
         return Str::limit($message, $limit);
@@ -259,10 +424,12 @@ class AiChatClient
         }
 
         $payload['stream'] = true;
+        $payload = $this->preparePayload($provider, $payload);
 
         return Http::withToken($apiKey)
             ->withOptions(['stream' => true])
             ->acceptJson()
+            ->withHeaders(['User-Agent' => 'Bizgrid-AI/1.0'])
             ->connectTimeout(20)
             ->timeout(180)
             ->post($this->config->baseUrl($provider).'/chat/completions', $payload);

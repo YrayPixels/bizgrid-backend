@@ -53,8 +53,8 @@ return [
         'gemini' => [
             'api_key' => env('GEMINI_API_KEY'),
             'base_url' => env('GEMINI_BASE_URL', 'https://generativelanguage.googleapis.com/v1beta/openai'),
-            'chat_model' => env('GEMINI_CHAT_MODEL', 'gemini-2.5-flash'),
-            'vision_model' => env('GEMINI_VISION_MODEL', 'gemini-2.5-flash'),
+            'chat_model' => env('GEMINI_CHAT_MODEL', 'gemini-3.6-flash'),
+            'vision_model' => env('GEMINI_VISION_MODEL', 'gemini-3.6-flash'),
         ],
     ],
 
@@ -86,15 +86,14 @@ return [
         ],
         'gemini' => [
             'chat' => [
-                ['id' => 'gemini-2.5-flash', 'label' => 'Gemini 2.5 Flash', 'description' => 'Default for shopper, vision, and marketing'],
-                ['id' => 'gemini-2.5-pro', 'label' => 'Gemini 2.5 Pro', 'description' => 'Higher quality reasoning'],
-                ['id' => 'gemini-2.0-flash', 'label' => 'Gemini 2.0 Flash', 'description' => 'Fast multimodal Flash'],
-                ['id' => 'gemini-2.5-flash-lite', 'label' => 'Gemini 2.5 Flash-Lite', 'description' => 'Lowest-cost Gemini'],
+                ['id' => 'gemini-3.6-flash', 'label' => 'Gemini 3.6 Flash', 'description' => 'Default for shopper, vision, and marketing'],
+                ['id' => 'gemini-3.1-pro-preview', 'label' => 'Gemini 3.1 Pro', 'description' => 'Higher quality reasoning'],
+                ['id' => 'gemini-3.1-flash-lite', 'label' => 'Gemini 3.1 Flash-Lite', 'description' => 'Lowest-cost Gemini'],
             ],
             'vision' => [
-                ['id' => 'gemini-2.5-flash', 'label' => 'Gemini 2.5 Flash', 'description' => 'Product photo → name, price, description'],
-                ['id' => 'gemini-2.5-pro', 'label' => 'Gemini 2.5 Pro', 'description' => 'Higher quality image understanding'],
-                ['id' => 'gemini-2.0-flash', 'label' => 'Gemini 2.0 Flash', 'description' => 'Fast multimodal Flash'],
+                ['id' => 'gemini-3.6-flash', 'label' => 'Gemini 3.6 Flash', 'description' => 'Product photo → name, price, description'],
+                ['id' => 'gemini-3.1-pro-preview', 'label' => 'Gemini 3.1 Pro', 'description' => 'Higher quality image understanding'],
+                ['id' => 'gemini-3.1-flash-lite', 'label' => 'Gemini 3.1 Flash-Lite', 'description' => 'Fastest, lowest-cost vision'],
             ],
         ],
     ],

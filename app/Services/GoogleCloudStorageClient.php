@@ -8,16 +8,22 @@ use RuntimeException;
 
 class GoogleCloudStorageClient
 {
-    private const TOKEN_CACHE_KEY = 'gcs.access_token';
+    public function __construct(
+        private readonly PlatformGcsConfigService $config,
+    ) {}
 
     public function configured(): bool
     {
-        return filled(config('services.gcs.bucket')) && $this->serviceAccount() !== null;
+        return $this->config->configured();
     }
 
     public function put(string $objectName, string $contents, string $contentType): string
     {
-        $bucket = (string) config('services.gcs.bucket');
+        $bucket = $this->config->bucket();
+        if ($bucket === null) {
+            throw new RuntimeException('Google Cloud Storage bucket is not configured.');
+        }
+
         $token = $this->accessToken();
         $encodedName = rawurlencode($objectName);
 
@@ -37,24 +43,111 @@ class GoogleCloudStorageClient
 
     public function publicUrl(string $objectName): string
     {
-        $custom = rtrim((string) config('services.gcs.public_url'), '/');
-        if ($custom !== '') {
+        $custom = $this->config->publicUrl();
+        if ($custom !== null) {
             return $custom.'/'.ltrim($objectName, '/');
         }
 
-        $bucket = (string) config('services.gcs.bucket');
+        $bucket = $this->config->bucket() ?? '';
 
         return 'https://storage.googleapis.com/'.$bucket.'/'.ltrim($objectName, '/');
     }
 
+    /**
+     * Upload a tiny object and optionally check that the public URL is readable.
+     *
+     * @return array{ok: bool, message: string, url: string|null, public: bool|null, hint: string|null}
+     */
+    public function probe(): array
+    {
+        if (! $this->configured()) {
+            return [
+                'ok' => false,
+                'message' => 'Bucket or service account JSON is missing.',
+                'url' => null,
+                'public' => null,
+                'hint' => 'Save a bucket name and the service-account JSON first, then test. Do not use a Gemini API key here.',
+            ];
+        }
+
+        $objectName = trim($this->config->pathPrefix().'/storehause/health/gcs-probe.txt', '/');
+
+        try {
+            $url = $this->put(
+                $objectName,
+                'bizgrid-gcs-ok '.gmdate('c'),
+                'text/plain',
+            );
+        } catch (\Throwable $e) {
+            $message = $e->getMessage();
+
+            return [
+                'ok' => false,
+                'message' => mb_substr($message, 0, 400),
+                'url' => null,
+                'public' => null,
+                'hint' => $this->hintForFailure($message),
+            ];
+        }
+
+        $readable = null;
+        try {
+            $public = Http::timeout(15)->get($url);
+            $readable = $public->successful();
+        } catch (\Throwable) {
+            $readable = false;
+        }
+
+        if ($readable === true) {
+            return [
+                'ok' => true,
+                'message' => 'Uploaded a test file and the public URL is readable.',
+                'url' => $url,
+                'public' => true,
+                'hint' => null,
+            ];
+        }
+
+        return [
+            'ok' => true,
+            'message' => 'Uploaded a test file, but the public URL is not readable yet.',
+            'url' => $url,
+            'public' => false,
+            'hint' => 'The service account can write. Grant allUsers Storage Object Viewer on the bucket (or on the '.$this->config->pathPrefix().'/ prefix) so storefront images load in the browser.',
+        ];
+    }
+
+    private function hintForFailure(string $message): string
+    {
+        $lower = strtolower($message);
+
+        if (str_contains($lower, 'billing') || str_contains($lower, 'delinquent')) {
+            return 'Google Cloud billing is disabled on the project that owns this bucket (unpaid or failed card). Open console.cloud.google.com/billing, pay or update the payment method, then link that billing account to the GCS project. IAM on the bucket cannot fix this.';
+        }
+
+        if (str_contains($lower, 'auth failed') || str_contains($lower, 'invalid_grant') || str_contains($lower, 'jwt')) {
+            return 'The JSON was not accepted as a service account. Use Keys → Add key → JSON from IAM → Service accounts, not a Gemini AIza key.';
+        }
+
+        if (str_contains($lower, '403') || str_contains($lower, 'forbidden') || str_contains($lower, 'access denied')) {
+            return 'The account cannot write to this bucket. Give it Storage Object Admin on the bucket, and confirm the bucket name is exact.';
+        }
+
+        if (str_contains($lower, '404') || str_contains($lower, 'not found')) {
+            return 'The bucket name is wrong or the bucket is in another project.';
+        }
+
+        return 'Check bucket name, project, and that this server can reach oauth2.googleapis.com and storage.googleapis.com.';
+    }
+
     private function accessToken(): string
     {
-        $cached = Cache::get(self::TOKEN_CACHE_KEY);
+        $cached = Cache::get(PlatformGcsConfigService::TOKEN_CACHE_KEY);
         if (is_string($cached) && $cached !== '') {
             return $cached;
         }
 
-        $account = $this->serviceAccount();
+        $account = $this->config->serviceAccount();
         if ($account === null) {
             throw new RuntimeException('Google Cloud Storage credentials are not configured.');
         }
@@ -94,57 +187,9 @@ class GoogleCloudStorageClient
             );
         }
 
-        Cache::put(self::TOKEN_CACHE_KEY, $token, max(60, $expiresIn - 120));
+        Cache::put(PlatformGcsConfigService::TOKEN_CACHE_KEY, $token, max(60, $expiresIn - 120));
 
         return $token;
-    }
-
-    /**
-     * @return array{client_email: string, private_key: string, project_id?: string}|null
-     */
-    private function serviceAccount(): ?array
-    {
-        $raw = config('services.gcs.credentials');
-        if (filled($raw) && is_string($raw)) {
-            $decoded = json_decode($raw, true);
-            if (is_array($decoded)) {
-                return $this->normalizeServiceAccount($decoded);
-            }
-        }
-
-        $path = config('services.gcs.key_file') ?: getenv('GOOGLE_APPLICATION_CREDENTIALS');
-        if (is_string($path) && $path !== '' && is_file($path)) {
-            $decoded = json_decode((string) file_get_contents($path), true);
-            if (is_array($decoded)) {
-                return $this->normalizeServiceAccount($decoded);
-            }
-        }
-
-        return null;
-    }
-
-    /**
-     * @param  array<string, mixed>  $decoded
-     * @return array{client_email: string, private_key: string, project_id?: string}|null
-     */
-    private function normalizeServiceAccount(array $decoded): ?array
-    {
-        $email = $decoded['client_email'] ?? null;
-        $key = $decoded['private_key'] ?? null;
-        if (! is_string($email) || $email === '' || ! is_string($key) || $key === '') {
-            return null;
-        }
-
-        $account = [
-            'client_email' => $email,
-            'private_key' => str_replace('\\n', "\n", $key),
-        ];
-
-        if (is_string($decoded['project_id'] ?? null) && $decoded['project_id'] !== '') {
-            $account['project_id'] = $decoded['project_id'];
-        }
-
-        return $account;
     }
 
     private function base64UrlEncode(string $value): string
