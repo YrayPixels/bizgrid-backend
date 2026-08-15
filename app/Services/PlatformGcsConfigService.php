@@ -10,7 +10,7 @@ class PlatformGcsConfigService
 {
     private const CACHE_KEY = 'platform.gcs.config';
 
-    public const TOKEN_CACHE_KEY = 'gcs.access_token';
+    public const TOKEN_CACHE_KEY = 'gcs.access_token.full_control';
 
     public const DRIVER_LOCAL = 'local';
 
@@ -165,7 +165,9 @@ class PlatformGcsConfigService
     {
         Cache::forget(self::CACHE_KEY);
         Cache::forget(self::TOKEN_CACHE_KEY);
+        Cache::forget('gcs.access_token');
         Cache::forget(GoogleServiceAccountAuth::VERTEX_TOKEN_CACHE_KEY);
+        Cache::forget('gcs.public-iam.'.$this->bucket().'.'.$this->pathPrefix());
     }
 
     private function persistCredentials(mixed $value): void

@@ -12,6 +12,8 @@ class GoogleServiceAccountAuth
 
     public const STORAGE_READ_WRITE_SCOPE = 'https://www.googleapis.com/auth/devstorage.read_write';
 
+    public const STORAGE_FULL_CONTROL_SCOPE = 'https://www.googleapis.com/auth/devstorage.full_control';
+
     public const VERTEX_TOKEN_CACHE_KEY = 'vertex.access_token';
 
     /**

@@ -12,6 +12,13 @@ uses(RefreshDatabase::class);
 beforeEach(function () {
     PlatformSetting::query()->delete();
     app(PlatformGcsConfigService::class)->clearCache();
+    Http::fake([
+        'https://oauth2.googleapis.com/token' => Http::response([
+            'access_token' => 'ya29.test-token',
+            'expires_in' => 3600,
+        ], 200),
+        'storage.googleapis.com/*' => Http::response(['bindings' => [], 'etag' => 'test'], 200),
+    ]);
 });
 
 it('returns google cloud storage settings for admins without leaking credentials', function () {

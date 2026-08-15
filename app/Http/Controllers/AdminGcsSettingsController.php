@@ -65,6 +65,10 @@ class AdminGcsSettingsController extends Controller
 
         $this->invalidateAdminApiCache();
 
+        if ($data['using_cloud'] ?? false) {
+            $this->gcs->ensurePublicRead();
+        }
+
         return response()->json([
             'success' => true,
             'data' => $data,

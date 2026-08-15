@@ -9,6 +9,7 @@ use App\Services\PlatformAiConfigService;
 use App\Services\PlatformGcsConfigService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\UploadedFile;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
 
 uses(RefreshDatabase::class);
@@ -410,7 +411,7 @@ it('fetches private google cloud storage images with the service account for try
     });
 });
 
-it('signs private google cloud storage urls so the browser can load try-on results', function () {
+it('makes google cloud storage objects publicly readable', function () {
     config([
         'services.gcs.driver' => 'gcs',
         'services.gcs.bucket' => 'biz-bucket-grid',
@@ -419,15 +420,49 @@ it('signs private google cloud storage urls so the browser can load try-on resul
         'services.gcs.credentials' => geminiServiceAccountJson(),
     ]);
     app(PlatformGcsConfigService::class)->clearCache();
+    Cache::flush();
 
-    $url = app(GoogleCloudStorageClient::class)->browserUrl(
-        'https://storage.googleapis.com/biz-bucket-grid/bizgrid/storehause/try-on/10/results/a2825281-2adf-43da-8c57-2a9ac2d42f77.jpg',
+    Http::fake(function ($request) {
+        if (str_contains($request->url(), 'oauth2.googleapis.com/token')) {
+            return Http::response([
+                'access_token' => 'ya29.public-token',
+                'expires_in' => 3600,
+            ], 200);
+        }
+
+        if (str_contains($request->url(), '/iam') && $request->method() === 'GET') {
+            return Http::response(['bindings' => [], 'etag' => 'abc123'], 200);
+        }
+
+        if (str_contains($request->url(), '/iam') && $request->method() === 'PUT') {
+            return Http::response(['etag' => 'def456'], 200);
+        }
+
+        if (str_contains($request->url(), 'upload/storage')) {
+            return Http::response(['name' => 'bizgrid/photo.jpg'], 200);
+        }
+
+        return Http::response(['kind' => 'storage#objectAccessControl'], 200);
+    });
+
+    $url = app(GoogleCloudStorageClient::class)->put(
+        'bizgrid/storehause/try-on/10/results/look.jpg',
+        'fake-image-bytes',
+        'image/jpeg',
     );
 
-    expect($url)
-        ->toContain('https://storage.googleapis.com/biz-bucket-grid/bizgrid/storehause/try-on/10/results/')
-        ->toContain('X-Goog-Algorithm=GOOG4-RSA-SHA256')
-        ->toContain('X-Goog-Signature=')
-        ->toContain('X-Goog-Expires=');
+    expect($url)->toBe('https://storage.googleapis.com/biz-bucket-grid/bizgrid/storehause/try-on/10/results/look.jpg')
+        ->and(app(GoogleCloudStorageClient::class)->browserUrl($url))->toBe($url);
+
+    Http::assertSent(function ($request) {
+        if (! str_contains($request->url(), '/iam') || strtoupper($request->method()) !== 'PUT') {
+            return false;
+        }
+
+        $payload = json_encode($request->data(), JSON_UNESCAPED_SLASHES);
+
+        return str_contains((string) $payload, 'allUsers')
+            && str_contains((string) $payload, 'roles/storage.objectViewer');
+    });
 });
 
