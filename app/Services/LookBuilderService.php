@@ -139,11 +139,15 @@ class LookBuilderService
         }
 
         $currency = strtoupper((string) ($primary->currency ?: ($intent['currency'] ?? 'NGN')));
-        $tryOnProduct = collect($items)->first(function (array $item) use ($store, $catalog) {
-            $product = $catalog->firstWhere('id', $item['product_id']);
+        $tryOnIds = collect($items)
+            ->filter(function (array $item) use ($store, $catalog) {
+                $product = $catalog->firstWhere('id', $item['product_id']);
 
-            return $product && $this->tryOn->productAllowsTryOn($store, $product);
-        });
+                return $product && $this->tryOn->productAllowsTryOn($store, $product);
+            })
+            ->pluck('product_id')
+            ->values()
+            ->all();
 
         return [
             'id' => (string) Str::uuid(),
@@ -157,7 +161,8 @@ class LookBuilderService
             'items' => $items,
             'total_price' => round($running, 2),
             'currency' => $currency,
-            'try_on_product_id' => $tryOnProduct['product_id'] ?? $primary->id,
+            'try_on_product_id' => $tryOnIds[0] ?? $primary->id,
+            'try_on_product_ids' => $tryOnIds,
             'within_budget' => $budgetMax === null ? true : $running <= $budgetMax + 0.01,
         ];
     }

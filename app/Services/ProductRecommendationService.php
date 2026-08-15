@@ -128,7 +128,7 @@ class ProductRecommendationService
             'items' => $items,
             'total_price' => round((float) $minPrice, 2),
             'currency' => $currency,
-            'try_on_product_id' => $picks->first(fn (StoreProduct $p) => $this->tryOn->productAllowsTryOn($store, $p))?->id,
+            ...$this->tryOnMeta($store, $picks),
             'within_budget' => $withinBudget,
         ];
     }
@@ -207,7 +207,7 @@ class ProductRecommendationService
             'items' => $items,
             'total_price' => round((float) $minPrice, 2),
             'currency' => $currency,
-            'try_on_product_id' => $picks->first(fn (StoreProduct $p) => $this->tryOn->productAllowsTryOn($store, $p))?->id,
+            ...$this->tryOnMeta($store, $picks),
             'within_budget' => true,
             'overview' => true,
         ];
@@ -264,7 +264,7 @@ class ProductRecommendationService
             'items' => $items,
             'total_price' => round((float) $minPrice, 2),
             'currency' => $currency,
-            'try_on_product_id' => $picks->first(fn (StoreProduct $p) => $this->tryOn->productAllowsTryOn($store, $p))?->id,
+            ...$this->tryOnMeta($store, $picks),
             'within_budget' => $withinBudget,
         ];
     }
@@ -632,6 +632,24 @@ class ProductRecommendationService
         }
 
         return 3;
+    }
+
+    /**
+     * @param  \Illuminate\Support\Collection<int, StoreProduct>  $picks
+     * @return array{try_on_product_id: string|null, try_on_product_ids: list<string>}
+     */
+    private function tryOnMeta(Store $store, $picks): array
+    {
+        $ids = $picks
+            ->filter(fn (StoreProduct $product) => $this->tryOn->productAllowsTryOn($store, $product))
+            ->map(fn (StoreProduct $product) => $product->id)
+            ->values()
+            ->all();
+
+        return [
+            'try_on_product_id' => $ids[0] ?? null,
+            'try_on_product_ids' => $ids,
+        ];
     }
 
     /**

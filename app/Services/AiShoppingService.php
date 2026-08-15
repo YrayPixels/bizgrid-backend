@@ -945,16 +945,21 @@ class AiShoppingService
         if (($recommendation['type'] ?? '') === 'look') {
             $suggestions = ['Make it cheaper', 'More elegant', 'Change the bag'];
             if ($shopper['supports_try_on'] ?? false) {
-                $suggestions[] = 'See it on me';
+                $suggestions[] = 'Try this look on me';
             }
 
             return $suggestions;
         }
 
-        return [
+        $suggestions = [
             'Cheaper options',
             'Show alternatives',
             'Something better for work',
         ];
+        if ($shopper['supports_try_on'] ?? false) {
+            $suggestions[] = 'Try this look on me';
+        }
+
+        return $suggestions;
     }
 }
