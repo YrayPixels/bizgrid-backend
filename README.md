@@ -102,7 +102,7 @@ See [`.env.example`](./.env.example) for the full list. Common groups:
 | Area | Variables |
 |------|-----------|
 | AI | `AI_PROVIDER` (`openai`, `deepseek`, or `gemini`), `OPENAI_API_KEY`, `DEEPSEEK_API_KEY`, `GEMINI_API_KEY` |
-| Media | `GOOGLE_CLOUD_STORAGE_BUCKET`, `GOOGLE_CLOUD_CREDENTIALS` (optional; local `public/` fallback) |
+| Media | `GOOGLE_CLOUD_STORAGE_DRIVER` (`local` or `gcs`), `GOOGLE_CLOUD_STORAGE_BUCKET`, `GOOGLE_CLOUD_CREDENTIALS` (admin switch preferred) |
 | Platform | `STOREHAUSE_APP_URL`, `STOREHAUSE_PLATFORM_DOMAIN`, `STOREHAUSE_BRAND_NAME` |
 | Admin seed | `STOREHAUSE_ADMIN_EMAIL`, `STOREHAUSE_ADMIN_PASSWORD` |
 | Demo merchant | `STOREHAUSE_DEMO_LOGIN`, `STOREHAUSE_DEMO_EMAIL` |

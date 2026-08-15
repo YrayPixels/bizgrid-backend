@@ -12,9 +12,28 @@ class PlatformGcsConfigService
 
     public const TOKEN_CACHE_KEY = 'gcs.access_token';
 
+    public const DRIVER_LOCAL = 'local';
+
+    public const DRIVER_GCS = 'gcs';
+
     public function configured(): bool
     {
         return filled($this->bucket()) && $this->serviceAccount() !== null;
+    }
+
+    public function driver(): string
+    {
+        $stored = $this->normalizeDriver($this->stored('gcs.driver') ?? config('services.gcs.driver'));
+        if ($stored !== null) {
+            return $stored;
+        }
+
+        return $this->configured() ? self::DRIVER_GCS : self::DRIVER_LOCAL;
+    }
+
+    public function usingCloud(): bool
+    {
+        return $this->driver() === self::DRIVER_GCS && $this->configured();
     }
 
     public function bucket(): ?string
@@ -66,6 +85,8 @@ class PlatformGcsConfigService
 
     /**
      * @return array{
+     *     driver: string,
+     *     using_cloud: bool,
      *     configured: bool,
      *     project_id: string|null,
      *     bucket: string|null,
@@ -80,6 +101,8 @@ class PlatformGcsConfigService
         $account = $this->serviceAccount();
 
         return [
+            'driver' => $this->driver(),
+            'using_cloud' => $this->usingCloud(),
             'configured' => $this->configured(),
             'project_id' => $this->projectId(),
             'bucket' => $this->bucket(),
@@ -92,6 +115,7 @@ class PlatformGcsConfigService
 
     /**
      * @param  array{
+     *     driver?: string|null,
      *     bucket?: string|null,
      *     project_id?: string|null,
      *     path_prefix?: string|null,
@@ -101,6 +125,16 @@ class PlatformGcsConfigService
      */
     public function update(array $input): array
     {
+        if (array_key_exists('driver', $input)) {
+            $driver = $this->normalizeDriver($input['driver']);
+            if ($driver !== null) {
+                $this->persist('gcs.driver', $driver);
+            } elseif ($input['driver'] === null || trim((string) $input['driver']) === '') {
+                PlatformSetting::query()->where('key', 'gcs.driver')->delete();
+                $this->clearCache();
+            }
+        }
+
         if (array_key_exists('bucket', $input)) {
             $this->maybePersistValue('gcs.bucket', $input['bucket']);
         }
@@ -235,6 +269,7 @@ class PlatformGcsConfigService
         $settings = Cache::remember(self::CACHE_KEY, 300, function () {
             return PlatformSetting::query()
                 ->whereIn('key', [
+                    'gcs.driver',
                     'gcs.bucket',
                     'gcs.project_id',
                     'gcs.path_prefix',
@@ -259,5 +294,16 @@ class PlatformGcsConfigService
         $trimmed = trim($value);
 
         return $trimmed !== '' ? $trimmed : null;
+    }
+
+    private function normalizeDriver(mixed $value): ?string
+    {
+        if (! is_string($value)) {
+            return null;
+        }
+
+        $driver = strtolower(trim($value));
+
+        return in_array($driver, [self::DRIVER_LOCAL, self::DRIVER_GCS], true) ? $driver : null;
     }
 }

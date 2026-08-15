@@ -15,13 +15,25 @@ beforeEach(function () {
 });
 
 it('returns google cloud storage settings for admins without leaking credentials', function () {
+    config([
+        'services.gcs.driver' => null,
+        'services.gcs.bucket' => null,
+        'services.gcs.credentials' => null,
+        'services.gcs.key_file' => null,
+    ]);
+    app(PlatformGcsConfigService::class)->clearCache();
+
     $admin = User::factory()->create(['is_admin' => true]);
 
     $response = $this->actingAs($admin)->getJson('/api/admin/gcs-settings');
 
     $response->assertOk()
+        ->assertJsonPath('data.driver', 'local')
+        ->assertJsonPath('data.using_cloud', false)
         ->assertJsonStructure([
             'data' => [
+                'driver',
+                'using_cloud',
                 'configured',
                 'project_id',
                 'bucket',
@@ -61,6 +73,8 @@ it('lets super admins save google cloud storage settings from the admin page', f
     ]);
 
     $response->assertOk()
+        ->assertJsonPath('data.driver', 'gcs')
+        ->assertJsonPath('data.using_cloud', true)
         ->assertJsonPath('data.configured', true)
         ->assertJsonPath('data.bucket', 'bizgrid-media')
         ->assertJsonPath('data.project_id', 'bizgrid-test')
@@ -183,4 +197,53 @@ it('tells admins when gcs is not configured yet', function () {
     $response->assertOk()
         ->assertJsonPath('data.ok', false)
         ->assertJsonPath('data.message', 'Bucket or service account JSON is missing.');
+});
+
+it('lets super admins switch between local file storage and google cloud storage', function () {
+    $admin = User::factory()->create([
+        'is_admin' => true,
+        'admin_role' => 'super_admin',
+    ]);
+
+    $credentials = json_encode([
+        'type' => 'service_account',
+        'project_id' => 'bizgrid-test',
+        'client_email' => 'bizgrid@test.iam.gserviceaccount.com',
+        'private_key' => "-----BEGIN PRIVATE KEY-----\nABC\n-----END PRIVATE KEY-----",
+    ]);
+
+    $this->actingAs($admin)->patchJson('/api/admin/gcs-settings', [
+        'driver' => 'gcs',
+        'bucket' => 'bizgrid-media',
+        'credentials' => $credentials,
+    ])->assertOk()
+        ->assertJsonPath('data.driver', 'gcs')
+        ->assertJsonPath('data.using_cloud', true);
+
+    $response = $this->actingAs($admin)->patchJson('/api/admin/gcs-settings', [
+        'driver' => 'local',
+    ]);
+
+    $response->assertOk()
+        ->assertJsonPath('data.driver', 'local')
+        ->assertJsonPath('data.using_cloud', false)
+        ->assertJsonPath('data.configured', true)
+        ->assertJsonPath('data.bucket', 'bizgrid-media')
+        ->assertJsonPath('data.credentials_preview', 'bizgrid@test.iam.gserviceaccount.com');
+
+    $config = app(PlatformGcsConfigService::class);
+    expect($config->driver())->toBe('local')
+        ->and($config->usingCloud())->toBeFalse()
+        ->and($config->configured())->toBeTrue();
+});
+
+it('rejects an unknown storage driver', function () {
+    $admin = User::factory()->create([
+        'is_admin' => true,
+        'admin_role' => 'super_admin',
+    ]);
+
+    $this->actingAs($admin)->patchJson('/api/admin/gcs-settings', [
+        'driver' => 's3',
+    ])->assertStatus(422);
 });

@@ -16,14 +16,14 @@ class MediaStorageService
 
     public function usingCloud(): bool
     {
-        return $this->gcs->configured();
+        return $this->gcsConfig->usingCloud();
     }
 
     public function store(string $relativePath, string $contents, string $contentType): string
     {
         $relativePath = ltrim(str_replace('\\', '/', $relativePath), '/');
 
-        if ($this->gcs->configured()) {
+        if ($this->usingCloud()) {
             try {
                 return $this->gcs->put($this->objectName($relativePath), $contents, $contentType);
             } catch (\Throwable $e) {

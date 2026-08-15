@@ -6,6 +6,7 @@ use App\Models\AgentExecutionLog;
 use App\Services\GoogleCloudStorageClient;
 use App\Services\MediaStorageService;
 use App\Services\PlatformAiConfigService;
+use App\Services\PlatformGcsConfigService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Http;
@@ -222,4 +223,41 @@ it('uploads merchant files to google cloud storage when configured', function ()
             && str_contains($request->url(), 'name=bizgrid%2Fstorehause%2Fuploads%2F9%2Fphoto.jpg')
             && $request->hasHeader('Authorization', 'Bearer ya29.test-token');
     });
+});
+
+it('keeps uploads on the local public disk when the storage driver is local', function () {
+    $key = openssl_pkey_new([
+        'private_key_bits' => 2048,
+        'private_key_type' => OPENSSL_KEYTYPE_RSA,
+    ]);
+    expect($key)->not->toBeFalse();
+    openssl_pkey_export($key, $pem);
+
+    config([
+        'services.gcs.driver' => 'local',
+        'services.gcs.bucket' => 'bizgrid-media',
+        'services.gcs.path_prefix' => 'bizgrid',
+        'services.gcs.credentials' => json_encode([
+            'type' => 'service_account',
+            'project_id' => 'bizgrid-test',
+            'client_email' => 'bizgrid@test.iam.gserviceaccount.com',
+            'private_key' => $pem,
+        ]),
+        'app.url' => 'http://localhost',
+    ]);
+    app(PlatformGcsConfigService::class)->clearCache();
+
+    Http::fake();
+
+    $url = app(MediaStorageService::class)->store(
+        'storehause/uploads/1/local-driver.txt',
+        'stay on disk',
+        'text/plain',
+    );
+
+    expect(app(MediaStorageService::class)->usingCloud())->toBeFalse()
+        ->and($url)->toContain('storehause/uploads/1/local-driver.txt')
+        ->and(file_get_contents(public_path('storehause/uploads/1/local-driver.txt')))->toBe('stay on disk');
+
+    Http::assertNothingSent();
 });

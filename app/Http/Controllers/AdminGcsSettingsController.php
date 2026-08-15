@@ -33,6 +33,7 @@ class AdminGcsSettingsController extends Controller
     public function update(Request $request): JsonResponse
     {
         $validator = Validator::make($request->all(), [
+            'driver' => 'nullable|string|in:local,gcs',
             'bucket' => 'nullable|string|max:222',
             'project_id' => 'nullable|string|max:128',
             'path_prefix' => 'nullable|string|max:120',
@@ -56,6 +57,8 @@ class AdminGcsSettingsController extends Controller
         }
 
         $this->audit->log($request, 'platform.gcs_settings.updated', 'platform_setting', null, [
+            'driver' => $data['driver'],
+            'using_cloud' => $data['using_cloud'],
             'configured' => $data['configured'],
             'bucket' => $data['bucket'],
         ]);
@@ -65,7 +68,7 @@ class AdminGcsSettingsController extends Controller
         return response()->json([
             'success' => true,
             'data' => $data,
-            'message' => 'Google Cloud Storage settings updated.',
+            'message' => 'Storage settings updated.',
         ]);
     }
 
