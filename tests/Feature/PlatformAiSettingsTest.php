@@ -354,3 +354,108 @@ it('explains when gemini prepaid credits are depleted', function () {
 
     expect($response->json('data.hint'))->toContain('prepaid credits');
 });
+
+it('rejects vertex gemini auth without a service account', function () {
+    $admin = User::factory()->create([
+        'is_admin' => true,
+        'admin_role' => 'super_admin',
+    ]);
+
+    $response = $this->actingAs($admin)->patchJson('/api/admin/ai-settings', [
+        'gemini_auth' => 'vertex',
+    ]);
+
+    $response->assertStatus(422)
+        ->assertJsonPath('message', 'Gemini Vertex AI needs the Google Cloud service account JSON under File storage. Enable the Vertex AI API and grant that account Vertex AI User.');
+});
+
+it('lets super admins switch gemini to vertex ai when a service account is saved', function () {
+    $key = openssl_pkey_new([
+        'private_key_bits' => 2048,
+        'private_key_type' => OPENSSL_KEYTYPE_RSA,
+    ]);
+    expect($key)->not->toBeFalse();
+    openssl_pkey_export($key, $pem);
+
+    config([
+        'ai.providers.openai.api_key' => 'test-openai-key',
+        'ai.providers.gemini.api_key' => null,
+        'services.gcs.credentials' => json_encode([
+            'type' => 'service_account',
+            'project_id' => 'bizgrid-test',
+            'client_email' => 'bizgrid@test.iam.gserviceaccount.com',
+            'private_key' => $pem,
+        ]),
+        'services.gcs.project_id' => 'bizgrid-test',
+    ]);
+    app(\App\Services\PlatformGcsConfigService::class)->clearCache();
+
+    $admin = User::factory()->create([
+        'is_admin' => true,
+        'admin_role' => 'super_admin',
+    ]);
+
+    $response = $this->actingAs($admin)->patchJson('/api/admin/ai-settings', [
+        'gemini_auth' => 'vertex',
+        'gemini_location' => 'global',
+        'shopper_provider' => 'gemini',
+        'vision_provider' => 'gemini',
+    ]);
+
+    $response->assertOk()
+        ->assertJsonPath('data.gemini_auth', 'vertex')
+        ->assertJsonPath('data.providers.gemini.configured', true)
+        ->assertJsonPath('data.providers.gemini.auth', 'vertex')
+        ->assertJsonPath('data.providers.gemini.vertex_service_account', 'bizgrid@test.iam.gserviceaccount.com')
+        ->assertJsonPath('data.features.shopper', 'gemini');
+});
+
+it('probes gemini through vertex ai with a service account token', function () {
+    $key = openssl_pkey_new([
+        'private_key_bits' => 2048,
+        'private_key_type' => OPENSSL_KEYTYPE_RSA,
+    ]);
+    expect($key)->not->toBeFalse();
+    openssl_pkey_export($key, $pem);
+
+    config([
+        'ai.providers.gemini.api_key' => null,
+        'ai.providers.gemini.auth' => 'vertex',
+        'services.gcs.credentials' => json_encode([
+            'type' => 'service_account',
+            'project_id' => 'bizgrid-test',
+            'client_email' => 'bizgrid@test.iam.gserviceaccount.com',
+            'private_key' => $pem,
+        ]),
+        'services.gcs.project_id' => 'bizgrid-test',
+    ]);
+    app(\App\Services\PlatformGcsConfigService::class)->clearCache();
+
+    Http::fake([
+        'https://oauth2.googleapis.com/token' => Http::response([
+            'access_token' => 'ya29.vertex-token',
+            'expires_in' => 3600,
+        ], 200),
+        'aiplatform.googleapis.com/*' => Http::response([
+            'choices' => [['message' => ['role' => 'assistant', 'content' => 'ok']]],
+        ], 200),
+    ]);
+
+    $admin = User::factory()->create([
+        'is_admin' => true,
+        'admin_role' => 'super_admin',
+    ]);
+
+    $response = $this->actingAs($admin)->postJson('/api/admin/ai-settings/probe', [
+        'provider' => 'gemini',
+    ]);
+
+    $response->assertOk()
+        ->assertJsonPath('data.ok', true)
+        ->assertJsonPath('data.message', 'GEMINI accepted the Vertex AI service account.');
+
+    Http::assertSent(function ($request) {
+        return str_contains($request->url(), 'aiplatform.googleapis.com')
+            && ($request['model'] ?? null) === 'google/gemini-3.6-flash';
+    });
+});

@@ -2,7 +2,6 @@
 
 namespace App\Services;
 
-use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
 use RuntimeException;
 
@@ -10,6 +9,7 @@ class GoogleCloudStorageClient
 {
     public function __construct(
         private readonly PlatformGcsConfigService $config,
+        private readonly GoogleServiceAccountAuth $auth,
     ) {}
 
     public function configured(): bool
@@ -142,58 +142,15 @@ class GoogleCloudStorageClient
 
     private function accessToken(): string
     {
-        $cached = Cache::get(PlatformGcsConfigService::TOKEN_CACHE_KEY);
-        if (is_string($cached) && $cached !== '') {
-            return $cached;
-        }
-
         $account = $this->config->serviceAccount();
         if ($account === null) {
             throw new RuntimeException('Google Cloud Storage credentials are not configured.');
         }
 
-        $now = time();
-        $header = $this->base64UrlEncode(json_encode(['alg' => 'RS256', 'typ' => 'JWT'], JSON_THROW_ON_ERROR));
-        $claims = $this->base64UrlEncode(json_encode([
-            'iss' => $account['client_email'],
-            'scope' => 'https://www.googleapis.com/auth/devstorage.read_write',
-            'aud' => 'https://oauth2.googleapis.com/token',
-            'iat' => $now,
-            'exp' => $now + 3600,
-        ], JSON_THROW_ON_ERROR));
-
-        $unsigned = $header.'.'.$claims;
-        $signature = '';
-        $ok = openssl_sign($unsigned, $signature, $account['private_key'], OPENSSL_ALGO_SHA256);
-        if (! $ok) {
-            throw new RuntimeException('Could not sign Google Cloud Storage JWT.');
-        }
-
-        $jwt = $unsigned.'.'.$this->base64UrlEncode($signature);
-
-        $response = Http::asForm()
-            ->timeout(20)
-            ->post('https://oauth2.googleapis.com/token', [
-                'grant_type' => 'urn:ietf:params:oauth:grant-type:jwt-bearer',
-                'assertion' => $jwt,
-            ]);
-
-        $token = $response->json('access_token');
-        $expiresIn = (int) ($response->json('expires_in') ?? 3600);
-
-        if (! $response->successful() || ! is_string($token) || $token === '') {
-            throw new RuntimeException(
-                'Google Cloud Storage auth failed: '.$response->status().' '.mb_substr($response->body(), 0, 300)
-            );
-        }
-
-        Cache::put(PlatformGcsConfigService::TOKEN_CACHE_KEY, $token, max(60, $expiresIn - 120));
-
-        return $token;
-    }
-
-    private function base64UrlEncode(string $value): string
-    {
-        return rtrim(strtr(base64_encode($value), '+/', '-_'), '=');
+        return $this->auth->accessToken(
+            $account,
+            GoogleServiceAccountAuth::STORAGE_READ_WRITE_SCOPE,
+            PlatformGcsConfigService::TOKEN_CACHE_KEY,
+        );
     }
 }

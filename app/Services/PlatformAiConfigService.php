@@ -25,6 +25,11 @@ class PlatformAiConfigService
         'gemini-2.5-pro' => 'gemini-3.1-pro-preview',
     ];
 
+    public function __construct(
+        private readonly PlatformGcsConfigService $gcs,
+        private readonly GoogleServiceAccountAuth $googleAuth,
+    ) {}
+
     public function supportedProviders(): array
     {
         return self::PROVIDERS;
@@ -125,9 +130,58 @@ class PlatformAiConfigService
         return filled($envKey) ? $this->normalizeApiKey((string) $envKey) : null;
     }
 
+    public function requestCredential(?string $provider = null): ?string
+    {
+        $provider ??= $this->provider();
+
+        if ($provider === 'gemini' && $this->geminiAuth() === 'vertex') {
+            $account = $this->gcs->serviceAccount();
+            if ($account === null) {
+                return null;
+            }
+
+            return $this->googleAuth->accessToken(
+                $account,
+                GoogleServiceAccountAuth::CLOUD_PLATFORM_SCOPE,
+                GoogleServiceAccountAuth::VERTEX_TOKEN_CACHE_KEY,
+            );
+        }
+
+        return $this->apiKey($provider);
+    }
+
+    public function geminiAuth(): string
+    {
+        $auth = strtolower((string) ($this->stored('ai.gemini.auth') ?? config('ai.providers.gemini.auth', 'api_key')));
+
+        return in_array($auth, ['api_key', 'vertex'], true) ? $auth : 'api_key';
+    }
+
+    public function geminiLocation(): string
+    {
+        $location = strtolower((string) ($this->stored('ai.gemini.location') ?? config('ai.providers.gemini.location', 'global')));
+
+        return preg_match('/^[a-z0-9-]{2,40}$/', $location) === 1 ? $location : 'global';
+    }
+
+    public function vertexProjectId(): ?string
+    {
+        return $this->gcs->projectId();
+    }
+
+    public function vertexConfigured(): bool
+    {
+        return $this->gcs->serviceAccount() !== null && filled($this->vertexProjectId());
+    }
+
     public function baseUrl(?string $provider = null): string
     {
         $provider ??= $this->provider();
+
+        if ($provider === 'gemini' && $this->geminiAuth() === 'vertex') {
+            return $this->vertexBaseUrl();
+        }
+
         $stored = $this->stored("ai.{$provider}.base_url");
 
         if (filled($stored)) {
@@ -143,6 +197,10 @@ class PlatformAiConfigService
 
         if (! in_array($provider, self::PROVIDERS, true)) {
             return false;
+        }
+
+        if ($provider === 'gemini' && $this->geminiAuth() === 'vertex') {
+            return $this->vertexConfigured();
         }
 
         return filled($this->apiKey($provider));
@@ -223,13 +281,7 @@ class PlatformAiConfigService
         $providers = [];
 
         foreach (self::PROVIDERS as $name) {
-            $apiKey = $this->apiKey($name);
-            $providers[$name] = [
-                'configured' => filled($apiKey),
-                'chat_model' => $this->chatModel($name),
-                'vision_model' => $this->providerVisionModel($name),
-                'api_key_configured' => filled($apiKey),
-            ];
+            $providers[$name] = $this->providerSnapshot($name, false);
         }
 
         return [
@@ -270,14 +322,7 @@ class PlatformAiConfigService
         $providers = [];
 
         foreach (self::PROVIDERS as $name) {
-            $apiKey = $this->apiKey($name);
-            $providers[$name] = [
-                'configured' => filled($apiKey),
-                'chat_model' => $this->chatModel($name),
-                'vision_model' => $this->providerVisionModel($name),
-                'api_key_configured' => filled($apiKey),
-                'api_key_preview' => $this->maskSecret($apiKey),
-            ];
+            $providers[$name] = $this->providerSnapshot($name, true);
         }
 
         return [
@@ -287,6 +332,8 @@ class PlatformAiConfigService
             'vision_provider' => $this->visionProvider(),
             'available' => $this->available(),
             'vision_available' => $this->visionAvailable(),
+            'gemini_auth' => $this->geminiAuth(),
+            'gemini_location' => $this->geminiLocation(),
             'features' => $this->resolvedFeatures(),
             'feature_preferences' => $this->preferredFeatures(),
             'providers' => $providers,
@@ -300,6 +347,8 @@ class PlatformAiConfigService
      *     openai_api_key?: string|null,
      *     deepseek_api_key?: string|null,
      *     gemini_api_key?: string|null,
+     *     gemini_auth?: string|null,
+     *     gemini_location?: string|null,
      *     openai_chat_model?: string|null,
      *     deepseek_chat_model?: string|null,
      *     gemini_chat_model?: string|null,
@@ -312,6 +361,30 @@ class PlatformAiConfigService
      */
     public function update(array $input): array
     {
+        if (array_key_exists('gemini_auth', $input) && filled($input['gemini_auth'])) {
+            $auth = strtolower(trim((string) $input['gemini_auth']));
+            if (! in_array($auth, ['api_key', 'vertex'], true)) {
+                throw new \InvalidArgumentException('Unsupported Gemini auth mode.');
+            }
+
+            if ($auth === 'vertex' && ! $this->vertexConfigured()) {
+                throw new \InvalidArgumentException(
+                    'Gemini Vertex AI needs the Google Cloud service account JSON under File storage. Enable the Vertex AI API and grant that account Vertex AI User.'
+                );
+            }
+
+            $this->persist('ai.gemini.auth', $auth);
+        }
+
+        if (array_key_exists('gemini_location', $input) && filled($input['gemini_location'])) {
+            $location = strtolower(trim((string) $input['gemini_location']));
+            if (preg_match('/^[a-z0-9-]{2,40}$/', $location) !== 1) {
+                throw new \InvalidArgumentException('Unsupported Vertex AI location.');
+            }
+
+            $this->persist('ai.gemini.location', $location);
+        }
+
         if (isset($input['provider'])) {
             $provider = $input['provider'];
             if (! in_array($provider, self::PROVIDERS, true)) {
@@ -319,7 +392,11 @@ class PlatformAiConfigService
             }
 
             if (! $this->available($provider) && ! $this->hasIncomingKey($input, $provider)) {
-                throw new \InvalidArgumentException('Selected provider does not have an API key configured.');
+                throw new \InvalidArgumentException(
+                    $provider === 'gemini' && ($input['gemini_auth'] ?? $this->geminiAuth()) === 'vertex'
+                        ? 'Gemini Vertex AI needs the Google Cloud service account JSON under File storage.'
+                        : 'Selected provider does not have an API key configured.'
+                );
             }
 
             $this->persist('ai.provider', $provider);
@@ -383,6 +460,49 @@ class PlatformAiConfigService
     public function clearCache(): void
     {
         Cache::forget(self::CACHE_KEY);
+        Cache::forget(GoogleServiceAccountAuth::VERTEX_TOKEN_CACHE_KEY);
+    }
+
+    private function vertexBaseUrl(): string
+    {
+        $project = $this->vertexProjectId() ?? 'unknown';
+        $location = $this->geminiLocation();
+
+        if ($location === 'global') {
+            return "https://aiplatform.googleapis.com/v1/projects/{$project}/locations/global/endpoints/openapi";
+        }
+
+        return "https://{$location}-aiplatform.googleapis.com/v1/projects/{$project}/locations/{$location}/endpoints/openapi";
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function providerSnapshot(string $name, bool $includeAdmin): array
+    {
+        $studioKey = $this->apiKey($name);
+        $status = [
+            'configured' => $this->available($name),
+            'chat_model' => $this->chatModel($name),
+            'vision_model' => $this->providerVisionModel($name),
+            'api_key_configured' => filled($studioKey),
+        ];
+
+        if ($name === 'gemini') {
+            $status['auth'] = $this->geminiAuth();
+            $status['vertex_configured'] = $this->vertexConfigured();
+        }
+
+        if ($includeAdmin) {
+            $status['api_key_preview'] = $this->maskSecret($studioKey);
+            if ($name === 'gemini') {
+                $status['location'] = $this->geminiLocation();
+                $status['vertex_project_id'] = $this->vertexProjectId();
+                $status['vertex_service_account'] = $this->gcs->serviceAccount()['client_email'] ?? null;
+            }
+        }
+
+        return $status;
     }
 
     private function providerVisionModel(string $provider): ?string
@@ -488,6 +608,8 @@ class PlatformAiConfigService
                     'ai.openai.api_key',
                     'ai.deepseek.api_key',
                     'ai.gemini.api_key',
+                    'ai.gemini.auth',
+                    'ai.gemini.location',
                     'ai.openai.chat_model',
                     'ai.deepseek.chat_model',
                     'ai.gemini.chat_model',

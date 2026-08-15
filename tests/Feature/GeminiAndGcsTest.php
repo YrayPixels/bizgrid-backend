@@ -13,8 +13,26 @@ use Illuminate\Support\Facades\Http;
 
 uses(RefreshDatabase::class);
 
+function geminiServiceAccountJson(): string
+{
+    $key = openssl_pkey_new([
+        'private_key_bits' => 2048,
+        'private_key_type' => OPENSSL_KEYTYPE_RSA,
+    ]);
+    expect($key)->not->toBeFalse();
+    openssl_pkey_export($key, $pem);
+
+    return json_encode([
+        'type' => 'service_account',
+        'project_id' => 'bizgrid-test',
+        'client_email' => 'bizgrid@test.iam.gserviceaccount.com',
+        'private_key' => $pem,
+    ]);
+}
+
 beforeEach(function () {
     app(PlatformAiConfigService::class)->clearCache();
+    app(PlatformGcsConfigService::class)->clearCache();
 });
 
 function geminiChatResponse(array $payload): array
@@ -159,6 +177,77 @@ it('analyzes product photos with gemini when a gemini key is set', function () {
     });
 
     expect(AgentExecutionLog::query()->where('provider', 'gemini')->where('agent', 'vision-agent')->exists())->toBeTrue();
+});
+
+it('treats gemini as configured when vertex auth has a service account and no api key', function () {
+    config([
+        'ai.provider' => 'openai',
+        'ai.providers.openai.api_key' => 'test-openai-key',
+        'ai.providers.gemini.api_key' => null,
+        'ai.providers.gemini.auth' => 'vertex',
+        'ai.features.shopper' => 'gemini',
+        'ai.features.vision' => 'gemini',
+        'services.gcs.credentials' => geminiServiceAccountJson(),
+        'services.gcs.project_id' => 'bizgrid-test',
+    ]);
+
+    app(PlatformGcsConfigService::class)->clearCache();
+    $config = app(PlatformAiConfigService::class);
+
+    expect($config->geminiAuth())->toBe('vertex')
+        ->and($config->available('gemini'))->toBeTrue()
+        ->and($config->providerForAgent('shopping-shopper-agent'))->toBe('gemini')
+        ->and($config->visionProvider())->toBe('gemini')
+        ->and($config->baseUrl('gemini'))->toContain('aiplatform.googleapis.com/v1/projects/bizgrid-test/locations/global/endpoints/openapi');
+});
+
+it('sends shopper agent calls to vertex ai with the service account token', function () {
+    config([
+        'ai.provider' => 'openai',
+        'ai.providers.openai.api_key' => 'test-openai-key',
+        'ai.providers.gemini.api_key' => null,
+        'ai.providers.gemini.auth' => 'vertex',
+        'ai.providers.gemini.chat_model' => 'gemini-3.6-flash',
+        'ai.features.shopper' => 'gemini',
+        'services.gcs.credentials' => geminiServiceAccountJson(),
+        'services.gcs.project_id' => 'bizgrid-test',
+    ]);
+    app(PlatformGcsConfigService::class)->clearCache();
+
+    Http::fake([
+        'https://oauth2.googleapis.com/token' => Http::response([
+            'access_token' => 'ya29.vertex-token',
+            'expires_in' => 3600,
+        ], 200),
+        'aiplatform.googleapis.com/*' => Http::response(geminiChatResponse([
+            'product_query' => 'serum',
+            'budget_max' => 10000,
+            'occasion' => null,
+            'style' => null,
+            'attributes' => [],
+            'gender' => null,
+            'revision' => null,
+            'reply' => 'Looking for a serum.',
+        ]), 200),
+    ]);
+
+    $result = app(ShoppingIntentAgent::class)->execute([
+        'message' => 'I need a serum under 10k',
+        'store_currency' => 'NGN',
+        'store_context' => ['mode' => 'general'],
+    ]);
+
+    expect($result['product_query'] ?? null)->toBe('serum');
+
+    Http::assertSent(function ($request) {
+        return $request->url() === 'https://oauth2.googleapis.com/token';
+    });
+
+    Http::assertSent(function ($request) {
+        return str_contains($request->url(), 'aiplatform.googleapis.com/v1/projects/bizgrid-test/locations/global/endpoints/openapi/chat/completions')
+            && $request->hasHeader('Authorization', 'Bearer ya29.vertex-token')
+            && ($request['model'] ?? null) === 'google/gemini-3.6-flash';
+    });
 });
 
 it('stores uploads on the local public disk when google cloud storage is not configured', function () {

@@ -55,6 +55,9 @@ return [
             'base_url' => env('GEMINI_BASE_URL', 'https://generativelanguage.googleapis.com/v1beta/openai'),
             'chat_model' => env('GEMINI_CHAT_MODEL', 'gemini-3.6-flash'),
             'vision_model' => env('GEMINI_VISION_MODEL', 'gemini-3.6-flash'),
+            // api_key = Google AI Studio prepaid. vertex = Cloud billing via the GCS service account.
+            'auth' => env('GEMINI_AUTH', 'api_key'),
+            'location' => env('GEMINI_LOCATION', 'global'),
         ],
     ],
 

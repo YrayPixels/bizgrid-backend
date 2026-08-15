@@ -27,10 +27,10 @@ class AiChatClient
     public function chatCompletions(array $payload, ?string $provider = null): Response
     {
         $provider ??= $this->config->provider();
-        $apiKey = $this->config->apiKey($provider);
+        $credential = $this->config->requestCredential($provider);
 
-        if (! $apiKey) {
-            throw new \RuntimeException('AI API key is not configured.');
+        if (! $credential) {
+            throw new \RuntimeException($this->missingCredentialMessage($provider));
         }
 
         if (! isset($payload['model']) || ! is_string($payload['model']) || $payload['model'] === '') {
@@ -45,7 +45,7 @@ class AiChatClient
 
         $payload = $this->preparePayload($provider, $payload);
 
-        return $this->postChatCompletions($provider, $apiKey, $payload);
+        return $this->postChatCompletions($provider, $credential, $payload);
     }
 
     /**
@@ -54,10 +54,10 @@ class AiChatClient
     public function chatCompletionsRaw(string $rawBody, ?string $provider = null): Response
     {
         $provider ??= $this->config->provider();
-        $apiKey = $this->config->apiKey($provider);
+        $credential = $this->config->requestCredential($provider);
 
-        if (! $apiKey) {
-            throw new \RuntimeException('AI API key is not configured.');
+        if (! $credential) {
+            throw new \RuntimeException($this->missingCredentialMessage($provider));
         }
 
         $payload = json_decode($rawBody, true);
@@ -80,7 +80,7 @@ class AiChatClient
 
         $payload = $this->preparePayload($provider, $payload);
 
-        return $this->postChatCompletions($provider, $apiKey, $payload);
+        return $this->postChatCompletions($provider, $credential, $payload);
     }
 
     /**
@@ -242,27 +242,35 @@ class AiChatClient
      */
     public function probe(string $provider): array
     {
-        $apiKey = $this->config->apiKey($provider);
-        if (! filled($apiKey)) {
+        if (! $this->config->available($provider)) {
             return [
                 'ok' => false,
                 'provider' => $provider,
                 'http_status' => null,
-                'message' => 'No API key is configured for '.$provider.'.',
-                'hint' => $provider === 'gemini'
-                    ? 'Paste a Gemini API key from Google AI Studio (aistudio.google.com/apikey), then save and test again.'
-                    : 'Save an API key for this provider first.',
+                'message' => $this->missingCredentialMessage($provider),
+                'hint' => $this->missingCredentialHint($provider),
             ];
         }
 
         try {
-            $response = $this->postChatCompletions($provider, $apiKey, [
+            $credential = $this->config->requestCredential($provider);
+            if (! filled($credential)) {
+                return [
+                    'ok' => false,
+                    'provider' => $provider,
+                    'http_status' => null,
+                    'message' => $this->missingCredentialMessage($provider),
+                    'hint' => $this->missingCredentialHint($provider),
+                ];
+            }
+
+            $response = $this->postChatCompletions($provider, $credential, $this->preparePayload($provider, [
                 'model' => $this->config->chatModel($provider),
                 'max_tokens' => 8,
                 'messages' => [
                     ['role' => 'user', 'content' => 'Reply with ok'],
                 ],
-            ]);
+            ]));
         } catch (\Throwable $e) {
             return [
                 'ok' => false,
@@ -278,7 +286,7 @@ class AiChatClient
                 'ok' => true,
                 'provider' => $provider,
                 'http_status' => $response->status(),
-                'message' => strtoupper($provider).' accepted the key.',
+                'message' => strtoupper($provider).' accepted '.($this->config->geminiAuth() === 'vertex' && $provider === 'gemini' ? 'the Vertex AI service account.' : 'the key.'),
                 'hint' => null,
             ];
         }
@@ -300,7 +308,18 @@ class AiChatClient
      */
     private function preparePayload(string $provider, array $payload): array
     {
-        if ($provider !== 'gemini' || ! isset($payload['tools']) || ! is_array($payload['tools'])) {
+        if ($provider !== 'gemini') {
+            return $payload;
+        }
+
+        if ($this->config->geminiAuth() === 'vertex') {
+            $model = $payload['model'] ?? null;
+            if (is_string($model) && $model !== '' && ! str_contains($model, '/')) {
+                $payload['model'] = 'google/'.$model;
+            }
+        }
+
+        if (! isset($payload['tools']) || ! is_array($payload['tools'])) {
             return $payload;
         }
 
@@ -371,6 +390,10 @@ class AiChatClient
         }
 
         if ($status === 403 || str_contains($lower, 'permission') || str_contains($lower, 'denied')) {
+            if ($this->config->geminiAuth() === 'vertex') {
+                return 'Vertex AI rejected this service account. Enable Vertex AI API on the Cloud project, and grant the account Vertex AI User (roles/aiplatform.user). Storage Object Admin on the bucket is not enough for Gemini.';
+            }
+
             return 'Gemini 403 is the key, not the shopper. Create a new key in Google AI Studio (aistudio.google.com/apikey). Since June 2026 unrestricted Cloud Console keys are rejected. Do not use a Maps or Cloud Storage key, and turn off HTTP-referrer restrictions for this server key.';
         }
 
@@ -389,10 +412,36 @@ class AiChatClient
             || str_contains($lower, 'credits are depleted')
             || str_contains($lower, 'quota')
         ) {
-            return 'The Gemini key works, but this Google AI Studio project has no prepaid credits left. Add billing or credits at https://ai.studio/projects, or route shopper, vision, and marketing to OpenAI until Gemini is funded again.';
+            if ($this->config->geminiAuth() === 'vertex') {
+                return 'Vertex AI quota or billing is exhausted on this Google Cloud project. Check Cloud Billing and Vertex AI quotas for the project that owns the service account.';
+            }
+
+            return 'The Gemini key works, but this Google AI Studio project has no prepaid credits left. Switch Gemini auth to Vertex AI on this page to bill Google Cloud (including the $300 trial credit), or add AI Studio credits at https://ai.studio/projects.';
         }
 
         return null;
+    }
+
+    private function missingCredentialMessage(string $provider): string
+    {
+        if ($provider === 'gemini' && $this->config->geminiAuth() === 'vertex') {
+            return 'Gemini Vertex AI is not configured. Save a Google Cloud service account under File storage.';
+        }
+
+        return $provider === 'gemini'
+            ? 'No Gemini API key is configured.'
+            : 'AI API key is not configured.';
+    }
+
+    private function missingCredentialHint(string $provider): string
+    {
+        if ($provider === 'gemini' && $this->config->geminiAuth() === 'vertex') {
+            return 'Paste the service-account JSON under File storage, enable Vertex AI API, grant Vertex AI User to that account, then save Gemini auth as Vertex AI and test again.';
+        }
+
+        return $provider === 'gemini'
+            ? 'Paste a Gemini API key from Google AI Studio (aistudio.google.com/apikey), or switch Gemini to Vertex AI to use Cloud billing.'
+            : 'Save an API key for this provider first.';
     }
 
     public function limitError(string $message, int $limit = 500): string
@@ -406,10 +455,10 @@ class AiChatClient
     public function streamChatCompletions(array $payload, ?string $provider = null): \Illuminate\Http\Client\Response
     {
         $provider ??= $this->config->provider();
-        $apiKey = $this->config->apiKey($provider);
+        $credential = $this->config->requestCredential($provider);
 
-        if (! $apiKey) {
-            throw new \RuntimeException('AI API key is not configured.');
+        if (! $credential) {
+            throw new \RuntimeException($this->missingCredentialMessage($provider));
         }
 
         if (! isset($payload['model']) || ! is_string($payload['model']) || $payload['model'] === '') {
@@ -426,7 +475,7 @@ class AiChatClient
         $payload['stream'] = true;
         $payload = $this->preparePayload($provider, $payload);
 
-        return Http::withToken($apiKey)
+        return Http::withToken($credential)
             ->withOptions(['stream' => true])
             ->acceptJson()
             ->withHeaders(['User-Agent' => 'Bizgrid-AI/1.0'])

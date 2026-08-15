@@ -165,6 +165,7 @@ class PlatformGcsConfigService
     {
         Cache::forget(self::CACHE_KEY);
         Cache::forget(self::TOKEN_CACHE_KEY);
+        Cache::forget(GoogleServiceAccountAuth::VERTEX_TOKEN_CACHE_KEY);
     }
 
     private function persistCredentials(mixed $value): void

@@ -37,6 +37,8 @@ class AdminAiSettingsController extends Controller
             'openai_api_key' => 'nullable|string|max:500',
             'deepseek_api_key' => 'nullable|string|max:500',
             'gemini_api_key' => 'nullable|string|max:4000',
+            'gemini_auth' => 'nullable|string|in:api_key,vertex',
+            'gemini_location' => 'nullable|string|max:40',
             'openai_chat_model' => ['nullable', 'string', 'max:120', Rule::in($this->aiConfig->allowedChatModels('openai'))],
             'deepseek_chat_model' => ['nullable', 'string', 'max:120', Rule::in($this->aiConfig->allowedChatModels('deepseek'))],
             'gemini_chat_model' => ['nullable', 'string', 'max:120', Rule::in($this->aiConfig->allowedChatModels('gemini'))],
