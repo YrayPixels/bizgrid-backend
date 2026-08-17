@@ -3,7 +3,7 @@ name: Build & Deploy Laravel Incremental
 on:
   push:
     branches:
-      - main
+      - dev
 
 jobs:
   deploy:
