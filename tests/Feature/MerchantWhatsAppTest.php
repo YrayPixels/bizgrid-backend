@@ -2,6 +2,7 @@
 
 use App\Jobs\ProcessInboundCustomerMessage;
 use App\Jobs\ProcessInboundMerchantMessage;
+use App\Jobs\ProcessInboundMerchantMessageBatch;
 use App\Mail\WhatsAppAccountLinkCodeEmail;
 use App\Models\Merchant;
 use App\Models\Store;
@@ -65,6 +66,49 @@ function postWhatsAppWebhook(array $payload): void
     test()->postJson('/api/storehause/webhooks/whatsapp', $payload, [
         'X-Hub-Signature-256' => $signature,
     ])->assertOk();
+}
+
+function merchantWhatsAppImagePayload(string $from, ?string $caption = null, string $mediaId = 'media-1', string $messageId = 'wamid.image'): array
+{
+    $payload = merchantWhatsAppPayload($from, $caption ?? '', 'platform-phone-1', $messageId);
+    $payload['entry'][0]['changes'][0]['value']['messages'][0] = [
+        'from' => $from,
+        'id' => $messageId,
+        'type' => 'image',
+        'image' => array_filter([
+            'id' => $mediaId,
+            'caption' => $caption,
+        ], fn ($value) => filled($value)),
+    ];
+
+    return $payload;
+}
+
+function sayImage(string $from, ?string $caption, string $mediaId, string $messageId = ''): void
+{
+    app(MerchantWhatsAppService::class)->handleInbound([
+        'from' => $from,
+        'message_id' => $messageId !== '' ? $messageId : 'wamid.'.uniqid(),
+        'type' => 'image',
+        'text' => $caption ?? '',
+        'media_id' => $mediaId,
+        'profile_name' => 'Ada',
+    ]);
+}
+
+function sayBatch(string $from, array $messages): void
+{
+    app(MerchantWhatsAppService::class)->handleInboundBatch(array_map(function (array $message) use ($from) {
+        return [
+            'from' => $from,
+            'message_id' => $message['message_id'] ?? 'wamid.'.uniqid(),
+            'type' => $message['type'] ?? 'text',
+            'text' => $message['text'] ?? '',
+            'media_id' => $message['media_id'] ?? null,
+            'profile_name' => 'Ada',
+            'timestamp' => (string) ($message['timestamp'] ?? time()),
+        ];
+    }, $messages));
 }
 
 function say(string $from, string $text, string $messageId = ''): void
@@ -1597,4 +1641,292 @@ it('opens an order card from the list and can send a customer contact', function
     );
     expect($contact)->not->toBeNull()
         ->and(data_get($contact, 'contacts.0.name.formatted_name'))->toBe('Amina');
+});
+
+it('debounces image webhooks into a batch job instead of immediate processing', function () {
+    Queue::fake();
+
+    postWhatsAppWebhook(merchantWhatsAppImagePayload('2348011111111', 'Lip gloss 4500', 'media-1', 'wamid.img1'));
+
+    Queue::assertPushed(ProcessInboundMerchantMessageBatch::class);
+    Queue::assertNotPushed(ProcessInboundMerchantMessage::class);
+});
+
+it('creates multiple products from a batched photo burst via add_products', function () {
+    $from = '2348111111111';
+    say($from, 'hi');
+    say($from, 'Batch Shop');
+    say($from, 'Batch Store');
+
+    $whatsapp = Mockery::mock(app(\App\Services\WhatsAppService::class))->makePartial();
+    $whatsapp->shouldReceive('downloadMedia')
+        ->with('media-1')
+        ->andReturn(['contents' => 'lip-binary', 'mime' => 'image/jpeg']);
+    $whatsapp->shouldReceive('downloadMedia')
+        ->with('media-2')
+        ->andReturn(['contents' => 'cap-binary', 'mime' => 'image/jpeg']);
+    app()->instance(\App\Services\WhatsAppService::class, $whatsapp);
+
+    Http::fake([
+        'graph.facebook.com/*' => Http::response(['messages' => [['id' => 'wamid.out']]], 200),
+    ]);
+
+    $this->mock(\App\Agents\MerchantWhatsAppAgent::class, function ($mock) {
+        $mock->shouldReceive('available')->andReturn(true);
+        $mock->shouldReceive('systemPrompt')->andReturn('test');
+        $mock->shouldReceive('onboardingSystemPrompt')->andReturn('onboard');
+        $mock->shouldReceive('tools')->andReturn([]);
+        $mock->shouldReceive('complete')->andReturn(
+            [
+                'content' => null,
+                'tool_calls' => [[
+                    'id' => 'call_add_many',
+                    'type' => 'function',
+                    'function' => [
+                        'name' => 'add_products',
+                        'arguments' => json_encode([
+                            'products' => [
+                                ['name' => 'Lip gloss', 'price' => 4500],
+                                ['name' => 'Gucci cap', 'price' => 8000],
+                            ],
+                        ]),
+                    ],
+                ]],
+            ],
+            [
+                'content' => 'Added *Lip gloss* and *Gucci cap* to your store.',
+                'tool_calls' => [],
+            ],
+        );
+    });
+
+    sayBatch($from, [
+        ['type' => 'image', 'media_id' => 'media-1', 'caption' => 'Lip gloss 4500', 'timestamp' => '100'],
+        ['type' => 'image', 'media_id' => 'media-2', 'timestamp' => '101'],
+        ['type' => 'text', 'text' => 'Gucci cap 8000', 'timestamp' => '102'],
+    ]);
+
+    $store = Store::query()->where('name', 'Batch Store')->first();
+    expect($store)->not->toBeNull();
+    expect($store->products()->count())->toBe(2);
+    expect($store->products()->pluck('name')->sort()->values()->all())->toBe(['Gucci cap', 'Lip gloss']);
+
+    $lip = $store->products()->where('name', 'Lip gloss')->first();
+    $cap = $store->products()->where('name', 'Gucci cap')->first();
+    expect($lip?->image_url)->not->toBeNull()
+        ->and($cap?->image_url)->not->toBeNull()
+        ->and($lip?->image_url)->not->toBe($cap?->image_url);
+});
+
+it('attaches staged photos when the agent calls add_product twice in one turn', function () {
+    $from = '2348111111112';
+    say($from, 'hi');
+    say($from, 'Double Shop');
+    say($from, 'Double Store');
+
+    $whatsapp = Mockery::mock(app(\App\Services\WhatsAppService::class))->makePartial();
+    $whatsapp->shouldReceive('downloadMedia')
+        ->with('media-a')
+        ->andReturn(['contents' => 'a-binary', 'mime' => 'image/jpeg']);
+    $whatsapp->shouldReceive('downloadMedia')
+        ->with('media-b')
+        ->andReturn(['contents' => 'b-binary', 'mime' => 'image/jpeg']);
+    app()->instance(\App\Services\WhatsAppService::class, $whatsapp);
+
+    Http::fake([
+        'graph.facebook.com/*' => Http::response(['messages' => [['id' => 'wamid.out']]], 200),
+    ]);
+
+    $this->mock(\App\Agents\MerchantWhatsAppAgent::class, function ($mock) {
+        $mock->shouldReceive('available')->andReturn(true);
+        $mock->shouldReceive('systemPrompt')->andReturn('test');
+        $mock->shouldReceive('onboardingSystemPrompt')->andReturn('onboard');
+        $mock->shouldReceive('tools')->andReturn([]);
+        $mock->shouldReceive('complete')->andReturn(
+            [
+                'content' => null,
+                'tool_calls' => [
+                    [
+                        'id' => 'call_add_1',
+                        'type' => 'function',
+                        'function' => [
+                            'name' => 'add_product',
+                            'arguments' => json_encode(['name' => 'Lip gloss', 'price' => 4500]),
+                        ],
+                    ],
+                    [
+                        'id' => 'call_add_2',
+                        'type' => 'function',
+                        'function' => [
+                            'name' => 'add_product',
+                            'arguments' => json_encode(['name' => 'Gucci cap', 'price' => 8000]),
+                        ],
+                    ],
+                ],
+            ],
+            [
+                'content' => 'Added *Lip gloss* and *Gucci cap*.',
+                'tool_calls' => [],
+            ],
+        );
+    });
+
+    sayBatch($from, [
+        ['type' => 'image', 'media_id' => 'media-a', 'timestamp' => '100'],
+        ['type' => 'image', 'media_id' => 'media-b', 'timestamp' => '101'],
+        ['type' => 'text', 'text' => 'Lip gloss 4500 and Gucci cap 8000', 'timestamp' => '102'],
+    ]);
+
+    $store = Store::query()->where('name', 'Double Store')->first();
+    $lip = $store->products()->where('name', 'Lip gloss')->first();
+    $cap = $store->products()->where('name', 'Gucci cap')->first();
+
+    expect($lip?->image_url)->not->toBeNull()
+        ->and($cap?->image_url)->not->toBeNull();
+});
+
+function seedMerchantStorefrontDraft(string $storeName, string $templateId = 'minimalistic'): Store
+{
+    $store = Store::query()->where('name', $storeName)->firstOrFail();
+    $draft = [
+        'template' => ['id' => $templateId, 'source' => 'test'],
+        'hero' => [
+            'headline' => 'Shop '.$storeName.' online',
+            'subheadline' => 'Quality products every day.',
+            'cta_label' => 'Shop now',
+        ],
+        'about' => [
+            'title' => 'About '.$storeName,
+            'body' => 'We sell quality products with fast delivery.',
+        ],
+        'seo' => [
+            'title' => $storeName.' | Online Store',
+            'description' => 'Shop '.$storeName.' online.',
+        ],
+    ];
+
+    $store->update([
+        'status' => 'published',
+        'storefront_template_id' => $templateId,
+        'draft_json' => $draft,
+        'published_json' => $draft,
+        'published_at' => now(),
+    ]);
+
+    return $store->fresh();
+}
+
+it('switches storefront template via the WhatsApp agent', function () {
+    $from = '2348099999991';
+    say($from, 'hi');
+    say($from, 'FKM');
+    say($from, 'Glow Shop');
+
+    seedMerchantStorefrontDraft('Glow Shop', 'minimalistic');
+
+    $this->mock(\App\Agents\MerchantWhatsAppAgent::class, function ($mock) {
+        $mock->shouldReceive('available')->andReturn(true);
+        $mock->shouldReceive('systemPrompt')->andReturn('test');
+        $mock->shouldReceive('tools')->andReturn([]);
+        $mock->shouldReceive('complete')->andReturn(
+            [
+                'content' => null,
+                'tool_calls' => [[
+                    'id' => 'call_tpl',
+                    'type' => 'function',
+                    'function' => [
+                        'name' => 'select_storefront_template',
+                        'arguments' => json_encode(['template_id' => 'beauty']),
+                    ],
+                ]],
+            ],
+            [
+                'content' => 'Switched your site to the Beauty design.',
+                'tool_calls' => [],
+            ],
+        );
+    });
+
+    say($from, 'Switch my website to the beauty template');
+
+    $store = Store::query()->where('name', 'Glow Shop')->first();
+    expect($store->storefront_template_id)->toBe('beauty')
+        ->and(data_get($store->draft_json, 'template.id'))->toBe('beauty')
+        ->and(data_get($store->published_json, 'template.id'))->toBe('beauty');
+});
+
+it('updates storefront hero copy via the WhatsApp agent', function () {
+    $from = '2348099999992';
+    say($from, 'hi');
+    say($from, 'FKM');
+    say($from, 'Hero Shop');
+
+    seedMerchantStorefrontDraft('Hero Shop');
+
+    $this->mock(\App\Agents\MerchantWhatsAppAgent::class, function ($mock) {
+        $mock->shouldReceive('available')->andReturn(true);
+        $mock->shouldReceive('systemPrompt')->andReturn('test');
+        $mock->shouldReceive('tools')->andReturn([]);
+        $mock->shouldReceive('complete')->andReturn(
+            [
+                'content' => null,
+                'tool_calls' => [[
+                    'id' => 'call_hero',
+                    'type' => 'function',
+                    'function' => [
+                        'name' => 'update_storefront_hero',
+                        'arguments' => json_encode(['headline' => 'Welcome to Hero Shop']),
+                    ],
+                ]],
+            ],
+            [
+                'content' => 'Updated your homepage headline.',
+                'tool_calls' => [],
+            ],
+        );
+    });
+
+    say($from, 'Change my homepage headline to Welcome to Hero Shop');
+
+    $store = Store::query()->where('name', 'Hero Shop')->first();
+    expect(data_get($store->draft_json, 'hero.headline'))->toBe('Welcome to Hero Shop')
+        ->and(data_get($store->published_json, 'hero.headline'))->toBe('Welcome to Hero Shop');
+});
+
+it('edits storefront brand color via the WhatsApp agent', function () {
+    $from = '2348099999993';
+    say($from, 'hi');
+    say($from, 'FKM');
+    say($from, 'Color Shop');
+
+    seedMerchantStorefrontDraft('Color Shop');
+
+    $this->mock(\App\Agents\MerchantWhatsAppAgent::class, function ($mock) {
+        $mock->shouldReceive('available')->andReturn(true);
+        $mock->shouldReceive('systemPrompt')->andReturn('test');
+        $mock->shouldReceive('tools')->andReturn([]);
+        $mock->shouldReceive('complete')->andReturn(
+            [
+                'content' => null,
+                'tool_calls' => [[
+                    'id' => 'call_copy',
+                    'type' => 'function',
+                    'function' => [
+                        'name' => 'edit_storefront_copy',
+                        'arguments' => json_encode(['instruction' => 'change brand color to navy']),
+                    ],
+                ]],
+            ],
+            [
+                'content' => 'Updated your brand color.',
+                'tool_calls' => [],
+            ],
+        );
+    });
+
+    say($from, 'Change my website brand color to navy');
+
+    $store = Store::query()->where('name', 'Color Shop')->first();
+    expect(data_get($store->draft_json, 'palette.primary'))->toBe('#1E3A5F')
+        ->and(data_get($store->published_json, 'palette.primary'))->toBe('#1E3A5F');
 });
