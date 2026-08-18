@@ -319,6 +319,24 @@ class MerchantWhatsAppAgent extends BaseAgent
             [
                 'type' => 'function',
                 'function' => [
+                    'name' => 'link_existing_account',
+                    'description' => 'Link this WhatsApp to a Bizgrid account they already created on the website. Use when they mention an existing account/store or include a signup email — even with filler like “yea,” or “I already have a store”. Extract the email from the message. Do not create a new store.',
+                    'parameters' => [
+                        'type' => 'object',
+                        'properties' => [
+                            'email' => [
+                                'type' => 'string',
+                                'description' => 'The Bizgrid login email, extracted from their message.',
+                            ],
+                        ],
+                        'required' => ['email'],
+                        'additionalProperties' => false,
+                    ],
+                ],
+            ],
+            [
+                'type' => 'function',
+                'function' => [
                     'name' => 'show_help',
                     'description' => 'Show what the merchant can do in this chat when they ask for the menu or help.',
                     'parameters' => [
@@ -679,6 +697,48 @@ class MerchantWhatsAppAgent extends BaseAgent
     public function complete(array $messages, array $tools): ?array
     {
         return $this->chatWithTools($messages, $tools);
+    }
+
+    /**
+     * @param  list<array{role: string, content: string}>  $messages
+     * @return array{action: string, email: ?string, name: ?string, store_name: ?string, reply: string}|null
+     */
+    public function interpretOnboarding(array $messages): ?array
+    {
+        $result = $this->chatStructured($messages, [
+            'type' => 'object',
+            'properties' => [
+                'action' => [
+                    'type' => 'string',
+                    'enum' => ['link_account', 'set_name', 'create_store', 'ask_email', 'clarify'],
+                ],
+                'email' => ['type' => ['string', 'null']],
+                'name' => ['type' => ['string', 'null']],
+                'store_name' => ['type' => ['string', 'null']],
+                'reply' => ['type' => 'string'],
+            ],
+            'required' => ['action', 'email', 'name', 'store_name', 'reply'],
+            'additionalProperties' => false,
+        ], 0.1);
+
+        if (! is_array($result) || ! is_string($result['action'] ?? null)) {
+            return null;
+        }
+
+        return [
+            'action' => $result['action'],
+            'email' => is_string($result['email'] ?? null) && $result['email'] !== '' ? strtolower(trim($result['email'])) : null,
+            'name' => is_string($result['name'] ?? null) && trim($result['name']) !== '' ? trim($result['name']) : null,
+            'store_name' => is_string($result['store_name'] ?? null) && trim($result['store_name']) !== '' ? trim($result['store_name']) : null,
+            'reply' => is_string($result['reply'] ?? null) ? trim($result['reply']) : '',
+        ];
+    }
+
+    public function onboardingSystemPrompt(): string
+    {
+        $prompt = $this->prompts->load($this->name(), 'onboarding-v1');
+
+        return $prompt !== '' ? $prompt : $this->systemPrompt();
     }
 
     /**

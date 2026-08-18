@@ -398,6 +398,255 @@ it('emails a code before linking an existing account to WhatsApp', function () {
         ->toBe(WhatsAppMerchantSession::STATE_AWAITING_STORE_NAME);
 });
 
+it('extracts an email from a mixed onboarding reply instead of creating a new store', function () {
+    Mail::fake();
+
+    $existing = User::factory()->create([
+        'name' => 'Moses',
+        'email' => 'moseserhinyodavwe2@gmail.com',
+        'phone' => null,
+    ]);
+    $merchant = Merchant::create([
+        'owner_user_id' => $existing->id,
+        'business_name' => 'Moses Shop',
+        'slug' => 'moses-shop',
+        'industry' => 'other',
+        'status' => 'active',
+        'subscription_plan' => 'starter',
+        'subscription_status' => 'trialing',
+    ]);
+    Store::create([
+        'merchant_id' => $merchant->id,
+        'name' => 'Moses Shop',
+        'slug' => 'moses-shop',
+        'status' => 'published',
+        'primary_domain' => 'moses-shop.example.test',
+    ]);
+
+    $from = '2349014386339';
+    say($from, 'hi');
+    say($from, 'Yea, moseserhinyodavwe2@gmail.com');
+
+    expect(User::query()->count())->toBe(1);
+    expect(Store::query()->count())->toBe(1);
+    expect($existing->fresh()->phone)->toBeNull();
+    expect(WhatsAppMerchantSession::query()->where('phone', $from)->value('user_id'))->toBeNull();
+    expect(WhatsAppMerchantSession::query()->where('phone', $from)->value('state'))
+        ->toBe(WhatsAppMerchantSession::STATE_AWAITING_LINK_CODE);
+
+    Mail::assertSent(WhatsAppAccountLinkCodeEmail::class, function (WhatsAppAccountLinkCodeEmail $mail) {
+        return $mail->hasTo('moseserhinyodavwe2@gmail.com');
+    });
+});
+
+it('lets the onboarding llm link an email wrapped in conversation filler', function () {
+    Mail::fake();
+
+    $existing = User::factory()->create([
+        'name' => 'Moses',
+        'email' => 'moseserhinyodavwe2@gmail.com',
+        'phone' => null,
+    ]);
+    $merchant = Merchant::create([
+        'owner_user_id' => $existing->id,
+        'business_name' => 'Moses Shop',
+        'slug' => 'moses-shop-llm',
+        'industry' => 'other',
+        'status' => 'active',
+        'subscription_plan' => 'starter',
+        'subscription_status' => 'trialing',
+    ]);
+    Store::create([
+        'merchant_id' => $merchant->id,
+        'name' => 'Moses Shop',
+        'slug' => 'moses-shop-llm',
+        'status' => 'published',
+        'primary_domain' => 'moses-shop-llm.example.test',
+    ]);
+
+    $this->mock(\App\Agents\MerchantWhatsAppAgent::class, function ($mock) {
+        $mock->shouldReceive('available')->andReturn(true);
+        $mock->shouldReceive('systemPrompt')->andReturn('test');
+        $mock->shouldReceive('onboardingSystemPrompt')->andReturn('onboard');
+        $mock->shouldReceive('tools')->andReturn([]);
+        $mock->shouldReceive('complete')->andReturn(null);
+        $mock->shouldReceive('interpretOnboarding')->andReturn([
+            'action' => 'link_account',
+            'email' => 'moseserhinyodavwe2@gmail.com',
+            'name' => null,
+            'store_name' => null,
+            'reply' => '',
+        ]);
+    });
+
+    $from = '2349014386338';
+    say($from, 'hi');
+    say($from, 'Yea, moseserhinyodavwe2@gmail.com');
+
+    expect(User::query()->count())->toBe(1);
+    expect(Store::query()->count())->toBe(1);
+    expect(WhatsAppMerchantSession::query()->where('phone', $from)->value('state'))
+        ->toBe(WhatsAppMerchantSession::STATE_AWAITING_LINK_CODE);
+
+    Mail::assertSent(WhatsAppAccountLinkCodeEmail::class, function (WhatsAppAccountLinkCodeEmail $mail) {
+        return $mail->hasTo('moseserhinyodavwe2@gmail.com');
+    });
+});
+
+it('lets the onboarding llm ask for email instead of naming a store from a sentence', function () {
+    $this->mock(\App\Agents\MerchantWhatsAppAgent::class, function ($mock) {
+        $mock->shouldReceive('available')->andReturn(true);
+        $mock->shouldReceive('systemPrompt')->andReturn('test');
+        $mock->shouldReceive('onboardingSystemPrompt')->andReturn('onboard');
+        $mock->shouldReceive('tools')->andReturn([]);
+        $mock->shouldReceive('complete')->andReturn(null);
+        $mock->shouldReceive('interpretOnboarding')->andReturnUsing(function (array $messages) {
+            $last = strtolower((string) data_get(end($messages), 'content', ''));
+            if (str_contains($last, 'already')) {
+                return [
+                    'action' => 'ask_email',
+                    'email' => null,
+                    'name' => null,
+                    'store_name' => null,
+                    'reply' => 'If this WhatsApp should manage a store you already created, send the email on that account.',
+                ];
+            }
+
+            return [
+                'action' => 'set_name',
+                'email' => null,
+                'name' => 'FKM',
+                'store_name' => null,
+                'reply' => '',
+            ];
+        });
+    });
+
+    $from = '2349014386340';
+    say($from, 'hi');
+    say($from, 'FKM');
+    say($from, 'I think i already gave a store');
+
+    expect(Store::query()->count())->toBe(0);
+    expect(WhatsAppMerchantSession::query()->where('phone', $from)->value('state'))
+        ->toBe(WhatsAppMerchantSession::STATE_AWAITING_STORE_NAME);
+
+    $body = (string) (data_get(lastMerchantOutbound(), 'text.body')
+        ?: data_get(lastMerchantOutbound(), 'interactive.body.text')
+        ?: '');
+    expect($body)->toContain('send the email');
+});
+
+it('links an existing account from the store-name step without leaving a duplicate WhatsApp user', function () {
+    Mail::fake();
+
+    $existing = User::factory()->create([
+        'name' => 'Ada Web',
+        'email' => 'ada-later@example.com',
+        'phone' => null,
+    ]);
+    $merchant = Merchant::create([
+        'owner_user_id' => $existing->id,
+        'business_name' => 'Ada Glow',
+        'slug' => 'ada-glow-later',
+        'industry' => 'beauty_and_skincare',
+        'status' => 'active',
+        'subscription_plan' => 'starter',
+        'subscription_status' => 'trialing',
+    ]);
+    Store::create([
+        'merchant_id' => $merchant->id,
+        'name' => 'Ada Glow',
+        'slug' => 'ada-glow-later',
+        'status' => 'published',
+        'primary_domain' => 'ada-glow-later.example.test',
+    ]);
+
+    $from = '2348099990001';
+    say($from, 'hi');
+    say($from, 'Ada');
+    say($from, 'ada-later@example.com');
+
+    $placeholder = User::query()->where('phone', $from)->first();
+    expect($placeholder)->not->toBeNull()
+        ->and($placeholder->id)->not->toBe($existing->id);
+
+    $code = null;
+    Mail::assertSent(WhatsAppAccountLinkCodeEmail::class, function (WhatsAppAccountLinkCodeEmail $mail) use (&$code) {
+        $code = $mail->code;
+
+        return $mail->hasTo('ada-later@example.com');
+    });
+
+    say($from, $code);
+
+    expect($existing->fresh()->phone)->toBe($from);
+    expect($placeholder->fresh()->phone)->toBeNull();
+    expect(Store::query()->count())->toBe(1);
+    expect(WhatsAppMerchantSession::query()->where('phone', $from)->value('user_id'))->toBe($existing->id);
+    expect(WhatsAppMerchantSession::query()->where('phone', $from)->value('state'))
+        ->toBe(WhatsAppMerchantSession::STATE_IDLE);
+});
+
+it('lets the store llm link an existing account instead of treating the email as a new request', function () {
+    Mail::fake();
+
+    $existing = User::factory()->create([
+        'name' => 'Ada Web',
+        'email' => 'ada-ready@example.com',
+        'phone' => null,
+    ]);
+    $merchant = Merchant::create([
+        'owner_user_id' => $existing->id,
+        'business_name' => 'Ada Glow',
+        'slug' => 'ada-glow-ready',
+        'industry' => 'beauty_and_skincare',
+        'status' => 'active',
+        'subscription_plan' => 'starter',
+        'subscription_status' => 'trialing',
+    ]);
+    Store::create([
+        'merchant_id' => $merchant->id,
+        'name' => 'Ada Glow',
+        'slug' => 'ada-glow-ready',
+        'status' => 'published',
+        'primary_domain' => 'ada-glow-ready.example.test',
+    ]);
+
+    $from = '2348099990002';
+    say($from, 'hi');
+    say($from, 'Ada');
+    say($from, 'Wrong Shop');
+
+    $this->mock(\App\Agents\MerchantWhatsAppAgent::class, function ($mock) {
+        $mock->shouldReceive('available')->andReturn(true);
+        $mock->shouldReceive('systemPrompt')->andReturn('test');
+        $mock->shouldReceive('onboardingSystemPrompt')->andReturn('onboard');
+        $mock->shouldReceive('tools')->andReturn([]);
+        $mock->shouldReceive('complete')->andReturn([
+            'content' => null,
+            'tool_calls' => [[
+                'id' => 'call_link',
+                'type' => 'function',
+                'function' => [
+                    'name' => 'link_existing_account',
+                    'arguments' => json_encode(['email' => 'ada-ready@example.com']),
+                ],
+            ]],
+        ]);
+    });
+
+    say($from, 'Yea I already have ada-ready@example.com');
+
+    expect(Store::query()->where('name', 'Ada Glow')->count())->toBe(1);
+    expect(WhatsAppMerchantSession::query()->where('phone', $from)->value('state'))
+        ->toBe(WhatsAppMerchantSession::STATE_AWAITING_LINK_CODE);
+
+    Mail::assertSent(WhatsAppAccountLinkCodeEmail::class, function (WhatsAppAccountLinkCodeEmail $mail) {
+        return $mail->hasTo('ada-ready@example.com');
+    });
+});
+
 it('links verified WhatsApp to an existing store without creating another', function () {
     Mail::fake();
 

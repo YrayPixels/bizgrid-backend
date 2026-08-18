@@ -387,6 +387,9 @@ class MerchantWhatsAppService
 
         if ($store && $this->agent->available()) {
             $result = $this->agent->reply($session, $user, $store, $text, $type, $mediaId);
+            if (filled($result['link_email'] ?? null)) {
+                return $this->linkExistingAccount($session, (string) $result['link_email']);
+            }
             if (($result['reply'] ?? '') !== '') {
                 return $result['reply'];
             }
@@ -422,13 +425,111 @@ class MerchantWhatsAppService
             return "Welcome to Bizgrid! I can help you create a store, add products, and check orders — right here on WhatsApp.\n\nWhat's your name?\n\nAlready have a Bizgrid account? Reply with the email you signed up with.";
         }
 
-        $email = strtolower(trim($text));
-        if (filter_var($email, FILTER_VALIDATE_EMAIL)) {
+        $applied = $this->applyOnboardingInterpretation($session, $text, 'awaiting_name', $profileName);
+        if ($applied !== null) {
+            return $applied;
+        }
+
+        $email = $this->extractEmail($text);
+        if ($email !== null) {
             return $this->linkExistingAccount($session, $email);
         }
 
         $name = $this->displayName($text, $profileName);
         if ($name === '' || $command !== null) {
+            return "What's your name? (e.g. Ada)\n\nOr send the email on your Bizgrid account.";
+        }
+
+        return $this->commitOwnerName($session, $name);
+    }
+
+    private function handleStoreName(WhatsAppMerchantSession $session, string $text): string
+    {
+        $applied = $this->applyOnboardingInterpretation($session, $text, 'awaiting_store_name');
+        if ($applied !== null) {
+            return $applied;
+        }
+
+        $email = $this->extractEmail($text);
+        if ($email !== null) {
+            return $this->linkExistingAccount($session, $email);
+        }
+
+        return $this->commitStoreName($session, $text);
+    }
+
+    /**
+     * @param  'awaiting_name'|'awaiting_store_name'  $step
+     */
+    private function applyOnboardingInterpretation(
+        WhatsAppMerchantSession $session,
+        string $text,
+        string $step,
+        ?string $profileName = null,
+    ): ?string {
+        $interpreted = $this->agent->interpretOnboarding($session, $text, $step);
+        if ($interpreted === null) {
+            return null;
+        }
+
+        $email = $this->extractEmail((string) ($interpreted['email'] ?? '')) ?? $this->extractEmail($text);
+        if ($email !== null && in_array($interpreted['action'] ?? '', ['link_account', 'ask_email', 'set_name', 'create_store', 'clarify'], true)) {
+            return $this->linkExistingAccount($session, $email);
+        }
+
+        return match ($interpreted['action'] ?? '') {
+            'link_account' => $email !== null
+                ? $this->linkExistingAccount($session, $email)
+                : $this->onboardingAskEmail($interpreted['reply'] ?? ''),
+            'ask_email' => $email !== null
+                ? $this->linkExistingAccount($session, $email)
+                : $this->onboardingAskEmail($interpreted['reply'] ?? ''),
+            'set_name' => $step === 'awaiting_name'
+                ? $this->commitOwnerName(
+                    $session,
+                    (string) ($interpreted['name'] ?? $this->displayName($text, $profileName)),
+                )
+                : $this->onboardingClarify((string) ($interpreted['reply'] ?? ''), $step),
+            'create_store' => $session->user_id
+                ? $this->commitStoreName(
+                    $session,
+                    (string) ($interpreted['store_name'] ?? $text),
+                )
+                : $this->onboardingClarify((string) ($interpreted['reply'] ?? ''), $step),
+            'clarify' => $this->onboardingClarify($interpreted['reply'] ?? '', $step),
+            default => null,
+        };
+    }
+
+    private function onboardingAskEmail(string $reply): string
+    {
+        $reply = trim($reply);
+
+        return $reply !== ''
+            ? $reply
+            : "If you already have a Bizgrid account, send the email you signed up with and I'll link this WhatsApp to it.";
+    }
+
+    private function onboardingClarify(string $reply, string $step): string
+    {
+        $reply = trim($reply);
+        if ($reply !== '') {
+            return $reply;
+        }
+
+        return $step === 'awaiting_store_name'
+            ? 'Give your store a name — something customers will recognize. Or send the email on your Bizgrid account.'
+            : "What's your name? (e.g. Ada)\n\nOr send the email on your Bizgrid account.";
+    }
+
+    private function commitOwnerName(WhatsAppMerchantSession $session, string $name): string
+    {
+        if ($session->user_id) {
+            return $this->onboardingClarify('', 'awaiting_store_name');
+        }
+
+        $name = $this->displayName($name, null);
+        if ($name === '') {
             return "What's your name? (e.g. Ada)\n\nOr send the email on your Bizgrid account.";
         }
 
@@ -440,7 +541,7 @@ class MerchantWhatsAppService
         return "Nice to meet you, {$name}. What should we call your store?";
     }
 
-    private function handleStoreName(WhatsAppMerchantSession $session, string $text): string
+    private function commitStoreName(WhatsAppMerchantSession $session, string $text): string
     {
         $name = trim($text);
         if (mb_strlen($name) < 2) {
@@ -1757,8 +1858,8 @@ class MerchantWhatsAppService
 
     private function handleLinkCode(WhatsAppMerchantSession $session, string $text): string
     {
-        $email = strtolower(trim($text));
-        if (filter_var($email, FILTER_VALIDATE_EMAIL)) {
+        $email = $this->extractEmail($text);
+        if ($email !== null) {
             return $this->linkExistingAccount($session, $email);
         }
 
@@ -1892,6 +1993,10 @@ class MerchantWhatsAppService
             return "I couldn't find that account anymore. Reply with your name to create a new store.";
         }
 
+        $previousUserId = (int) ($session->user_id ?? 0);
+        if ($previousUserId > 0 && $previousUserId !== (int) $user->id) {
+            $this->releasePhoneFromUser($previousUserId, $session->phone);
+        }
         $this->attachPhoneToUser($user, $session->phone);
         $session->user_id = $user->id;
         $session->state = $this->storeForUser($user)
@@ -1905,6 +2010,17 @@ class MerchantWhatsAppService
         }
 
         return 'Welcome back'.($user->name ? ", {$user->name}" : '').". This WhatsApp can now manage your store.\n\n".$this->menuText($session);
+    }
+
+    private function extractEmail(string $text): ?string
+    {
+        if (preg_match('/[A-Z0-9._%+\-]+@[A-Z0-9.\-]+\.[A-Z]{2,}/i', $text, $matches) !== 1) {
+            return null;
+        }
+
+        $email = strtolower(rtrim($matches[0], '.,;:!?'));
+
+        return filter_var($email, FILTER_VALIDATE_EMAIL) ? $email : null;
     }
 
     private function maskEmail(string $email): string
@@ -1972,6 +2088,22 @@ class MerchantWhatsAppService
         }
 
         $user->phone = $normalized;
+        $user->save();
+        $this->cache->forgetUser($user->id);
+    }
+
+    private function releasePhoneFromUser(int $userId, string $phone): void
+    {
+        $user = User::query()->find($userId);
+        if (! $user) {
+            return;
+        }
+
+        if ($this->normalizePhone((string) $user->phone) !== $this->normalizePhone($phone)) {
+            return;
+        }
+
+        $user->phone = null;
         $user->save();
         $this->cache->forgetUser($user->id);
     }
