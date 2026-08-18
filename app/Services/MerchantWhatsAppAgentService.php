@@ -538,7 +538,7 @@ class MerchantWhatsAppAgentService
                         'orders: ship, call customer, mark paid, cancel',
                         'abandoned carts and reminders',
                         'discounts: create, pause, end',
-                        'daily brief, payouts, store stats',
+                        'daily brief, payouts, bank account for settlements, store stats',
                         'share the store link or open the full dashboard',
                         'website design: switch template, hero text, about/FAQ/sections',
                     ],
@@ -558,6 +558,7 @@ class MerchantWhatsAppAgentService
                 'list_abandoned_carts' => $this->toolListAbandonedCarts($session, $store),
                 'send_abandoned_reminder' => $this->toolSendAbandonedReminder($session, $store, $arguments),
                 'get_payouts' => $this->toolGetPayouts($store),
+                'update_payout_account' => $this->toolUpdatePayoutAccount($user, $store, $arguments),
                 'daily_brief' => $this->buildDailyBrief($store),
                 default => ['ok' => false, 'error' => 'Unknown tool.'],
             };
@@ -1373,10 +1374,72 @@ class MerchantWhatsAppAgentService
     }
 
     /**
+     * @param  array<string, mixed>  $arguments
+     * @return array<string, mixed>
+     */
+    private function toolUpdatePayoutAccount(User $user, Store $store, array $arguments): array
+    {
+        if (! $user->email_verified_at) {
+            return [
+                'ok' => false,
+                'error' => 'Verify your email before adding payout details. Open the dashboard and complete email verification.',
+                'code' => 'email_unverified',
+            ];
+        }
+
+        $accountName = mb_substr(trim((string) ($arguments['account_name'] ?? '')), 0, 160);
+        $bankName = mb_substr(trim((string) ($arguments['bank_name'] ?? '')), 0, 120);
+        $accountNumber = preg_replace('/\D+/', '', (string) ($arguments['account_number'] ?? '')) ?? '';
+
+        $missing = [];
+        if ($accountName === '') {
+            $missing[] = 'account holder name';
+        }
+        if ($bankName === '') {
+            $missing[] = 'bank name';
+        }
+        if ($accountNumber === '') {
+            $missing[] = 'account number';
+        }
+
+        if ($missing !== []) {
+            return [
+                'ok' => false,
+                'error' => 'Need '.implode(', ', $missing).' to save your payout bank account.',
+                'missing' => $missing,
+            ];
+        }
+
+        if (strlen($accountNumber) < 8 || strlen($accountNumber) > 20) {
+            return [
+                'ok' => false,
+                'error' => 'Account number should be 8–20 digits.',
+            ];
+        }
+
+        $store->payout_account_name = $accountName;
+        $store->payout_bank_name = $bankName;
+        $store->payout_account_number = $accountNumber;
+        $store->save();
+        $this->cache->forgetStore($store);
+
+        return [
+            'ok' => true,
+            'saved' => true,
+            'payouts_configured' => true,
+            'bank_name' => $bankName,
+            'account_name' => $accountName,
+            'account_number_last4' => substr($accountNumber, -4),
+            'summary' => "Saved {$bankName} account ending in ".substr($accountNumber, -4).' for payouts.',
+        ];
+    }
+
+    /**
      * @return array<string, mixed>
      */
     private function toolGetPayouts(Store $store): array
     {
+        $store = $store->fresh() ?? $store;
         $pending = (float) StoreOrder::query()
             ->where('store_id', $store->id)
             ->where('payment_status', 'paid')
@@ -1388,8 +1451,25 @@ class MerchantWhatsAppAgentService
             ->whereDate('paid_at', now()->toDateString())
             ->sum('total_amount');
 
+        $configured = filled($store->payout_account_name)
+            && filled($store->payout_bank_name)
+            && filled($store->payout_account_number);
+
+        $missing = [];
+        if (! filled($store->payout_account_name)) {
+            $missing[] = 'account holder name';
+        }
+        if (! filled($store->payout_bank_name)) {
+            $missing[] = 'bank name';
+        }
+        if (! filled($store->payout_account_number)) {
+            $missing[] = 'account number';
+        }
+
         return [
             'ok' => true,
+            'payouts_configured' => $configured,
+            'missing_payout_fields' => $missing === [] ? null : $missing,
             'pending_label' => 'NGN '.number_format($pending, 0),
             'received_today_label' => 'NGN '.number_format($paidToday, 0),
             'payout_account' => $store->payout_bank_name
@@ -1397,7 +1477,9 @@ class MerchantWhatsAppAgentService
                 : null,
             'hint' => $pending > 0
                 ? 'Payout pending. Paystack usually settles to the linked bank in 1–2 working days.'
-                : 'Nothing waiting to settle.',
+                : ($configured
+                    ? 'Nothing waiting to settle.'
+                    : 'Add your bank account so Bizgrid can settle order earnings to you.'),
         ];
     }
 

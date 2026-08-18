@@ -760,8 +760,34 @@ class MerchantWhatsAppAgent extends BaseAgent
             [
                 'type' => 'function',
                 'function' => [
+                    'name' => 'update_payout_account',
+                    'description' => 'Save the merchant payout bank account where Bizgrid settles order earnings. Use when they ask to add, update, or change bank account, payout account, or settlement details. Requires account holder name, bank name, and account number. Do not claim it is saved unless this tool returns ok: true.',
+                    'parameters' => [
+                        'type' => 'object',
+                        'properties' => [
+                            'account_name' => [
+                                'type' => 'string',
+                                'description' => 'Account holder name, e.g. business or owner name as it appears on the bank account.',
+                            ],
+                            'bank_name' => [
+                                'type' => 'string',
+                                'description' => 'Bank name, e.g. Access Bank, GTBank, Zenith.',
+                            ],
+                            'account_number' => [
+                                'type' => 'string',
+                                'description' => 'Nigerian bank account number, digits only.',
+                            ],
+                        ],
+                        'required' => ['account_name', 'bank_name', 'account_number'],
+                        'additionalProperties' => false,
+                    ],
+                ],
+            ],
+            [
+                'type' => 'function',
+                'function' => [
                     'name' => 'get_payouts',
-                    'description' => 'Pending vs received payout snapshot for this store.',
+                    'description' => 'Read pending vs received payout snapshot and whether a payout bank account is already saved. Does not save bank details — use update_payout_account for that.',
                     'parameters' => [
                         'type' => 'object',
                         'properties' => [
