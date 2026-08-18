@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace App\Http\Controllers;
 
 use App\Jobs\ProcessInboundCustomerMessage;
-use App\Jobs\ProcessInboundMerchantMessage;
+use App\Services\MerchantWhatsAppInboundBuffer;
 use App\Services\WhatsAppService;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response;
@@ -15,6 +15,7 @@ class WhatsAppWebhookController extends Controller
 {
     public function __construct(
         private readonly WhatsAppService $whatsapp,
+        private readonly MerchantWhatsAppInboundBuffer $merchantInboundBuffer,
     ) {}
 
     public function __invoke(Request $request): Response
@@ -53,7 +54,7 @@ class WhatsAppWebhookController extends Controller
 
         foreach ($this->whatsapp->parseInboundMessages($payload) as $message) {
             if ($this->whatsapp->isPlatformPhoneNumberId($message['phone_number_id'])) {
-                ProcessInboundMerchantMessage::dispatch($message)->onConnection('database');
+                $this->merchantInboundBuffer->push($message);
 
                 continue;
             }

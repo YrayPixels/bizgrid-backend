@@ -48,6 +48,9 @@ class MerchantWhatsAppAgentService
         private readonly PlatformAiConfigService $aiConfig,
         private readonly VisionAgent $vision,
         private readonly AbandonedRecoveryService $abandoned,
+        private readonly StorefrontBuilderService $builder,
+        private readonly StorefrontBlockService $blocks,
+        private readonly StorefrontPageBlockService $pageBlocks,
     ) {}
 
     public function available(): bool
@@ -106,6 +109,131 @@ class MerchantWhatsAppAgentService
     }
 
     /**
+     * @param  list<array{media_id: string, caption?: string}>  $photos
+     */
+    public function stageProductPhotos(WhatsAppMerchantSession $session, Store $store, array $photos): void
+    {
+        if ($photos === []) {
+            return;
+        }
+
+        /** @var list<array{media_id: string, image_url: string, caption: string}> $queue */
+        $queue = is_array($session->context['pending_product_photos'] ?? null)
+            ? $session->context['pending_product_photos']
+            : [];
+        $known = collect($queue)->pluck('media_id')->filter()->all();
+
+        foreach ($photos as $photo) {
+            $mediaId = trim((string) ($photo['media_id'] ?? ''));
+            if ($mediaId === '' || in_array($mediaId, $known, true)) {
+                continue;
+            }
+
+            try {
+                $stored = $this->storeProductImageWithBytes($store, $mediaId);
+            } catch (\Throwable $e) {
+                Log::warning('WhatsApp staged product photo failed.', [
+                    'store_id' => $store->id,
+                    'media_id' => $mediaId,
+                    'error' => $e->getMessage(),
+                ]);
+
+                continue;
+            }
+
+            $queue[] = [
+                'media_id' => $mediaId,
+                'image_url' => $stored['url'],
+                'caption' => trim((string) ($photo['caption'] ?? '')),
+            ];
+            $known[] = $mediaId;
+        }
+
+        if ($queue !== []) {
+            $session->mergeContext(['pending_product_photos' => $queue]);
+            $session->save();
+        }
+    }
+
+    public function ensureStagedProductPhotos(
+        WhatsAppMerchantSession $session,
+        Store $store,
+        ?string $mediaId = null,
+        int $minimumCount = 0,
+    ): void {
+        $session->refresh();
+
+        /** @var list<array{media_id: string, image_url: string, caption: string}> $queued */
+        $queued = is_array($session->context['pending_product_photos'] ?? null)
+            ? $session->context['pending_product_photos']
+            : [];
+        $known = collect($queued)->pluck('media_id')->filter()->all();
+
+        /** @var list<array{media_id: string, caption: string}> $toStage */
+        $toStage = [];
+
+        if (filled($mediaId) && ! in_array($mediaId, $known, true)) {
+            $toStage[] = ['media_id' => $mediaId, 'caption' => ''];
+        }
+
+        $recent = WhatsAppMerchantMessage::query()
+            ->where('whatsapp_merchant_session_id', $session->id)
+            ->where('direction', WhatsAppMerchantMessage::DIRECTION_INBOUND)
+            ->where('message_type', 'image')
+            ->where('created_at', '>=', now()->subMinutes(10))
+            ->orderBy('id')
+            ->get();
+
+        foreach ($recent as $message) {
+            $messageMediaId = trim((string) ($message->metadata['media_id'] ?? ''));
+            if ($messageMediaId === '' || in_array($messageMediaId, $known, true)) {
+                continue;
+            }
+
+            $caption = trim((string) ($message->body ?? ''));
+            if ($caption === '[image]') {
+                $caption = '';
+            }
+
+            $toStage[] = [
+                'media_id' => $messageMediaId,
+                'caption' => $caption,
+            ];
+            $known[] = $messageMediaId;
+        }
+
+        if ($toStage !== []) {
+            $this->stageProductPhotos($session, $store, $toStage);
+            $session->refresh();
+        }
+
+        $queued = is_array($session->context['pending_product_photos'] ?? null)
+            ? $session->context['pending_product_photos']
+            : [];
+
+        if ($minimumCount > 0 && count($queued) < $minimumCount) {
+            Log::warning('WhatsApp product photos missing from staged queue.', [
+                'session_id' => $session->id,
+                'store_id' => $store->id,
+                'expected' => $minimumCount,
+                'staged' => count($queued),
+            ]);
+        }
+    }
+
+    /**
+     * @return list<array{media_id?: string, image_url?: string, caption?: string}>
+     */
+    private function pendingProductPhotos(WhatsAppMerchantSession $session): array
+    {
+        $session->refresh();
+
+        return is_array($session->context['pending_product_photos'] ?? null)
+            ? $session->context['pending_product_photos']
+            : [];
+    }
+
+    /**
      * @return array{reply: string, tools_used: list<string>, link_email: ?string}
      */
     public function reply(
@@ -115,10 +243,20 @@ class MerchantWhatsAppAgentService
         string $text,
         string $type,
         ?string $mediaId,
+        int $photoCount = 0,
     ): array {
         $toolsUsed = [];
         $linkEmail = null;
-        $messages = $this->llmMessages($session, $user, $store, $text, $type, $mediaId);
+        if ($photoCount < 1 && $type === 'image' && filled($mediaId)) {
+            $photoCount = 1;
+        }
+
+        if ($photoCount > 1) {
+            $this->ensureStagedProductPhotos($session, $store, $mediaId, $photoCount);
+            $session->refresh();
+        }
+
+        $messages = $this->llmMessages($session, $user, $store, $text, $type, $mediaId, $photoCount);
         $tools = $this->agent->tools();
 
         for ($round = 1; $round <= self::MAX_TOOL_ROUNDS; $round++) {
@@ -159,6 +297,7 @@ class MerchantWhatsAppAgentService
                 }
 
                 $toolsUsed[] = $name;
+                $session->refresh();
                 $executed = $this->executeTool($session, $user, $store, $name, $arguments, $type, $mediaId);
                 if ($name === 'link_existing_account' && ($executed['ok'] ?? false) === true && is_string($executed['email'] ?? null) && $executed['email'] !== '') {
                     $linkEmail = $executed['email'];
@@ -215,6 +354,7 @@ class MerchantWhatsAppAgentService
         string $text,
         string $type,
         ?string $mediaId,
+        int $photoCount = 0,
     ): array {
         $records = WhatsAppMerchantMessage::query()
             ->where('whatsapp_merchant_session_id', $session->id)
@@ -244,6 +384,9 @@ class MerchantWhatsAppAgentService
 
         $store = $store->fresh() ?? $store;
         $draft = is_array($session->context['product_draft'] ?? null) ? $session->context['product_draft'] : [];
+        $pendingPhotos = is_array($session->context['pending_product_photos'] ?? null)
+            ? $session->context['pending_product_photos']
+            : [];
         $storeBlob = [
             'store_name' => $store->name,
             'store_url' => $this->storefrontUrl($store),
@@ -252,6 +395,13 @@ class MerchantWhatsAppAgentService
             'product_count' => (int) ($store->products_count ?? 0),
             'merchant_name' => $user->name,
             'pending_product_draft' => $draft === [] ? null : $draft,
+            'pending_product_photos' => $pendingPhotos === [] ? null : array_map(
+                fn (array $photo): array => [
+                    'image_url' => $photo['image_url'] ?? null,
+                    'caption' => $photo['caption'] ?? '',
+                ],
+                $pendingPhotos,
+            ),
             'focused_product' => is_array($session->context['last_product'] ?? null)
                 ? $session->context['last_product']
                 : null,
@@ -261,11 +411,19 @@ class MerchantWhatsAppAgentService
             'this_turn' => [
                 'type' => $type,
                 'has_photo' => $type === 'image' && filled($mediaId),
+                'photo_count' => max($photoCount, count($pendingPhotos)),
             ],
         ];
 
         $turn = $text;
-        if ($type === 'image' && $mediaId) {
+        $effectivePhotoCount = max($photoCount, count($pendingPhotos));
+        if ($effectivePhotoCount > 1) {
+            $turn = 'Merchant sent '.$effectivePhotoCount.' product photos';
+            if ($text !== '') {
+                $turn .= " with details:\n".$text;
+            }
+            $turn .= "\n\nIf they listed multiple products, call add_products once and match photos in order (photo 1 → product 1, etc.).";
+        } elseif ($type === 'image' && $mediaId) {
             $turn = trim('Merchant sent a product photo.'.($text !== '' ? ' Caption: '.$text : ''));
         } elseif (str_starts_with(strtolower($text), 'perk:')) {
             $perk = trim(substr($text, 5));
@@ -354,6 +512,7 @@ class MerchantWhatsAppAgentService
         try {
             return match ($name) {
                 'add_product' => $this->toolAddProduct($session, $store, $arguments, $type, $mediaId),
+                'add_products' => $this->toolAddProducts($session, $store, $arguments),
                 'update_product' => $this->toolUpdateProduct($session, $store, $arguments, $type, $mediaId),
                 'get_product' => $this->toolGetProduct($session, $store, $arguments),
                 'generate_product_description' => $this->toolGenerateProductDescription($session, $store, $arguments),
@@ -381,10 +540,14 @@ class MerchantWhatsAppAgentService
                         'discounts: create, pause, end',
                         'daily brief, payouts, store stats',
                         'share the store link or open the full dashboard',
+                        'website design: switch template, hero text, about/FAQ/sections',
                     ],
                 ],
                 'get_store_summary' => $this->toolGetStoreSummary($store),
                 'update_store_profile' => $this->toolUpdateStoreProfile($store, $arguments),
+                'select_storefront_template' => $this->toolSelectStorefrontTemplate($store, $arguments),
+                'update_storefront_hero' => $this->toolUpdateStorefrontHero($session, $store, $arguments, $type, $mediaId),
+                'edit_storefront_copy' => $this->toolEditStorefrontCopy($store, $arguments),
                 'list_customers' => $this->toolListCustomers($store, $arguments),
                 'list_discounts' => $this->toolListDiscounts($store),
                 'create_discount' => $this->toolCreateDiscount($store, $arguments),
@@ -419,6 +582,9 @@ class MerchantWhatsAppAgentService
         string $type,
         ?string $mediaId,
     ): array {
+        if ($type !== 'image' || ! filled($mediaId)) {
+            $this->ensureStagedProductPhotos($session, $store, $mediaId);
+        }
         $draft = is_array($session->context['product_draft'] ?? null) ? $session->context['product_draft'] : [];
 
         if ($type === 'image' && $mediaId) {
@@ -428,10 +594,12 @@ class MerchantWhatsAppAgentService
                 $identified = $this->identifyProductPhoto($store, $stored['contents'], $stored['mime']);
                 if ($identified !== null) {
                     $draft['suggestion'] = $identified;
-                    if (empty($draft['name']) && filled($identified['name'] ?? null)) {
-                        // Keep as suggestion only — merchant must confirm before create.
-                    }
                 }
+            }
+        } elseif (empty($draft['image_url'])) {
+            $queued = $this->peekPendingPhoto($session, 0);
+            if ($queued !== null) {
+                $draft['image_url'] = $queued['image_url'];
             }
         }
 
@@ -507,6 +675,7 @@ class MerchantWhatsAppAgentService
 
         $context = $session->context ?? [];
         unset($context['product_draft']);
+        $this->shiftPendingPhoto($session);
         $session->context = $context;
         $session->save();
 
@@ -523,6 +692,120 @@ class MerchantWhatsAppAgentService
             'next_steps' => $this->productNextStepHints($product),
             'store' => $publishResult,
         ];
+    }
+
+    /**
+     * @param  array<string, mixed>  $arguments
+     * @return array<string, mixed>
+     */
+    private function toolAddProducts(WhatsAppMerchantSession $session, Store $store, array $arguments): array
+    {
+        $items = is_array($arguments['products'] ?? null) ? $arguments['products'] : [];
+        if (count($items) < 2) {
+            return ['ok' => false, 'error' => 'Need at least two products. Use add_product for one item.'];
+        }
+
+        $this->ensureStagedProductPhotos($session, $store, null, count($items));
+        $photos = $this->pendingProductPhotos($session);
+
+        $created = [];
+        $errors = [];
+
+        foreach (array_values($items) as $index => $item) {
+            if (! is_array($item)) {
+                continue;
+            }
+
+            $name = mb_substr(trim((string) ($item['name'] ?? '')), 0, 120);
+            $price = isset($item['price']) && is_numeric($item['price']) ? round((float) $item['price'], 2) : null;
+            if ($name === '' || $price === null) {
+                $errors[] = 'Product '.($index + 1).' needs a name and price.';
+
+                continue;
+            }
+
+            $photo = $photos[$index] ?? null;
+            $imageUrl = is_array($photo) ? ($photo['image_url'] ?? null) : null;
+            $product = $this->products->createForStore($store, [
+                'name' => $name,
+                'price' => $price,
+                'description' => filled($item['description'] ?? null) ? mb_substr(trim((string) $item['description']), 0, 2000) : null,
+                'currency' => 'NGN',
+                'image_url' => filled($imageUrl) ? $imageUrl : null,
+                'status' => 'active',
+            ]);
+
+            $created[] = [
+                'preview' => $this->productPreview($store, $product),
+                'had_photo' => filled($imageUrl),
+            ];
+        }
+
+        if ($created === []) {
+            return [
+                'ok' => false,
+                'error' => $errors !== [] ? implode(' ', $errors) : 'Could not create those products.',
+            ];
+        }
+
+        $this->cache->forgetStore($store);
+        $publishResult = $this->publishStorefront($store->fresh() ?? $store);
+
+        $last = end($created);
+        if (is_array($last) && is_array($last['preview'] ?? null)) {
+            $session->mergeContext([
+                'last_product' => $last['preview'],
+                'show_product_card' => true,
+            ]);
+        }
+
+        $context = $session->context ?? [];
+        unset($context['product_draft'], $context['pending_product_photos']);
+        $session->context = $context;
+        $session->save();
+
+        $attachedPhotos = collect($created)->where('had_photo', true)->count();
+
+        return [
+            'ok' => true,
+            'created' => true,
+            'count' => count($created),
+            'photos_attached' => $attachedPhotos,
+            'photos_staged' => count($photos),
+            'products' => $created,
+            'store' => $publishResult,
+        ];
+    }
+
+    /**
+     * @return array{media_id?: string, image_url: string, caption?: string}|null
+     */
+    private function peekPendingPhoto(WhatsAppMerchantSession $session, int $index = 0): ?array
+    {
+        $photos = $this->pendingProductPhotos($session);
+        $photo = $photos[$index] ?? null;
+
+        return is_array($photo) && filled($photo['image_url'] ?? null) ? $photo : null;
+    }
+
+    private function shiftPendingPhoto(WhatsAppMerchantSession $session): void
+    {
+        $photos = is_array($session->context['pending_product_photos'] ?? null)
+            ? $session->context['pending_product_photos']
+            : [];
+        if ($photos === []) {
+            return;
+        }
+
+        array_shift($photos);
+        $context = $session->context ?? [];
+        if ($photos === []) {
+            unset($context['pending_product_photos']);
+        } else {
+            $context['pending_product_photos'] = array_values($photos);
+        }
+        $session->context = $context;
+        $session->save();
     }
 
     /**
@@ -1867,6 +2150,329 @@ class MerchantWhatsAppAgentService
         ], now()->addMinutes(15));
 
         return rtrim((string) config('storehause.app_url', 'http://localhost:3000'), '/').'/login?auth_code='.urlencode($code);
+    }
+
+    /**
+     * @param  array<string, mixed>  $arguments
+     * @return array<string, mixed>
+     */
+    private function toolSelectStorefrontTemplate(Store $store, array $arguments): array
+    {
+        $templateId = trim((string) ($arguments['template_id'] ?? ''));
+        if ($templateId === '') {
+            $message = trim((string) ($arguments['message'] ?? ''));
+            $templateId = $message !== '' ? ($this->builder->resolveTemplateFromMessage($message) ?? '') : '';
+        }
+
+        if ($templateId === '') {
+            return [
+                'ok' => false,
+                'error' => 'Tell me which look you want: cosmetics, beauty, fashion, or minimal.',
+            ];
+        }
+
+        $active = StorefrontTemplate::activeConcreteIds();
+        if (! in_array($templateId, $active, true)) {
+            return ['ok' => false, 'error' => "Template {$templateId} is not available."];
+        }
+
+        $store = $store->fresh(['merchant']) ?? $store;
+        $store->storefront_template_id = $templateId;
+        $store->save();
+
+        $regenerate = (bool) ($arguments['regenerate'] ?? false);
+        if ($regenerate) {
+            $draft = $this->builder->synthesizeStorefront($store);
+        } else {
+            $draft = $this->loadOrScaffoldStorefrontDraft($store);
+            data_set($draft, 'template.id', $templateId);
+            data_set($draft, 'template.source', 'whatsapp');
+            $draft['palette'] = $this->builder->defaultStorefrontPalette($templateId, $store->brand_color);
+            $draft = $this->blocks->ensureAllPageBlocksOnStorefront($draft);
+        }
+
+        $this->saveStorefrontDraft($store, $draft);
+        $publish = $this->maybeRepublishAfterDraftSave($store->fresh(['merchant']) ?? $store);
+
+        return [
+            'ok' => true,
+            'template_id' => $templateId,
+            'template_label' => $this->templateLabel($templateId),
+            'regenerated' => $regenerate,
+            'url' => $publish['url'],
+            'published' => $publish['published'],
+            'summary' => $regenerate
+                ? "Refreshed your website with the {$this->templateLabel($templateId)} design."
+                : "Switched your website to the {$this->templateLabel($templateId)} design.",
+        ];
+    }
+
+    /**
+     * @param  array<string, mixed>  $arguments
+     * @return array<string, mixed>
+     */
+    private function toolUpdateStorefrontHero(
+        WhatsAppMerchantSession $session,
+        Store $store,
+        array $arguments,
+        string $type,
+        ?string $mediaId,
+    ): array {
+        $headline = trim((string) ($arguments['headline'] ?? ''));
+        $subheadline = trim((string) ($arguments['subheadline'] ?? ''));
+        $ctaLabel = trim((string) ($arguments['cta_label'] ?? ''));
+
+        if ($headline === '' && $subheadline === '' && $ctaLabel === '' && $type !== 'image') {
+            return ['ok' => false, 'error' => 'Tell me the new headline, subheadline, or button label.'];
+        }
+
+        $store = $store->fresh(['merchant']) ?? $store;
+        $storefront = $this->loadOrScaffoldStorefrontDraft($store);
+        $changedPaths = [];
+
+        if ($headline !== '') {
+            StorefrontPathEditor::apply($storefront, 'hero.headline', $headline);
+            $changedPaths[] = 'hero.headline';
+        }
+
+        if ($subheadline !== '') {
+            StorefrontPathEditor::apply($storefront, 'hero.subheadline', $subheadline);
+            $changedPaths[] = 'hero.subheadline';
+        }
+
+        if ($ctaLabel !== '') {
+            StorefrontPathEditor::apply($storefront, 'hero.cta_label', $ctaLabel);
+            $changedPaths[] = 'hero.cta_label';
+        }
+
+        if ($type === 'image' && filled($mediaId)) {
+            $stored = $this->storeProductImageWithBytes($store, $mediaId);
+            $mediaResult = $this->builder->applyMediaUpdates($storefront, [
+                'media.hero_image_url' => $stored['url'],
+            ]);
+            $storefront = $mediaResult['storefront'];
+            $changedPaths = [...$changedPaths, ...$mediaResult['changed_paths']];
+        }
+
+        $storefront = $this->blocks->maybeSyncHomeBlocksFromLegacyPaths($storefront, $changedPaths);
+        $this->saveStorefrontDraft($store, $storefront);
+        $publish = $this->maybeRepublishAfterDraftSave($store->fresh(['merchant']) ?? $store);
+
+        return [
+            'ok' => true,
+            'changed_paths' => $changedPaths,
+            'url' => $publish['url'],
+            'published' => $publish['published'],
+            'summary' => $this->whatsappStorefrontEditMessage($this->builder->describeStorefrontEdit($changedPaths)),
+        ];
+    }
+
+    /**
+     * @param  array<string, mixed>  $arguments
+     * @return array<string, mixed>
+     */
+    private function toolEditStorefrontCopy(Store $store, array $arguments): array
+    {
+        $instruction = trim((string) ($arguments['instruction'] ?? ''));
+        if ($instruction === '') {
+            return ['ok' => false, 'error' => 'Tell me what to change on your website.'];
+        }
+
+        $store = $store->fresh(['merchant']) ?? $store;
+        $storefront = $this->loadOrScaffoldStorefrontDraft($store);
+        $changedPaths = [];
+        $summary = null;
+
+        if ($this->builder->isColorIntent($instruction)) {
+            $color = $this->builder->extractColorFromMessage($instruction);
+            if ($color !== null) {
+                $colorResult = $this->builder->applyBrandColor($storefront, $store, $color);
+                $storefront = $colorResult['storefront'];
+                $changedPaths = [...$changedPaths, ...$colorResult['changed_paths']];
+                $summary = $this->whatsappStorefrontEditMessage($this->builder->describeStorefrontEdit($colorResult['changed_paths']));
+            }
+        }
+
+        if ($summary === null && $this->builder->isStockImageIntent($instruction)) {
+            $stockResult = $this->builder->applyStockImages($storefront, $store);
+            $storefront = $stockResult['storefront'];
+            $changedPaths = [...$changedPaths, ...$stockResult['changed_paths']];
+            $summary = 'Done — I refreshed the homepage photos with stock images that match your template.';
+        }
+
+        if ($summary === null && ! StorefrontPathEditor::isFaqItemAppendInstruction($instruction)) {
+            $pageResult = $this->pageBlocks->tryApplyPageBlockInstructionFormatted($storefront, $instruction, $store);
+            if (is_array($pageResult)) {
+                $storefront = $pageResult['storefront'];
+                $changedPaths = [...$changedPaths, ...($pageResult['changed_paths'] ?? [])];
+                $summary = $this->whatsappStorefrontEditMessage((string) ($pageResult['assistant_message'] ?? ''));
+            }
+        }
+
+        if ($summary === null && ! StorefrontPathEditor::isFaqItemAppendInstruction($instruction)) {
+            $homeResult = $this->blocks->tryApplyHomeBlockInstructionFormatted($storefront, $instruction);
+            if (is_array($homeResult)) {
+                $storefront = $homeResult['storefront'];
+                $changedPaths = [...$changedPaths, ...($homeResult['changed_paths'] ?? [])];
+                $summary = $this->whatsappStorefrontEditMessage((string) ($homeResult['assistant_message'] ?? ''));
+            }
+        }
+
+        if ($summary === null && ! StorefrontPathEditor::isFaqItemAppendInstruction($instruction)) {
+            $contactResult = $this->blocks->tryApplyContactFormInstructionFormatted($storefront, $instruction);
+            if (is_array($contactResult)) {
+                $storefront = $contactResult['storefront'];
+                $changedPaths = [...$changedPaths, ...($contactResult['changed_paths'] ?? [])];
+                $summary = $this->whatsappStorefrontEditMessage((string) ($contactResult['assistant_message'] ?? ''));
+            }
+        }
+
+        if ($summary === null && StorefrontPathEditor::shouldRefreshFaq($instruction)) {
+            $faqRefresh = StorefrontPathEditor::tryRefreshFaqItems(
+                $storefront,
+                $instruction,
+                $store->name,
+                $store->merchant?->industry,
+            );
+            if (is_array($faqRefresh)) {
+                $storefront = $faqRefresh['storefront'];
+                $changedPaths = [...$changedPaths, ...($faqRefresh['changed_paths'] ?? [])];
+                $summary = $this->whatsappStorefrontEditMessage($this->builder->describeStorefrontEdit($faqRefresh['changed_paths']));
+            }
+        }
+
+        if ($summary === null) {
+            $faqAppend = StorefrontPathEditor::tryAppendFaqItem($storefront, $instruction);
+            if (is_array($faqAppend)) {
+                $storefront = $this->pageBlocks->maybeSyncHomeBlocksFromLegacyPaths(
+                    $faqAppend['storefront'],
+                    $faqAppend['changed_paths'],
+                );
+                $changedPaths = [...$changedPaths, ...($faqAppend['changed_paths'] ?? [])];
+                $summary = $this->whatsappStorefrontEditMessage($this->builder->describeStorefrontEdit($faqAppend['changed_paths']));
+            }
+        }
+
+        if ($summary === null || $changedPaths === []) {
+            return [
+                'ok' => false,
+                'error' => 'I could not apply that website change. Try being specific (e.g. "change the about title to Our Story" or "switch brand color to navy"). For advanced layout work, use open_dashboard.',
+            ];
+        }
+
+        $this->saveStorefrontDraft($store, $storefront);
+        $publish = $this->maybeRepublishAfterDraftSave($store->fresh(['merchant']) ?? $store);
+
+        return [
+            'ok' => true,
+            'changed_paths' => array_values(array_unique($changedPaths)),
+            'url' => $publish['url'],
+            'published' => $publish['published'],
+            'summary' => $summary,
+        ];
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function loadOrScaffoldStorefrontDraft(Store $store): array
+    {
+        $store = $store->fresh(['merchant']) ?? $store;
+        $draft = $this->publish->resolveFullDraft($store);
+
+        if (is_array($draft) && $draft !== []) {
+            return $this->blocks->ensureAllPageBlocksOnStorefront($draft);
+        }
+
+        $name = $store->name ?: 'Store';
+        $description = $store->description ?: $name.' on Bizgrid.';
+        $templateId = $store->storefront_template_id ?: StorefrontTemplate::DEFAULT_ID;
+
+        return $this->blocks->ensureAllPageBlocksOnStorefront([
+            'template' => [
+                'id' => $templateId,
+                'source' => 'whatsapp',
+            ],
+            'data_plugs' => [
+                'home_products_source' => 'merchant_products',
+            ],
+            'hero' => [
+                'headline' => "Shop {$name} online",
+                'subheadline' => $description,
+                'cta_label' => 'Shop now',
+            ],
+            'about' => [
+                'title' => "About {$name}",
+                'body' => $description,
+            ],
+            'seo' => [
+                'title' => $name.' | Online Store',
+                'description' => $description,
+            ],
+            'palette' => $this->builder->defaultStorefrontPalette($templateId, $store->brand_color),
+        ]);
+    }
+
+    /**
+     * @param  array<string, mixed>  $storefront
+     */
+    private function saveStorefrontDraft(Store $store, array $storefront): void
+    {
+        $storefront = $this->blocks->ensureAllPageBlocksOnStorefront($storefront);
+        $storefront = $this->products->mergeIntoStorefront($storefront, $store->fresh(['merchant']) ?? $store, true);
+        $this->publish->persistDraft($store, $storefront);
+        $this->cache->forgetStore($store);
+    }
+
+    /**
+     * @return array{published: bool, url: string, error?: string}
+     */
+    private function maybeRepublishAfterDraftSave(Store $store): array
+    {
+        $url = $this->storefrontUrl($store);
+
+        if (! $this->publish->isPublished($store)) {
+            return ['published' => false, 'url' => $url];
+        }
+
+        try {
+            $published = $this->publish->publish($store->fresh(['merchant']) ?? $store);
+            $this->cache->forgetStore($published);
+
+            return ['published' => true, 'url' => $this->storefrontUrl($published)];
+        } catch (\Throwable $e) {
+            Log::warning('WhatsApp storefront republish failed.', [
+                'store_id' => $store->id,
+                'error' => $e->getMessage(),
+            ]);
+
+            return ['published' => false, 'url' => $url, 'error' => $e->getMessage()];
+        }
+    }
+
+    private function templateLabel(string $templateId): string
+    {
+        return match ($templateId) {
+            'cosmetics' => 'Cosmetics',
+            'beauty' => 'Beauty',
+            'fashion_lookbook' => 'Fashion lookbook',
+            'minimalistic' => 'Minimal',
+            default => Str::headline(str_replace('_', ' ', $templateId)),
+        };
+    }
+
+    private function whatsappStorefrontEditMessage(string $message): string
+    {
+        $trimmed = trim($message);
+        if ($trimmed === '') {
+            return 'Done — your website is updated.';
+        }
+
+        return str_replace(
+            ['Check the preview on the right.', 'check the preview on the right.'],
+            ['Open your store link to see it.', 'open your store link to see it.'],
+            $trimmed,
+        );
     }
 
     /**

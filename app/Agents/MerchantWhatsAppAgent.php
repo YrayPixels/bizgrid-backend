@@ -95,6 +95,43 @@ class MerchantWhatsAppAgent extends BaseAgent
             [
                 'type' => 'function',
                 'function' => [
+                    'name' => 'add_products',
+                    'description' => 'Add several products at once when the merchant sent multiple photos and/or listed multiple name+price lines in one message. Match pending_product_photos in order (photo 1 → first product, photo 2 → second, etc.). Use instead of calling add_product repeatedly.',
+                    'parameters' => [
+                        'type' => 'object',
+                        'properties' => [
+                            'products' => [
+                                'type' => 'array',
+                                'items' => [
+                                    'type' => 'object',
+                                    'properties' => [
+                                        'name' => [
+                                            'type' => 'string',
+                                            'description' => 'Product name.',
+                                        ],
+                                        'price' => [
+                                            'type' => 'number',
+                                            'description' => 'Price in NGN.',
+                                        ],
+                                        'description' => [
+                                            'type' => ['string', 'null'],
+                                            'description' => 'Optional short description.',
+                                        ],
+                                    ],
+                                    'required' => ['name', 'price'],
+                                    'additionalProperties' => false,
+                                ],
+                                'minItems' => 2,
+                            ],
+                        ],
+                        'required' => ['products'],
+                        'additionalProperties' => false,
+                    ],
+                ],
+            ],
+            [
+                'type' => 'function',
+                'function' => [
                     'name' => 'update_product',
                     'description' => 'Update an existing product (photo, name, price, description, stock, status, sale price, category). Use when they say update/change/edit/hide an item — never add_product for updates. If they mean the last product they added, search can be omitted.',
                     'parameters' => [
@@ -404,6 +441,74 @@ class MerchantWhatsAppAgent extends BaseAgent
                                 'type' => ['boolean', 'null'],
                             ],
                         ],
+                        'additionalProperties' => false,
+                    ],
+                ],
+            ],
+            [
+                'type' => 'function',
+                'function' => [
+                    'name' => 'select_storefront_template',
+                    'description' => 'Switch the website design template (cosmetics, beauty, fashion lookbook, minimal). Use when they ask to change template, theme, or overall website look.',
+                    'parameters' => [
+                        'type' => 'object',
+                        'properties' => [
+                            'template_id' => [
+                                'type' => ['string', 'null'],
+                                'description' => 'cosmetics, beauty, fashion_lookbook, or minimalistic.',
+                            ],
+                            'message' => [
+                                'type' => ['string', 'null'],
+                                'description' => 'Their words if template_id is unclear, e.g. "switch to beauty".',
+                            ],
+                            'regenerate' => [
+                                'type' => ['boolean', 'null'],
+                                'description' => 'True to regenerate all website copy for the new template. Default false only switches the look.',
+                            ],
+                        ],
+                        'additionalProperties' => false,
+                    ],
+                ],
+            ],
+            [
+                'type' => 'function',
+                'function' => [
+                    'name' => 'update_storefront_hero',
+                    'description' => 'Update homepage hero headline, subheadline, button label, or hero photo. Use for homepage title/tagline/CTA changes. If they sent a photo this turn for the banner, it is attached automatically.',
+                    'parameters' => [
+                        'type' => 'object',
+                        'properties' => [
+                            'headline' => [
+                                'type' => ['string', 'null'],
+                                'description' => 'Main homepage headline.',
+                            ],
+                            'subheadline' => [
+                                'type' => ['string', 'null'],
+                                'description' => 'Supporting line under the headline.',
+                            ],
+                            'cta_label' => [
+                                'type' => ['string', 'null'],
+                                'description' => 'Shop button label, e.g. Shop now.',
+                            ],
+                        ],
+                        'additionalProperties' => false,
+                    ],
+                ],
+            ],
+            [
+                'type' => 'function',
+                'function' => [
+                    'name' => 'edit_storefront_copy',
+                    'description' => 'Edit website copy and sections: about page, FAQ, SEO, homepage blocks, brand color, contact form, add/remove sections. Pass their exact request as instruction.',
+                    'parameters' => [
+                        'type' => 'object',
+                        'properties' => [
+                            'instruction' => [
+                                'type' => 'string',
+                                'description' => 'Natural language edit, e.g. "make the about section shorter" or "change brand color to navy" or "add a FAQ about delivery".',
+                            ],
+                        ],
+                        'required' => ['instruction'],
                         'additionalProperties' => false,
                     ],
                 ],

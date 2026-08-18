@@ -163,9 +163,151 @@ class MerchantWhatsAppService
         );
 
         try {
-            $reply = $this->route($session->fresh() ?? $session, $text, $type === 'audio' ? 'text' : $type, $mediaId, $profileName);
+            $reply = $this->route($session->fresh() ?? $session, $text, $type === 'audio' ? 'text' : $type, $mediaId, $profileName, $type === 'image' ? 1 : 0);
         } catch (\Throwable $e) {
             Log::warning('Merchant WhatsApp handler failed.', [
+                'phone' => $phone,
+                'error' => $e->getMessage(),
+            ]);
+            $reply = 'Something went wrong on my side. Please try again in a moment.';
+        }
+
+        if ($reply === '') {
+            return;
+        }
+
+        $this->sendReply($session, $phone, $this->decorateReply($session, $reply));
+    }
+
+    /**
+     * @param  list<array{
+     *     from: string,
+     *     message_id?: string,
+     *     type?: string,
+     *     text?: string,
+     *     media_id?: ?string,
+     *     profile_name?: ?string,
+     *     profile_username?: ?string,
+     *     from_user_id?: ?string,
+     *     timestamp?: ?string,
+     *     display_phone_number?: ?string
+     * }>  $messages
+     */
+    public function handleInboundBatch(array $messages): void
+    {
+        if ($messages === []) {
+            return;
+        }
+
+        usort($messages, function (array $left, array $right): int {
+            $leftTs = (int) ($left['timestamp'] ?? 0);
+            $rightTs = (int) ($right['timestamp'] ?? 0);
+
+            return $leftTs <=> $rightTs;
+        });
+
+        $phone = $this->normalizePhone((string) ($messages[0]['from'] ?? ''));
+        if ($phone === '') {
+            return;
+        }
+
+        $session = WhatsAppMerchantSession::query()->firstOrCreate(
+            ['phone' => $phone],
+            ['state' => WhatsAppMerchantSession::STATE_NEW],
+        );
+
+        $textParts = [];
+        $imageMessages = [];
+        $lastMessageId = '';
+        $profileName = null;
+        $lastType = 'text';
+        $lastMediaId = null;
+
+        foreach ($messages as $message) {
+            $messageId = (string) ($message['message_id'] ?? '');
+            if ($messageId !== '' && $session->last_provider_message_id === $messageId) {
+                continue;
+            }
+
+            if ($messageId !== '') {
+                $lastMessageId = $messageId;
+            }
+
+            $type = (string) ($message['type'] ?? 'text');
+            $text = trim((string) ($message['text'] ?? ''));
+            $mediaId = filled($message['media_id'] ?? null) ? (string) $message['media_id'] : null;
+            $profileName = filled($message['profile_name'] ?? null)
+                ? (string) $message['profile_name']
+                : $profileName;
+
+            if ($type === 'image' && $mediaId) {
+                $imageMessages[] = [
+                    'media_id' => $mediaId,
+                    'caption' => $text,
+                ];
+                if ($text !== '') {
+                    $textParts[] = $text;
+                }
+                $lastType = 'image';
+                $lastMediaId = $mediaId;
+            } elseif ($text !== '') {
+                $textParts[] = $text;
+                $lastType = 'text';
+            }
+
+            $this->whatsapp->markPlatformMessageRead($messageId, in_array($type, ['image', 'audio'], true));
+            $this->recordMessage(
+                $session,
+                WhatsAppMerchantMessage::DIRECTION_INBOUND,
+                $type,
+                $text !== '' ? $text : ($type === 'image' ? '[image]' : ''),
+                $messageId !== '' ? $messageId : null,
+                array_filter([
+                    'profile_name' => filled($message['profile_name'] ?? null) ? (string) $message['profile_name'] : null,
+                    'profile_username' => filled($message['profile_username'] ?? null) ? (string) $message['profile_username'] : null,
+                    'from_user_id' => filled($message['from_user_id'] ?? null) ? (string) $message['from_user_id'] : null,
+                    'provider_timestamp' => filled($message['timestamp'] ?? null) ? (string) $message['timestamp'] : null,
+                    'display_phone_number' => filled($message['display_phone_number'] ?? null) ? (string) $message['display_phone_number'] : null,
+                    'media_id' => $mediaId,
+                    'batch_size' => count($messages) > 1 ? count($messages) : null,
+                ], fn ($value) => filled($value)),
+            );
+        }
+
+        if ($lastMessageId !== '') {
+            $session->last_provider_message_id = $lastMessageId;
+        }
+        $session->last_inbound_at = now();
+        $session->save();
+
+        $combinedText = trim(implode("\n", array_values(array_unique($textParts))));
+        $session = $session->fresh() ?? $session;
+
+        if ($imageMessages !== [] && $session->user_id) {
+            $user = User::query()->find($session->user_id);
+            $store = $user ? $this->storeForUser($user) : null;
+            if ($store) {
+                $this->agent->ensureStagedProductPhotos(
+                    $session,
+                    $store,
+                    $lastMediaId,
+                    count($imageMessages),
+                );
+                $session = $session->fresh() ?? $session;
+            }
+        }
+
+        try {
+            $reply = $this->route(
+                $session,
+                $combinedText,
+                $lastType,
+                $lastMediaId,
+                $profileName,
+                count($imageMessages),
+            );
+        } catch (\Throwable $e) {
+            Log::warning('Merchant WhatsApp batch handler failed.', [
                 'phone' => $phone,
                 'error' => $e->getMessage(),
             ]);
@@ -344,6 +486,7 @@ class MerchantWhatsAppService
         string $type,
         ?string $mediaId,
         ?string $profileName,
+        int $photoCount = 0,
     ): string {
         $command = $this->matchCommand($text);
 
@@ -371,7 +514,7 @@ class MerchantWhatsAppService
             WhatsAppMerchantSession::STATE_AWAITING_NAME => $this->handleOnboardingName($session, $text, $profileName, $command),
             WhatsAppMerchantSession::STATE_AWAITING_LINK_CODE => $this->handleLinkCode($session, $text),
             WhatsAppMerchantSession::STATE_AWAITING_STORE_NAME => $this->handleStoreName($session, $text),
-            default => $this->handleReadyConversation($session, $text, $type, $mediaId, $command),
+            default => $this->handleReadyConversation($session, $text, $type, $mediaId, $command, $photoCount),
         };
     }
 
@@ -381,12 +524,13 @@ class MerchantWhatsAppService
         string $type,
         ?string $mediaId,
         ?string $command,
+        int $photoCount = 0,
     ): string {
         $user = $this->requireUser($session);
         $store = $this->storeForUser($user);
 
         if ($store && $this->agent->available()) {
-            $result = $this->agent->reply($session, $user, $store, $text, $type, $mediaId);
+            $result = $this->agent->reply($session, $user, $store, $text, $type, $mediaId, $photoCount);
             if (filled($result['link_email'] ?? null)) {
                 return $this->linkExistingAccount($session, (string) $result['link_email']);
             }
@@ -634,7 +778,6 @@ class MerchantWhatsAppService
 
         if ($command === 'add_product' || $type === 'image') {
             $session->state = WhatsAppMerchantSession::STATE_ADDING_PRODUCT;
-            $session->context = [];
             $session->save();
 
             return $this->handleAddProduct($session, $text, $type, $mediaId);
