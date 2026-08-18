@@ -5,9 +5,11 @@ declare(strict_types=1);
 namespace App\Http\Controllers;
 
 use App\Jobs\ProcessInboundCustomerMessage;
+use App\Jobs\ProcessInboundMerchantMessage;
 use App\Services\WhatsAppService;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response;
+use Illuminate\Support\Facades\Log;
 
 class WhatsAppWebhookController extends Controller
 {
@@ -50,8 +52,25 @@ class WhatsAppWebhookController extends Controller
         }
 
         foreach ($this->whatsapp->parseInboundMessages($payload) as $message) {
+            if ($this->whatsapp->isPlatformPhoneNumberId($message['phone_number_id'])) {
+                ProcessInboundMerchantMessage::dispatch($message)->onConnection('database');
+
+                continue;
+            }
+
+            if (($message['type'] ?? 'text') !== 'text') {
+                continue;
+            }
+
             $connection = $this->whatsapp->findConnectionByPhoneNumberId($message['phone_number_id']);
             if (! $connection) {
+                Log::info('WhatsApp webhook message ignored.', [
+                    'phone_number_id' => $message['phone_number_id'],
+                    'from' => $message['from'] ?? null,
+                    'message_id' => $message['message_id'] ?? null,
+                    'reason' => 'phone_number_id does not match platform config or a store connection',
+                ]);
+
                 continue;
             }
 
@@ -61,7 +80,7 @@ class WhatsAppWebhookController extends Controller
                 'external_user_name' => $message['profile_name'],
                 'text' => $message['text'],
                 'provider_message_id' => $message['message_id'],
-            ]);
+            ])->onConnection('database');
         }
 
         return response('OK', 200);

@@ -1,6 +1,8 @@
 <?php
 
 use Illuminate\Support\Facades\Artisan;
+use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Route;
 
 Route::get('/', function () {
@@ -105,6 +107,60 @@ Route::post('/maintenance/mail-test', function () {
             'error' => $e->getMessage(),
             'config' => $config,
         ], 500);
+    }
+});
+
+Route::match(['GET', 'POST'], '/maintenance/queue-work', function () {
+    $key = request()->header('X-Deploy-Key') ?: request()->input('key');
+    if ($key !== config('app.deploy_key')) {
+        abort(403, 'Unauthorized');
+    }
+
+    $lock = Cache::lock('maintenance-queue-work', 55);
+    if (! $lock->get()) {
+        return response()->json([
+            'message' => 'Queue worker already running',
+            'busy' => true,
+            'pending' => DB::table('jobs')->count(),
+        ]);
+    }
+
+    $maxJobs = min(30, max(1, (int) request()->input('max_jobs', 15)));
+    $maxTime = min(45, max(5, (int) request()->input('max_time', 20)));
+
+    try {
+        set_time_limit($maxTime + 15);
+        $pendingBefore = DB::table('jobs')->count();
+
+        $exitCode = Artisan::call('queue:work', [
+            'connection' => 'database',
+            '--stop-when-empty' => true,
+            '--max-jobs' => $maxJobs,
+            '--max-time' => $maxTime,
+            '--tries' => 1,
+            '--sleep' => 0,
+        ]);
+        $output = trim(Artisan::output());
+        $pendingAfter = DB::table('jobs')->count();
+
+        return response()->json([
+            'message' => 'Queue processed',
+            'exit_code' => $exitCode,
+            'pending_before' => $pendingBefore,
+            'pending_after' => $pendingAfter,
+            'processed' => max(0, $pendingBefore - $pendingAfter),
+            'failed' => DB::table('failed_jobs')->count(),
+            'output' => $output,
+        ], $exitCode === 0 ? 200 : 500);
+    } catch (\Throwable $e) {
+        return response()->json([
+            'message' => 'Queue work failed',
+            'error' => $e->getMessage(),
+            'output' => trim(Artisan::output()),
+            'pending' => DB::table('jobs')->count(),
+        ], 500);
+    } finally {
+        $lock->release();
     }
 });
 

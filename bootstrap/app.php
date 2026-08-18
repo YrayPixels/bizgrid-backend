@@ -24,6 +24,7 @@ return Application::configure(basePath: dirname(__DIR__))
             'maintenance/cache-clear',
             'maintenance/mail-test',
             'maintenance/seed-demo',
+            'maintenance/queue-work',
         ]);
 
         $middleware->alias([

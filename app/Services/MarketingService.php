@@ -445,7 +445,7 @@ class MarketingService
                 'display_phone_number' => $whatsappConnection?->page_name,
                 'phone_number_id' => $whatsappConnection?->page_id,
                 'auto_reply_enabled' => (bool) $store->whatsapp_auto_reply_enabled,
-                'webhook_url' => rtrim((string) config('app.url'), '/').'/api/storehause/webhooks/whatsapp',
+                'webhook_url' => $this->whatsapp->webhookUrl(),
             ],
             'tiktok' => [
                 'configured' => $this->tiktok->isConfigured(),

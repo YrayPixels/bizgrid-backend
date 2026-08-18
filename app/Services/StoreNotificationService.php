@@ -39,6 +39,7 @@ class StoreNotificationService
             if ($recipient) {
                 Mail::to($recipient)->send(new MerchantNewOrderEmail($store, $order, $awaitingPayment));
             }
+            $this->notifyMerchantWhatsApp($store, $order, 'placed');
         }
     }
 
@@ -55,6 +56,7 @@ class StoreNotificationService
             if ($recipient) {
                 Mail::to($recipient)->send(new MerchantOrderPaidEmail($store, $order));
             }
+            $this->notifyMerchantWhatsApp($store, $order, 'paid');
         }
     }
 
@@ -92,11 +94,11 @@ class StoreNotificationService
         }
 
         $recipient = $this->merchantNotificationEmail($store);
-        if (! $recipient) {
-            return;
+        if ($recipient) {
+            Mail::to($recipient)->send(new MerchantLowStockEmail($store, $product));
         }
 
-        Mail::to($recipient)->send(new MerchantLowStockEmail($store, $product));
+        app(MerchantWhatsAppService::class)->notifyLowStock($store, $product);
     }
 
     /**
@@ -112,6 +114,11 @@ class StoreNotificationService
         }
 
         Mail::to($recipient)->send(new MerchantBillingEmail($merchant, $event, $context));
+    }
+
+    private function notifyMerchantWhatsApp(Store $store, StoreOrder $order, string $event): void
+    {
+        app(MerchantWhatsAppService::class)->notifyOrder($store, $order, $event);
     }
 
     public function merchantNotificationEmail(Store $store): ?string

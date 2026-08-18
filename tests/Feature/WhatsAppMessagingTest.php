@@ -15,9 +15,11 @@ uses(RefreshDatabase::class);
 beforeEach(function () {
     config([
         'openai.api_key' => 'test-key',
-        'whatsapp.verify_token' => 'verify-token',
-        'whatsapp.app_secret' => 'app-secret',
         'storehause.platform_domain' => 'example.test',
+    ]);
+    seedWhatsAppPlatformConfig([
+        'platform_phone_number_id' => null,
+        'platform_access_token' => null,
     ]);
 });
 

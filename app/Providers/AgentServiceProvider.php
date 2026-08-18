@@ -5,6 +5,7 @@ namespace App\Providers;
 use App\Agents\AgentRegistry;
 use App\Agents\CustomerCommerceAgent;
 use App\Agents\MarketingAgent;
+use App\Agents\MerchantWhatsAppAgent;
 use App\Agents\ProductStyleProfileAgent;
 use App\Agents\SentimentAgent;
 use App\Agents\ShoppingIntentAgent;
@@ -42,6 +43,7 @@ class AgentServiceProvider extends ServiceProvider
             $registry->register('shopping-planner-agent', ShoppingPlannerAgent::class);
             $registry->register('shopping-product-picker-agent', ShoppingProductPickerAgent::class);
             $registry->register('shopping-shopper-agent', ShoppingShopperAgent::class);
+            $registry->register('merchant-whatsapp-agent', MerchantWhatsAppAgent::class);
 
             return $registry;
         });
