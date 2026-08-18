@@ -56,7 +56,57 @@ class MerchantWhatsAppAgentService
     }
 
     /**
-     * @return array{reply: string, tools_used: list<string>}
+     * @return array{action: string, email: ?string, name: ?string, store_name: ?string, reply: string}|null
+     */
+    public function interpretOnboarding(WhatsAppMerchantSession $session, string $text, string $step): ?array
+    {
+        if (! $this->agent->available()) {
+            return null;
+        }
+
+        $history = WhatsAppMerchantMessage::query()
+            ->where('whatsapp_merchant_session_id', $session->id)
+            ->orderByDesc('id')
+            ->limit(self::LLM_HISTORY)
+            ->get()
+            ->reverse()
+            ->values();
+
+        if ($history->isNotEmpty() && $history->last()->direction === WhatsAppMerchantMessage::DIRECTION_INBOUND) {
+            $history->pop();
+        }
+
+        $messages = [
+            [
+                'role' => 'system',
+                'content' => $this->agent->onboardingSystemPrompt()."\n\n## Current step\n".json_encode([
+                    'step' => $step,
+                    'whatsapp_profile_name' => $session->context['profile_name'] ?? null,
+                ], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE),
+            ],
+        ];
+
+        foreach ($history as $message) {
+            $body = trim((string) ($message->body ?? ''));
+            if ($body === '') {
+                $body = '['.$message->message_type.']';
+            }
+            $messages[] = [
+                'role' => $message->direction === WhatsAppMerchantMessage::DIRECTION_INBOUND ? 'user' : 'assistant',
+                'content' => $body,
+            ];
+        }
+
+        $messages[] = [
+            'role' => 'user',
+            'content' => $text !== '' ? $text : '[empty message]',
+        ];
+
+        return $this->agent->interpretOnboarding($messages);
+    }
+
+    /**
+     * @return array{reply: string, tools_used: list<string>, link_email: ?string}
      */
     public function reply(
         WhatsAppMerchantSession $session,
@@ -67,6 +117,7 @@ class MerchantWhatsAppAgentService
         ?string $mediaId,
     ): array {
         $toolsUsed = [];
+        $linkEmail = null;
         $messages = $this->llmMessages($session, $user, $store, $text, $type, $mediaId);
         $tools = $this->agent->tools();
 
@@ -82,7 +133,7 @@ class MerchantWhatsAppAgentService
                 if ($reply !== '') {
                     $this->rememberTools($session, $toolsUsed);
 
-                    return ['reply' => $reply, 'tools_used' => $toolsUsed];
+                    return ['reply' => $reply, 'tools_used' => $toolsUsed, 'link_email' => $linkEmail];
                 }
                 break;
             }
@@ -109,12 +160,21 @@ class MerchantWhatsAppAgentService
 
                 $toolsUsed[] = $name;
                 $executed = $this->executeTool($session, $user, $store, $name, $arguments, $type, $mediaId);
+                if ($name === 'link_existing_account' && ($executed['ok'] ?? false) === true && is_string($executed['email'] ?? null) && $executed['email'] !== '') {
+                    $linkEmail = $executed['email'];
+                }
 
                 $messages[] = [
                     'role' => 'tool',
                     'tool_call_id' => $callId,
                     'content' => json_encode($executed, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE),
                 ];
+            }
+
+            if ($linkEmail !== null) {
+                $this->rememberTools($session, $toolsUsed);
+
+                return ['reply' => '', 'tools_used' => $toolsUsed, 'link_email' => $linkEmail];
             }
         }
 
@@ -133,7 +193,7 @@ class MerchantWhatsAppAgentService
 
         $this->rememberTools($session, $toolsUsed);
 
-        return ['reply' => $reply, 'tools_used' => $toolsUsed];
+        return ['reply' => $reply, 'tools_used' => $toolsUsed, 'link_email' => $linkEmail];
     }
 
     /**
@@ -311,6 +371,7 @@ class MerchantWhatsAppAgentService
                     'url' => $this->dashboardUrl($user),
                     'expires_minutes' => 15,
                 ],
+                'link_existing_account' => $this->toolLinkExistingAccount($arguments),
                 'show_help' => [
                     'ok' => true,
                     'menu' => [
@@ -1806,5 +1867,28 @@ class MerchantWhatsAppAgentService
         ], now()->addMinutes(15));
 
         return rtrim((string) config('storehause.app_url', 'http://localhost:3000'), '/').'/login?auth_code='.urlencode($code);
+    }
+
+    /**
+     * @param  array<string, mixed>  $arguments
+     * @return array<string, mixed>
+     */
+    private function toolLinkExistingAccount(array $arguments): array
+    {
+        $email = strtolower(trim((string) ($arguments['email'] ?? '')));
+        if ($email === '' || ! filter_var($email, FILTER_VALIDATE_EMAIL)) {
+            return ['ok' => false, 'error' => 'Need a valid email to link this WhatsApp.'];
+        }
+
+        $exists = User::query()->whereRaw('lower(email) = ?', [$email])->exists();
+        if (! $exists) {
+            return ['ok' => false, 'error' => 'No Bizgrid account uses that email.', 'email' => $email];
+        }
+
+        return [
+            'ok' => true,
+            'email' => $email,
+            'next' => 'send_link_code',
+        ];
     }
 }

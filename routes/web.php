@@ -116,7 +116,15 @@ Route::match(['GET', 'POST'], '/maintenance/queue-work', function () {
         abort(403, 'Unauthorized');
     }
 
-    $lock = Cache::lock('maintenance-queue-work', 55);
+    // once=1 drains whatever is waiting and exits (tests / debug). Production cron
+    // omits it so this request stays alive for ~55s and re-checks the queue every 2s.
+    $once = request()->boolean('once');
+    $maxJobs = min(60, max(1, (int) request()->input('max_jobs', 30)));
+    $maxTime = min(55, max(1, (int) request()->input('max_time', $once ? 20 : 55)));
+    $sleep = $once ? 0 : min(5, max(1, (int) request()->input('sleep', 2)));
+    $timeout = min(90, max(15, $maxTime - 5));
+
+    $lock = Cache::lock('maintenance-queue-work', $maxTime + 5);
     if (! $lock->get()) {
         return response()->json([
             'message' => 'Queue worker already running',
@@ -125,21 +133,25 @@ Route::match(['GET', 'POST'], '/maintenance/queue-work', function () {
         ]);
     }
 
-    $maxJobs = min(30, max(1, (int) request()->input('max_jobs', 15)));
-    $maxTime = min(45, max(5, (int) request()->input('max_time', 20)));
+    ignore_user_abort(true);
 
     try {
-        set_time_limit($maxTime + 15);
+        set_time_limit($maxTime + 20);
         $pendingBefore = DB::table('jobs')->count();
 
-        $exitCode = Artisan::call('queue:work', [
+        $options = [
             'connection' => 'database',
-            '--stop-when-empty' => true,
             '--max-jobs' => $maxJobs,
             '--max-time' => $maxTime,
+            '--timeout' => $timeout,
             '--tries' => 1,
-            '--sleep' => 0,
-        ]);
+            '--sleep' => $sleep,
+        ];
+        if ($once) {
+            $options['--stop-when-empty'] = true;
+        }
+
+        $exitCode = Artisan::call('queue:work', $options);
         $output = trim(Artisan::output());
         $pendingAfter = DB::table('jobs')->count();
 
@@ -150,6 +162,9 @@ Route::match(['GET', 'POST'], '/maintenance/queue-work', function () {
             'pending_after' => $pendingAfter,
             'processed' => max(0, $pendingBefore - $pendingAfter),
             'failed' => DB::table('failed_jobs')->count(),
+            'max_time' => $maxTime,
+            'sleep' => $sleep,
+            'once' => $once,
             'output' => $output,
         ], $exitCode === 0 ? 200 : 500);
     } catch (\Throwable $e) {
