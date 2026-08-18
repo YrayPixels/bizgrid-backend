@@ -1930,3 +1930,47 @@ it('edits storefront brand color via the WhatsApp agent', function () {
     expect(data_get($store->draft_json, 'palette.primary'))->toBe('#1E3A5F')
         ->and(data_get($store->published_json, 'palette.primary'))->toBe('#1E3A5F');
 });
+
+it('saves payout bank details via the WhatsApp agent', function () {
+    $from = '2348099999994';
+    say($from, 'hi');
+    say($from, 'FKM');
+    say($from, 'Payout Shop');
+
+    $store = Store::query()->where('name', 'Payout Shop')->first();
+    expect($store->payout_account_name)->toBeNull();
+
+    $this->mock(\App\Agents\MerchantWhatsAppAgent::class, function ($mock) {
+        $mock->shouldReceive('available')->andReturn(true);
+        $mock->shouldReceive('systemPrompt')->andReturn('test');
+        $mock->shouldReceive('tools')->andReturn([]);
+        $mock->shouldReceive('complete')->andReturn(
+            [
+                'content' => null,
+                'tool_calls' => [[
+                    'id' => 'call_payout',
+                    'type' => 'function',
+                    'function' => [
+                        'name' => 'update_payout_account',
+                        'arguments' => json_encode([
+                            'account_name' => 'Payout Shop Ltd',
+                            'bank_name' => 'Access Bank',
+                            'account_number' => '0123456789',
+                        ]),
+                    ],
+                ]],
+            ],
+            [
+                'content' => 'Saved your Access Bank account for payouts.',
+                'tool_calls' => [],
+            ],
+        );
+    });
+
+    say($from, 'Add my bank account Access Bank 0123456789 Payout Shop Ltd');
+
+    $store->refresh();
+    expect($store->payout_account_name)->toBe('Payout Shop Ltd')
+        ->and($store->payout_bank_name)->toBe('Access Bank')
+        ->and($store->payout_account_number)->toBe('0123456789');
+});
