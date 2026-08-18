@@ -26,6 +26,10 @@ class ApiCacheService
 
     public function resolveKey(Request $request, string $profile): ?string
     {
+        if (str_contains($request->path(), 'whatsapp-messages')) {
+            return null;
+        }
+
         $path = '/'.ltrim($request->path(), '/');
         $query = $request->query();
         ksort($query);

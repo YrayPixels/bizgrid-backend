@@ -19,8 +19,7 @@ pest()->extend(Tests\TestCase::class)
 
 pest()->extend(Tests\TestCase::class)
     ->in('Unit');
-    
-    
+
 /*
 
 
@@ -57,6 +56,19 @@ function mockStorefrontAiAgent(callable $configure): void
     $configure($mock);
 
     app()->instance(StorefrontAiAgentService::class, $mock);
+}
+
+function seedWhatsAppPlatformConfig(array $overrides = []): void
+{
+    $config = app(App\Services\PlatformWhatsAppConfigService::class);
+    $config->clearCache();
+    $config->update(array_merge([
+        'verify_token' => 'verify-token',
+        'app_secret' => 'app-secret',
+        'platform_phone_number_id' => 'platform-phone-1',
+        'platform_access_token' => 'platform-token',
+        'graph_version' => 'v21.0',
+    ], $overrides));
 }
 
 function glowRitualsProfile(): array

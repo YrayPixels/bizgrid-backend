@@ -25,3 +25,8 @@ Schedule::command('storehause:publish-scheduled-posts')
 Schedule::command('storehause:sync-marketing-insights')
     ->hourly()
     ->withoutOverlapping();
+
+Schedule::command('storehause:merchant-whatsapp-brief')
+    ->dailyAt('08:00')
+    ->timezone('Africa/Lagos')
+    ->withoutOverlapping();

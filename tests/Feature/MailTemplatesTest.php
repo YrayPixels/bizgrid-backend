@@ -7,6 +7,7 @@ use App\Mail\AdminPasswordResetCode;
 use App\Mail\AdminVerificationCode;
 use App\Mail\MerchantPasswordResetCodeEmail;
 use App\Mail\MerchantWelcomeEmail;
+use App\Mail\WhatsAppAccountLinkCodeEmail;
 use App\Models\Merchant;
 use App\Models\Store;
 use App\Models\User;
@@ -53,6 +54,22 @@ it('renders bizgrid branded merchant password reset code email', function () {
         ->toContain('Bizgrid')
         ->toContain('Reset your password')
         ->toContain('123456')
+        ->toContain('ada@bizgrid.test')
+        ->not->toContain('HeySolana');
+});
+
+it('renders bizgrid branded whatsapp account link code email', function () {
+    $user = User::factory()->make([
+        'name' => 'Ada Okafor',
+        'email' => 'ada@bizgrid.test',
+    ]);
+
+    $html = (new WhatsAppAccountLinkCodeEmail($user, '847291', 'ending in 6339'))->render();
+
+    expect($html)
+        ->toContain('Bizgrid')
+        ->toContain('847291')
+        ->toContain('ending in 6339')
         ->toContain('ada@bizgrid.test')
         ->not->toContain('HeySolana');
 });

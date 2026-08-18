@@ -265,4 +265,54 @@ class OrderLifecycleService
 
         return $released;
     }
+
+    /**
+     * Mark an awaiting/pending order as paid (bank transfer, POS, or merchant confirmation).
+     */
+    public function markPaid(StoreOrder $order, string $method = 'bank_transfer', bool $notify = true): StoreOrder
+    {
+        if ($order->payment_status === 'paid') {
+            return $order;
+        }
+
+        if ($order->status === 'cancelled' || $order->payment_status === 'refunded') {
+            throw ValidationException::withMessages([
+                'status' => 'Cancelled or refunded orders cannot be marked paid.',
+            ]);
+        }
+
+        DB::transaction(function () use ($order, $method): void {
+            $order->refresh();
+            if ($order->payment_status === 'paid') {
+                return;
+            }
+
+            $order->payment_status = 'paid';
+            $order->payment_method = $order->payment_method ?: $method;
+            $order->status = $order->status === 'pending' ? 'processing' : $order->status;
+            $order->paid_at = now();
+            $order->settlement_status = $order->settlement_status ?: 'pending_settlement';
+            $order->save();
+
+            $store = Store::query()->lockForUpdate()->find($order->store_id);
+            if ($store) {
+                $merchantAmount = round(
+                    (float) $order->total_amount - (float) ($order->platform_fee_amount ?? 0),
+                    2,
+                );
+                $store->increment('orders_count');
+                $store->increment('gross_revenue', $merchantAmount);
+            }
+        });
+
+        $order = $order->fresh('store') ?? $order;
+        if ($order->store) {
+            $this->customers->recalculateForOrder($order);
+            if ($notify) {
+                $this->storeNotifications->orderPaid($order->store, $order);
+            }
+        }
+
+        return $order;
+    }
 }

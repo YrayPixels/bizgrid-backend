@@ -142,6 +142,15 @@ Maintenance endpoints (protected by `DEPLOY_KEY`):
 - `POST /maintenance/cache-clear?key=...`
 - `POST /maintenance/mail-test?key=...&to=you@example.com` — SMTP test; returns active mail config / error
 - `POST /maintenance/seed-demo?key=...` — create/reset the organizer demo merchant (`DemoMerchantSeeder`)
+- `GET` or `POST /maintenance/queue-work?key=...` — drain the database queue (WhatsApp webhooks). Point a cron/uptime ping at this every minute on cPanel.
+
+cPanel / cron-service example (every minute):
+
+```bash
+curl -sS "https://YOUR-API-DOMAIN/maintenance/queue-work?key=YOUR_DEPLOY_KEY"
+```
+
+Keep `QUEUE_CONNECTION=database` in production. Do not set it to `sync`.
 
 ### Organizer demo on production
 

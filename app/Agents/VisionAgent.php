@@ -174,6 +174,23 @@ class VisionAgent
     }
 
     /**
+     * @param  array<string, mixed>  $context
+     * @return array{name: string, price: float|null, description: string, category: string|null}|array{error: string}|null
+     */
+    public function analyzeProductBytes(string $contents, string $mime, array $context = []): ?array
+    {
+        $mime = strtolower(trim($mime));
+        if (! str_starts_with($mime, 'image/')) {
+            $mime = 'image/jpeg';
+        }
+
+        return $this->analyzeProductImage(
+            'data:'.$mime.';base64,'.base64_encode($contents),
+            $context,
+        );
+    }
+
+    /**
      * Resolve an image URL for OpenAI vision.
      * If it's an HTTP URL, download it and convert to a base64 data URL
      * so OpenAI can access it regardless of CDN/CORS restrictions.
