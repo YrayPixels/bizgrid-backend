@@ -117,14 +117,18 @@ Route::match(['GET', 'POST'], '/maintenance/queue-work', function () {
     }
 
     // once=1 drains whatever is waiting and exits (tests / debug). Production cron
-    // omits it so this request stays alive for ~55s and re-checks the queue every 2s.
+    // omits it so this request stays alive for ~26s and re-checks the queue every 2s.
+    // Default window fits common 30s cron-monitor timeouts (boot + JSON response).
     $once = request()->boolean('once');
     $maxJobs = min(60, max(1, (int) request()->input('max_jobs', 30)));
-    $maxTime = min(55, max(1, (int) request()->input('max_time', $once ? 20 : 55)));
+    $requestedMaxTime = (int) request()->input('max_time', $once ? 20 : 26);
+    $maxTime = $once
+        ? min(45, max(1, $requestedMaxTime))
+        : min(28, max(1, $requestedMaxTime));
     $sleep = $once ? 0 : min(5, max(1, (int) request()->input('sleep', 2)));
-    $timeout = min(90, max(15, $maxTime - 5));
+    $timeout = min(24, max(10, $maxTime - 2));
 
-    $lock = Cache::lock('maintenance-queue-work', $maxTime + 5);
+    $lock = Cache::lock('maintenance-queue-work', $maxTime + 3);
     if (! $lock->get()) {
         return response()->json([
             'message' => 'Queue worker already running',
@@ -136,7 +140,7 @@ Route::match(['GET', 'POST'], '/maintenance/queue-work', function () {
     ignore_user_abort(true);
 
     try {
-        set_time_limit($maxTime + 20);
+        set_time_limit($maxTime + 10);
         $pendingBefore = DB::table('jobs')->count();
 
         $options = [

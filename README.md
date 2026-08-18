@@ -142,12 +142,12 @@ Maintenance endpoints (protected by `DEPLOY_KEY`):
 - `POST /maintenance/cache-clear?key=...`
 - `POST /maintenance/mail-test?key=...&to=you@example.com` — SMTP test; returns active mail config / error
 - `POST /maintenance/seed-demo?key=...` — create/reset the organizer demo merchant (`DemoMerchantSeeder`)
-- `GET` or `POST /maintenance/queue-work?key=...` — run the database queue worker for ~55s, polling every 2s (WhatsApp webhooks). Point a cron at this **once per minute** on cPanel. Use `?once=1` only to drain and exit immediately.
+- `GET` or `POST /maintenance/queue-work?key=...` — run the database queue worker for ~26s, polling every 2s (fits 30s cron monitors). Point a cron at this **once per minute** on cPanel. Use `?once=1` only to drain and exit immediately.
 
-cPanel / cron-service example (every minute). `--max-time 65` must exceed the worker window so curl waits for the poll loop to finish:
+cPanel / cron-service example (every minute):
 
 ```bash
-curl -sS --max-time 65 "https://YOUR-API-DOMAIN/maintenance/queue-work?key=YOUR_DEPLOY_KEY"
+curl -sS "https://YOUR-API-DOMAIN/maintenance/queue-work?key=YOUR_DEPLOY_KEY"
 ```
 
 Keep `QUEUE_CONNECTION=database` in production. Do not set it to `sync`.

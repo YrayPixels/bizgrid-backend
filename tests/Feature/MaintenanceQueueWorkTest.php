@@ -46,8 +46,8 @@ it('polls the queue for the cron window instead of exiting when empty', function
             return $command === 'queue:work'
                 && ! array_key_exists('--stop-when-empty', $params)
                 && ($params['--sleep'] ?? null) === 2
-                && ($params['--max-time'] ?? null) === 55
-                && ($params['--timeout'] ?? null) === 50
+                && ($params['--max-time'] ?? null) === 26
+                && ($params['--timeout'] ?? null) === 24
                 && ($params['--tries'] ?? null) === 1;
         })
         ->andReturn(0);
@@ -57,6 +57,6 @@ it('polls the queue for the cron window instead of exiting when empty', function
         ->assertOk()
         ->assertJsonPath('message', 'Queue processed')
         ->assertJsonPath('sleep', 2)
-        ->assertJsonPath('max_time', 55)
+        ->assertJsonPath('max_time', 26)
         ->assertJsonPath('once', false);
 });
