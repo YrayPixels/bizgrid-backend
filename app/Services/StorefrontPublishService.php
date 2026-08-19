@@ -14,6 +14,7 @@ class StorefrontPublishService
     public function __construct(
         private readonly WorkbenchProjectStorage $projectStorage,
         private readonly MerchantUsageEnforcementService $enforcement,
+        private readonly StorefrontScreenshotService $screenshots,
     ) {}
     /**
      * Bolt custom project payloads can exceed MySQL max_allowed_packet when duplicated
@@ -239,7 +240,12 @@ class StorefrontPublishService
             'published_at' => now(),
         ]));
 
-        return $store->fresh();
+        $published = $store->fresh();
+        if ($published) {
+            $this->screenshots->queueCapture($published);
+        }
+
+        return $published ?? $store;
     }
 
     /** @return array{status: string, published_at: string|null, is_published: bool, has_unpublished_changes: bool} */

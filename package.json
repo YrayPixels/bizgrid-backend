@@ -6,7 +6,8 @@
         "dev": "vite",
         "start": "php artisan serve",
         "serve": "node serve.cjs",
-        "puppeteer:install": "npx puppeteer browsers install chrome"
+        "puppeteer:install": "npx puppeteer browsers install chrome",
+        "screenshot:install": "npm run puppeteer:install"
     },
     "dependencies": {
         "@zoon/rialto": "github:zoonru/rialto#zoon",
