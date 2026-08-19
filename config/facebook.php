@@ -41,6 +41,9 @@ return [
         'read_insights',
     ],
 
+    // Login for Business configuration ID for WhatsApp Embedded Signup (v4).
+    'whatsapp_embedded_signup_config_id' => env('WHATSAPP_EMBEDDED_SIGNUP_CONFIG_ID'),
+
     /*
     |--------------------------------------------------------------------------
     | Ads guardrails

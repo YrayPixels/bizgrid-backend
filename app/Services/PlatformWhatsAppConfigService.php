@@ -23,6 +23,8 @@ class PlatformWhatsAppConfigService
         'whatsapp.platform_access_token',
         'whatsapp.platform_phone_number_id',
         'whatsapp.webhook_url',
+        'whatsapp.embedded_signup_config_id',
+        'whatsapp.app_id',
     ];
 
     private const WEBHOOK_PATH = '/api/storehause/webhooks/whatsapp';
@@ -72,6 +74,35 @@ class PlatformWhatsAppConfigService
         return $this->normalizeWebhookUrl($stored ?? $this->defaultWebhookUrl());
     }
 
+    public function embeddedSignupConfigId(): ?string
+    {
+        $stored = $this->plain('whatsapp.embedded_signup_config_id');
+        if (filled($stored)) {
+            return $stored;
+        }
+
+        $fromEnv = trim((string) config('facebook.whatsapp_embedded_signup_config_id', ''));
+
+        return $fromEnv !== '' ? $fromEnv : null;
+    }
+
+    public function facebookAppId(): ?string
+    {
+        $stored = $this->plain('whatsapp.app_id');
+        if (filled($stored)) {
+            return $stored;
+        }
+
+        $fromEnv = trim((string) config('facebook.app_id', ''));
+
+        return $fromEnv !== '' ? $fromEnv : null;
+    }
+
+    public function embeddedSignupConfigured(): bool
+    {
+        return filled($this->facebookAppId()) && filled($this->appSecret());
+    }
+
     /**
      * @return array{
      *     webhook_configured: bool,
@@ -84,7 +115,10 @@ class PlatformWhatsAppConfigService
      *     app_secret_configured: bool,
      *     app_secret_preview: string|null,
      *     platform_access_token_configured: bool,
-     *     platform_access_token_preview: string|null
+     *     platform_access_token_preview: string|null,
+     *     embedded_signup_config_id: string|null,
+     *     facebook_app_id: string|null,
+     *     embedded_signup_configured: bool
      * }
      */
     public function adminConfig(): array
@@ -92,6 +126,8 @@ class PlatformWhatsAppConfigService
         $verifyToken = $this->verifyToken();
         $appSecret = $this->appSecret();
         $accessToken = $this->platformAccessToken();
+        $configId = $this->embeddedSignupConfigId();
+        $facebookAppId = $this->facebookAppId();
 
         return [
             'webhook_configured' => $this->webhookConfigured(),
@@ -105,6 +141,9 @@ class PlatformWhatsAppConfigService
             'app_secret_preview' => $this->maskSecret($appSecret),
             'platform_access_token_configured' => filled($accessToken),
             'platform_access_token_preview' => $this->maskSecret($accessToken),
+            'embedded_signup_config_id' => $configId,
+            'facebook_app_id' => $facebookAppId,
+            'embedded_signup_configured' => $this->embeddedSignupConfigured(),
         ];
     }
 
@@ -115,7 +154,9 @@ class PlatformWhatsAppConfigService
      *     verify_token?: string|null,
      *     app_secret?: string|null,
      *     platform_access_token?: string|null,
-     *     webhook_url?: string|null
+     *     webhook_url?: string|null,
+     *     embedded_signup_config_id?: string|null,
+     *     app_id?: string|null
      * }  $input
      */
     public function update(array $input): array
@@ -146,6 +187,14 @@ class PlatformWhatsAppConfigService
 
         if (array_key_exists('platform_access_token', $input)) {
             $this->maybePersistSecret('whatsapp.platform_access_token', $input['platform_access_token']);
+        }
+
+        if (array_key_exists('embedded_signup_config_id', $input)) {
+            $this->maybePersistPlain('whatsapp.embedded_signup_config_id', $input['embedded_signup_config_id']);
+        }
+
+        if (array_key_exists('app_id', $input)) {
+            $this->maybePersistPlain('whatsapp.app_id', $input['app_id']);
         }
 
         $this->clearCache();

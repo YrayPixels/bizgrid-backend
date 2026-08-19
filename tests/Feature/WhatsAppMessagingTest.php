@@ -196,3 +196,82 @@ it('auto replies to whatsapp product inquiries', function () {
     expect(CustomerConversation::count())->toBe(1);
     expect(CustomerMessage::where('direction', 'outbound')->where('ai_generated', true)->exists())->toBeTrue();
 });
+
+it('completes WhatsApp Embedded Signup coexistence onboarding', function () {
+    ['user' => $user, 'store' => $store] = createWhatsAppStore();
+
+    config([
+        'facebook.app_id' => '111222333',
+        'facebook.app_secret' => 'fb-secret',
+        'facebook.whatsapp_embedded_signup_config_id' => 'config-123',
+    ]);
+    seedWhatsAppPlatformConfig([
+        'platform_phone_number_id' => null,
+        'platform_access_token' => null,
+        'embedded_signup_config_id' => 'config-123',
+        'app_id' => '111222333',
+    ]);
+
+    Http::fake(function (\Illuminate\Http\Client\Request $request) {
+        $url = $request->url();
+        if (str_contains($url, 'oauth/access_token')) {
+            return Http::response(['access_token' => 'bisu-token'], 200);
+        }
+        if (str_contains($url, 'phone_numbers')) {
+            return Http::response([
+                'data' => [[
+                    'id' => '555000111',
+                    'display_phone_number' => '+2348090000000',
+                    'is_on_biz_app' => true,
+                ]],
+            ], 200);
+        }
+
+        return Http::response(['success' => true], 200);
+    });
+
+    $this->actingAs($user)
+        ->postJson('/api/storehause/marketing/whatsapp/embedded-signup', [
+            'code' => 'AQB-signup-code',
+            'waba_id' => 'waba-99',
+        ])
+        ->assertOk()
+        ->assertJsonPath('whatsapp.connected', true)
+        ->assertJsonPath('whatsapp.coexistence', true)
+        ->assertJsonPath('whatsapp.display_phone_number', '+2348090000000');
+
+    expect($store->fresh()->socialConnections()->where('provider', 'whatsapp')->value('page_id'))
+        ->toBe('555000111');
+});
+
+it('records WhatsApp Business app echoes as merchant replies', function () {
+    createWhatsAppStore();
+    Queue::fake();
+
+    $payload = [
+        'object' => 'whatsapp_business_account',
+        'entry' => [[
+            'changes' => [[
+                'value' => [
+                    'metadata' => ['phone_number_id' => '123456789'],
+                    'smb_message_echoes' => [[
+                        'from' => '2348012345678',
+                        'to' => '2348011111111',
+                        'id' => 'wamid.echo',
+                        'type' => 'text',
+                        'text' => ['body' => 'See you in store!'],
+                    ]],
+                ],
+            ]],
+        ]],
+    ];
+
+    $body = json_encode($payload);
+    $signature = 'sha256='.hash_hmac('sha256', $body, 'app-secret');
+
+    $this->postJson('/api/storehause/webhooks/whatsapp', $payload, [
+        'X-Hub-Signature-256' => $signature,
+    ])->assertOk();
+
+    Queue::assertPushed(\App\Jobs\ProcessCustomerWhatsAppEcho::class);
+});

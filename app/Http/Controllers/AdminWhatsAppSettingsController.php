@@ -37,6 +37,8 @@ class AdminWhatsAppSettingsController extends Controller
             'app_secret' => 'nullable|string|max:255',
             'platform_access_token' => 'nullable|string|max:5000',
             'webhook_url' => 'nullable|string|max:500',
+            'embedded_signup_config_id' => 'nullable|string|max:80',
+            'app_id' => 'nullable|string|max:80',
         ]);
 
         if ($validator->fails()) {

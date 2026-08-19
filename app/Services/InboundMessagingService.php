@@ -104,6 +104,53 @@ class InboundMessagingService
     }
 
     /**
+     * Record a message the merchant sent from the WhatsApp Business app (coexistence echo).
+     *
+     * @param  array{
+     *     channel: string,
+     *     external_user_id: string,
+     *     text: string,
+     *     provider_message_id?: ?string
+     * }  $input
+     */
+    public function handlePhoneEcho(StoreSocialConnection $connection, array $input): void
+    {
+        $store = Store::query()->find($connection->store_id);
+        if (! $store instanceof Store) {
+            return;
+        }
+
+        $providerId = $input['provider_message_id'] ?? null;
+        if (is_string($providerId) && $providerId !== '') {
+            $exists = CustomerMessage::query()
+                ->where('provider_message_id', $providerId)
+                ->exists();
+            if ($exists) {
+                return;
+            }
+        }
+
+        $conversation = $this->findOrCreateConversation(
+            $store,
+            $input['channel'],
+            $input['external_user_id'],
+            null,
+        );
+
+        CustomerMessage::create([
+            'conversation_id' => $conversation->id,
+            'direction' => 'outbound',
+            'body' => $input['text'],
+            'provider_message_id' => $providerId,
+            'ai_generated' => false,
+            'sent_by' => 'merchant',
+            'metadata' => ['source' => 'whatsapp_business_app'],
+        ]);
+
+        $conversation->update(['last_message_at' => now()]);
+    }
+
+    /**
      * @return list<array<string, mixed>>
      */
     public function listConversations(Store $store, int $limit = 20): array

@@ -34,6 +34,9 @@ it('returns whatsapp settings for admins without leaking secrets', function () {
                 'app_secret_preview',
                 'platform_access_token_configured',
                 'platform_access_token_preview',
+                'embedded_signup_config_id',
+                'facebook_app_id',
+                'embedded_signup_configured',
             ],
         ])
         ->assertJsonMissing(['verify-token'])
@@ -54,11 +57,14 @@ it('lets super admins save whatsapp settings from the admin page', function () {
             'app_secret' => 'meta-app-secret',
             'platform_access_token' => 'EAAB-platform-token',
             'webhook_url' => 'https://b882-105-127-16-50.ngrok-free.app',
+            'app_id' => '111222333',
+            'embedded_signup_config_id' => 'config-123',
         ])
         ->assertOk()
         ->assertJsonPath('data.webhook_configured', true)
         ->assertJsonPath('data.platform_configured', true)
         ->assertJsonPath('data.platform_phone_number_id', '1234567890')
+        ->assertJsonPath('data.facebook_app_id', '111222333')
         ->assertJsonPath('data.webhook_url', 'https://b882-105-127-16-50.ngrok-free.app/api/storehause/webhooks/whatsapp')
         ->assertJsonPath('data.verify_token_configured', true)
         ->assertJsonMissing(['meta-verify-token'])
@@ -72,6 +78,8 @@ it('lets super admins save whatsapp settings from the admin page', function () {
         ->and($config->appSecret())->toBe('meta-app-secret')
         ->and($config->platformAccessToken())->toBe('EAAB-platform-token')
         ->and($config->platformPhoneNumberId())->toBe('1234567890')
+        ->and($config->facebookAppId())->toBe('111222333')
+        ->and($config->embeddedSignupConfigId())->toBe('config-123')
         ->and($config->webhookUrl())->toBe('https://b882-105-127-16-50.ngrok-free.app/api/storehause/webhooks/whatsapp');
 });
 

@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Http\Controllers;
 
 use App\Jobs\ProcessInboundCustomerMessage;
+use App\Jobs\ProcessCustomerWhatsAppEcho;
 use App\Services\MerchantWhatsAppInboundBuffer;
 use App\Services\WhatsAppService;
 use Illuminate\Http\Request;
@@ -81,6 +82,20 @@ class WhatsAppWebhookController extends Controller
                 'external_user_name' => $message['profile_name'],
                 'text' => $message['text'],
                 'provider_message_id' => $message['message_id'],
+            ])->onConnection('database');
+        }
+
+        foreach ($this->whatsapp->parseMessageEchoes($payload) as $echo) {
+            $connection = $this->whatsapp->findConnectionByPhoneNumberId($echo['phone_number_id']);
+            if (! $connection) {
+                continue;
+            }
+
+            ProcessCustomerWhatsAppEcho::dispatch($connection->id, [
+                'channel' => 'whatsapp',
+                'external_user_id' => $echo['to'],
+                'text' => $echo['text'],
+                'provider_message_id' => $echo['message_id'],
             ])->onConnection('database');
         }
 
