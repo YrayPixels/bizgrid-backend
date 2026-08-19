@@ -6,6 +6,7 @@ namespace App\Services;
 
 use App\Models\StoreSocialConnection;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Log;
 use RuntimeException;
 
 class WhatsAppService
@@ -340,6 +341,15 @@ class WhatsAppService
             throw new RuntimeException('phone_number_id, display_phone_number, and access_token are required.');
         }
 
+        $wabaId = trim((string) ($input['waba_id'] ?? ''));
+        if ($wabaId === '') {
+            $wabaId = $this->resolveWabaId($phoneNumberId, $accessToken);
+        }
+
+        if ($wabaId !== '') {
+            $this->subscribeWabaToApp($wabaId, $accessToken);
+        }
+
         return StoreSocialConnection::updateOrCreate(
             [
                 'store_id' => $storeId,
@@ -350,7 +360,7 @@ class WhatsAppService
                 'page_name' => $displayPhone,
                 'page_access_token' => $accessToken,
                 'metadata' => [
-                    'waba_id' => $input['waba_id'] ?? null,
+                    'waba_id' => $wabaId !== '' ? $wabaId : null,
                     'display_phone_number' => $displayPhone,
                 ],
             ],
@@ -363,6 +373,57 @@ class WhatsAppService
             ->where('store_id', $storeId)
             ->where('provider', 'whatsapp')
             ->delete();
+    }
+
+    private function resolveWabaId(string $phoneNumberId, string $accessToken): string
+    {
+        try {
+            $response = Http::withToken($accessToken)
+                ->acceptJson()
+                ->timeout(20)
+                ->get($this->graphUrl('/'.$phoneNumberId), [
+                    'fields' => 'id,display_phone_number,whatsapp_business_account',
+                ]);
+
+            if (! $response->successful()) {
+                return '';
+            }
+
+            $waba = $response->json('whatsapp_business_account.id')
+                ?? $response->json('whatsapp_business_account');
+
+            return is_string($waba) ? trim($waba) : '';
+        } catch (\Throwable $e) {
+            Log::info('Could not resolve WhatsApp WABA id.', [
+                'phone_number_id' => $phoneNumberId,
+                'error' => $e->getMessage(),
+            ]);
+
+            return '';
+        }
+    }
+
+    private function subscribeWabaToApp(string $wabaId, string $accessToken): void
+    {
+        try {
+            $response = Http::withToken($accessToken)
+                ->acceptJson()
+                ->asJson()
+                ->timeout(20)
+                ->post($this->graphUrl('/'.$wabaId.'/subscribed_apps'));
+
+            if (! $response->successful()) {
+                Log::warning('Failed to subscribe WhatsApp WABA to app webhooks.', [
+                    'waba_id' => $wabaId,
+                    'error' => $this->extractErrorMessage($response->json(), 'Subscribe failed.'),
+                ]);
+            }
+        } catch (\Throwable $e) {
+            Log::warning('Failed to subscribe WhatsApp WABA to app webhooks.', [
+                'waba_id' => $wabaId,
+                'error' => $e->getMessage(),
+            ]);
+        }
     }
 
     /**

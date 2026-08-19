@@ -19,6 +19,8 @@ use App\Services\MetaAdsService;
 use App\Services\SocialPostService;
 use App\Services\TikTokContentPostingService;
 use App\Services\TikTokMessagingService;
+use App\Services\InboundMessagingService;
+use App\Services\MerchantUsageService;
 use App\Services\WhatsAppService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
@@ -42,6 +44,8 @@ class MarketingController extends Controller
         private readonly MerchantUsageEnforcementService $enforcement,
         private readonly AudienceInsightsService $audience,
         private readonly BestTimeToPostService $bestTime,
+        private readonly InboundMessagingService $inbound,
+        private readonly MerchantUsageService $usageService,
     ) {}
 
     public function status(Request $request): JsonResponse
@@ -756,10 +760,44 @@ class MarketingController extends Controller
     public function conversations(Request $request): JsonResponse
     {
         $store = $this->findOwnedStoreForUser($request);
+        $status = $this->marketing->marketingStatus($store);
 
         return response()->json([
-            'conversations' => $this->marketing->marketingStatus($store)['recent_conversations'] ?? [],
+            'conversations' => $this->inbound->listConversations($store, 100),
+            'whatsapp' => $status['whatsapp'] ?? null,
         ]);
+    }
+
+    public function conversationDetail(Request $request, int $id): JsonResponse
+    {
+        $store = $this->findOwnedStoreForUser($request);
+
+        return response()->json($this->inbound->getConversationDetail($store, $id));
+    }
+
+    public function conversationReply(Request $request, int $id): JsonResponse
+    {
+        $store = $this->findOwnedStoreForUser($request);
+        $data = $request->validate(['text' => 'required|string|max:4096']);
+
+        $merchant = $store->merchant;
+        if (! $merchant || ! $this->usageService->canSendWhatsapp($merchant)) {
+            return response()->json(['message' => 'No WhatsApp credits remaining.'], 402);
+        }
+
+        $this->inbound->sendMerchantReply($store, $id, $data['text']);
+        $this->usageService->consumeWhatsappUnit($merchant);
+
+        return response()->json(['message' => 'Reply sent.']);
+    }
+
+    public function conversationAiDraft(Request $request, int $id): JsonResponse
+    {
+        $store = $this->findOwnedStoreForUser($request);
+
+        $draft = $this->inbound->generateAiDraft($store, $id);
+
+        return response()->json(['draft' => $draft]);
     }
 
     public function abandoned(Request $request): JsonResponse

@@ -13,6 +13,7 @@ class CustomerMessage extends Model
         'body',
         'provider_message_id',
         'ai_generated',
+        'sent_by',
         'metadata',
     ];
 

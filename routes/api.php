@@ -295,6 +295,9 @@ Route::prefix('storehause')->group(function () {
                 Route::delete('/instagram/disconnect', [MarketingController::class, 'disconnectInstagram']);
                 Route::patch('/messaging/settings', [MarketingController::class, 'updateMessagingSettings']);
                 Route::get('/conversations', [MarketingController::class, 'conversations']);
+                Route::get('/conversations/{id}', [MarketingController::class, 'conversationDetail']);
+                Route::post('/conversations/{id}/reply', [MarketingController::class, 'conversationReply']);
+                Route::post('/conversations/{id}/ai-draft', [MarketingController::class, 'conversationAiDraft']);
                 Route::post('/chat', [MarketingController::class, 'chat']);
 
                 Route::get('/performance', [MarketingController::class, 'performance']);
