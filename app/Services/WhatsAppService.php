@@ -129,6 +129,73 @@ class WhatsAppService
         return $messages;
     }
 
+    /**
+     * Messages the merchant sends from the WhatsApp Business app while Cloud API coexistence is on.
+     *
+     * @return list<array{
+     *     phone_number_id: string,
+     *     to: string,
+     *     message_id: string,
+     *     type: string,
+     *     text: string
+     * }>
+     */
+    public function parseMessageEchoes(array $payload): array
+    {
+        $echoes = [];
+
+        foreach ($payload['entry'] ?? [] as $entry) {
+            if (! is_array($entry)) {
+                continue;
+            }
+
+            foreach ($entry['changes'] ?? [] as $change) {
+                if (! is_array($change)) {
+                    continue;
+                }
+
+                $value = $change['value'] ?? null;
+                if (! is_array($value)) {
+                    continue;
+                }
+
+                $phoneNumberId = (string) ($value['metadata']['phone_number_id'] ?? '');
+                $items = $value['smb_message_echoes'] ?? $value['message_echoes'] ?? [];
+                if (! is_array($items) || $phoneNumberId === '') {
+                    continue;
+                }
+
+                foreach ($items as $echo) {
+                    if (! is_array($echo)) {
+                        continue;
+                    }
+
+                    $text = '';
+                    $type = (string) ($echo['type'] ?? 'text');
+                    if ($type === 'text') {
+                        $text = trim((string) ($echo['text']['body'] ?? ''));
+                    }
+
+                    $to = (string) ($echo['to'] ?? $echo['recipient'] ?? '');
+                    $messageId = (string) ($echo['id'] ?? '');
+                    if ($to === '' || $text === '') {
+                        continue;
+                    }
+
+                    $echoes[] = [
+                        'phone_number_id' => $phoneNumberId,
+                        'to' => $to,
+                        'message_id' => $messageId,
+                        'type' => 'text',
+                        'text' => $text,
+                    ];
+                }
+            }
+        }
+
+        return $echoes;
+    }
+
     public function findConnectionByPhoneNumberId(string $phoneNumberId): ?StoreSocialConnection
     {
         return StoreSocialConnection::query()
@@ -362,6 +429,9 @@ class WhatsAppService
                 'metadata' => [
                     'waba_id' => $wabaId !== '' ? $wabaId : null,
                     'display_phone_number' => $displayPhone,
+                    'coexistence' => (bool) ($input['coexistence'] ?? false),
+                    'onboarding' => (string) ($input['onboarding'] ?? 'manual'),
+                    'is_on_biz_app' => (bool) ($input['is_on_biz_app'] ?? false),
                 ],
             ],
         );

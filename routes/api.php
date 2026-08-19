@@ -285,6 +285,7 @@ Route::prefix('storehause')->group(function () {
                 Route::get('/facebook/connect', [MarketingController::class, 'connectFacebook']);
                 Route::delete('/facebook/disconnect', [MarketingController::class, 'disconnectFacebook']);
                 Route::post('/whatsapp/connect', [MarketingController::class, 'connectWhatsApp']);
+                Route::post('/whatsapp/embedded-signup', [MarketingController::class, 'completeWhatsAppEmbeddedSignup']);
                 Route::delete('/whatsapp/disconnect', [MarketingController::class, 'disconnectWhatsApp']);
                 Route::post('/tiktok/connect', [MarketingController::class, 'connectTikTok']);
                 Route::delete('/tiktok/disconnect', [MarketingController::class, 'disconnectTikTok']);

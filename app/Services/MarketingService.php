@@ -12,6 +12,7 @@ use App\Models\StoreAdCampaign;
 use App\Models\StoreOrder;
 use App\Models\StoreProduct;
 use App\Models\StoreSocialConnection;
+use App\Services\WhatsAppEmbeddedSignupService;
 
 class MarketingService
 {
@@ -26,6 +27,7 @@ class MarketingService
         private readonly SocialPostService $posts,
         private readonly MetaAdsService $ads,
         private readonly SocialTokenHealthService $tokenHealth,
+        private readonly WhatsAppEmbeddedSignupService $whatsappSignup,
     ) {}
 
     /**
@@ -446,6 +448,8 @@ class MarketingService
                 'phone_number_id' => $whatsappConnection?->page_id,
                 'auto_reply_enabled' => (bool) $store->whatsapp_auto_reply_enabled,
                 'webhook_url' => $this->whatsapp->webhookUrl(),
+                'coexistence' => (bool) ($whatsappConnection?->metadata['coexistence'] ?? false),
+                'embedded_signup' => $this->whatsappSignup->clientConfig(),
             ],
             'tiktok' => [
                 'configured' => $this->tiktok->isConfigured(),

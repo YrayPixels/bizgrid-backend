@@ -21,6 +21,7 @@ use App\Services\TikTokContentPostingService;
 use App\Services\TikTokMessagingService;
 use App\Services\InboundMessagingService;
 use App\Services\MerchantUsageService;
+use App\Services\WhatsAppEmbeddedSignupService;
 use App\Services\WhatsAppService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
@@ -46,6 +47,7 @@ class MarketingController extends Controller
         private readonly BestTimeToPostService $bestTime,
         private readonly InboundMessagingService $inbound,
         private readonly MerchantUsageService $usageService,
+        private readonly WhatsAppEmbeddedSignupService $whatsappSignup,
     ) {}
 
     public function status(Request $request): JsonResponse
@@ -590,6 +592,29 @@ class MarketingController extends Controller
 
         return response()->json([
             'message' => 'WhatsApp connected.',
+            ...$this->marketing->marketingStatus($store->fresh()),
+        ]);
+    }
+
+    public function completeWhatsAppEmbeddedSignup(Request $request): JsonResponse
+    {
+        $store = $this->findOwnedStoreForUser($request);
+        $data = $request->validate([
+            'code' => 'required|string|max:8000',
+            'waba_id' => 'nullable|string|max:64',
+            'phone_number_id' => 'nullable|string|max:64',
+        ]);
+
+        try {
+            $this->whatsappSignup->complete($store, $data);
+        } catch (\Throwable $e) {
+            return response()->json(['message' => $e->getMessage()], 422);
+        }
+
+        $this->invalidateMarketingApiCache($store);
+
+        return response()->json([
+            'message' => 'WhatsApp connected. Keep using WhatsApp Business on your phone — chats also appear in this inbox.',
             ...$this->marketing->marketingStatus($store->fresh()),
         ]);
     }

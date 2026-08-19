@@ -236,6 +236,14 @@ class ApiCacheService
             return null;
         }
 
+        if (
+            str_contains($path, 'marketing/status')
+            || str_contains($path, 'marketing/conversations')
+            || str_contains($path, 'whatsapp/embedded-signup')
+        ) {
+            return null;
+        }
+
         return "api:merchant:{$userId}:{$path}{$queryHash}";
     }
 
