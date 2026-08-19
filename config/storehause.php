@@ -24,4 +24,17 @@ return [
     'demo_name' => env('STOREHAUSE_DEMO_NAME', 'Demo Merchant'),
     // Optional password for the seeded demo user (also usable via normal /login).
     'demo_password' => env('STOREHAUSE_DEMO_PASSWORD'),
+
+    'storefront_screenshots' => [
+        'enabled' => (bool) env('STOREHAUSE_STOREFRONT_SCREENSHOTS', true),
+        // http = Microlink API (works on cPanel, no Node). puppeteer = local dev only. none = hero/logo fallback.
+        'driver' => env('STOREHAUSE_SCREENSHOT_DRIVER', 'http'),
+        'microlink_api_key' => env('MICROLINK_API_KEY'),
+        // Optional: direct image URL template, e.g. https://api.example.com/render?url={url}&w={width}&h={height}
+        'http_api_url' => env('STOREHAUSE_SCREENSHOT_HTTP_URL'),
+        'node_binary' => env('STOREHAUSE_SCREENSHOT_NODE', 'node'),
+        'width' => (int) env('STOREHAUSE_SCREENSHOT_WIDTH', 390),
+        'height' => (int) env('STOREHAUSE_SCREENSHOT_HEIGHT', 720),
+        'timeout_seconds' => (int) env('STOREHAUSE_SCREENSHOT_TIMEOUT', 120),
+    ],
 ];

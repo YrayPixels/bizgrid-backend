@@ -51,6 +51,7 @@ class MerchantWhatsAppAgentService
         private readonly StorefrontBuilderService $builder,
         private readonly StorefrontBlockService $blocks,
         private readonly StorefrontPageBlockService $pageBlocks,
+        private readonly StorefrontScreenshotService $screenshots,
     ) {}
 
     public function available(): bool
@@ -1595,7 +1596,11 @@ class MerchantWhatsAppAgentService
     public function storePreview(Store $store): array
     {
         $store = $store->fresh() ?? $store;
-        $image = $this->media->browserUrl($store->logo_url) ?: $store->logo_url;
+        $image = $this->screenshots->browserUrl($store);
+
+        if (! filled($image)) {
+            $image = $this->media->browserUrl($store->logo_url) ?: $store->logo_url;
+        }
         if (! filled($image)) {
             $published = is_array($store->published_json) ? $store->published_json : [];
             $image = $published['media']['hero_image_url'] ?? $published['hero']['image_url'] ?? null;
@@ -1608,12 +1613,29 @@ class MerchantWhatsAppAgentService
                 ->value('image_url');
         }
 
+        if ($this->publish->isPublished($store) && $this->shouldRefreshScreenshot($store)) {
+            $this->screenshots->queueCapture($store);
+        }
+
         return [
             'store_name' => $store->name,
             'url' => $this->storefrontUrl($store),
             'image_url' => filled($image) ? $this->media->browserUrl((string) $image) ?: $image : null,
             'is_published' => $this->publish->isPublished($store),
         ];
+    }
+
+    private function shouldRefreshScreenshot(Store $store): bool
+    {
+        if (! filled($store->preview_screenshot_url)) {
+            return true;
+        }
+
+        if ($store->published_at && $store->preview_screenshot_at) {
+            return $store->published_at->gt($store->preview_screenshot_at);
+        }
+
+        return false;
     }
 
     private function storeProductImage(Store $store, string $mediaId): string
