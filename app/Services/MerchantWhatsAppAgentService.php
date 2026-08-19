@@ -2199,10 +2199,23 @@ class MerchantWhatsAppAgentService
                         'title' => "About {$name}",
                         'body' => $description,
                     ],
+                    'value_props' => [
+                        ['title' => 'Quality products', 'body' => "Handpicked items from {$name}."],
+                        ['title' => 'Fast delivery', 'body' => 'We get your order to you quickly.'],
+                        ['title' => 'Secure checkout', 'body' => 'Pay safely online with Paystack.'],
+                    ],
                     'seo' => [
                         'title' => $name.' | Online Store',
                         'description' => $description,
                     ],
+                ];
+            }
+
+            if (empty($draft['value_props'])) {
+                $draft['value_props'] = [
+                    ['title' => 'Quality products', 'body' => "Handpicked items from {$name}."],
+                    ['title' => 'Fast delivery', 'body' => 'We get your order to you quickly.'],
+                    ['title' => 'Secure checkout', 'body' => 'Pay safely online with Paystack.'],
                 ];
             }
 
