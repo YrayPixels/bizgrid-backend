@@ -98,7 +98,9 @@ class MerchantUsageEnforcementService
     }
 
     /**
-     * Live storefront access requires an in-window local trial or a paid Dodo subscription.
+     * Publishing updates requires an in-window local trial or a paid Dodo subscription.
+     * Public storefronts stay live and keep collecting payments when this fails;
+     * payouts are held until the merchant renews.
      * Dodo products should have 0 trial days — StoreHause owns the free no-card trial.
      */
     public function assertCanAccessLiveStorefront(Merchant $merchant): void
@@ -109,13 +111,35 @@ class MerchantUsageEnforcementService
 
         if ($merchant->isExpiredLocalTrial()) {
             $this->deny(
-                'Your free trial has ended. Subscribe to a plan to publish and keep your storefront live.',
+                'Your free trial has ended. Subscribe to a plan to publish updates and receive payouts. Your storefront stays live and can still collect payments.',
                 'trial_expired',
             );
         }
 
         $this->deny(
-            'Subscribe to a plan to publish and keep your storefront live.',
+            'Subscribe to a plan to publish updates and receive payouts. Your storefront stays live and can still collect payments.',
+            'subscription_required',
+        );
+    }
+
+    /**
+     * Settlements require an eligible subscription/trial.
+     */
+    public function assertCanReceivePayouts(Merchant $merchant): void
+    {
+        if ($merchant->canReceivePayouts()) {
+            return;
+        }
+
+        if ($merchant->isExpiredLocalTrial()) {
+            $this->deny(
+                'Your free trial has ended. Subscribe to a plan to receive payouts. Your storefront stays live and can still collect payments.',
+                'trial_expired',
+            );
+        }
+
+        $this->deny(
+            'Subscribe to a plan to receive payouts. Your storefront stays live and can still collect payments.',
             'subscription_required',
         );
     }

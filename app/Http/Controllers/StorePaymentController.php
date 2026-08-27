@@ -31,6 +31,7 @@ class StorePaymentController extends Controller
         $this->assertEmailVerified($request, 'Verify your email before adding payout details.');
 
         $store = $this->findOwnedStoreForUser($request);
+        $store->loadMissing('merchant');
 
         $data = $request->validate([
             'payout_account_name' => 'nullable|string|max:160',
@@ -50,18 +51,21 @@ class StorePaymentController extends Controller
         $this->invalidateStoreApiCache($store);
 
         return response()->json([
-            'payments' => $this->formatPaymentSettings($store->fresh()),
+            'payments' => $this->formatPaymentSettings($store->fresh(['merchant'])),
             'message' => 'Payout details saved.',
         ]);
     }
 
     private function formatPaymentSettings($store): array
     {
+        $store->loadMissing('merchant');
+
         return [
             'checkout_enabled' => $this->paystack->isConfigured(),
             'payouts_configured' => filled($store->payout_account_name)
                 && filled($store->payout_bank_name)
                 && filled($store->payout_account_number),
+            'can_receive_payouts' => (bool) ($store->merchant?->canReceivePayouts() ?? false),
             'payout_account_name' => $store->payout_account_name,
             'payout_bank_name' => $store->payout_bank_name,
             'payout_account_number' => $store->payout_account_number,

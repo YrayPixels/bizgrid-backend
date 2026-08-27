@@ -401,7 +401,7 @@ it('allows publish during a local trial even when renews_at was never stamped', 
         ->assertJsonPath('publish.is_published', true);
 });
 
-it('takes a published storefront offline when the local trial expires', function () {
+it('keeps a published storefront live when the local trial expires but holds payouts', function () {
     $user = User::factory()->create();
     $store = publishTestStorefront($user);
 
@@ -414,13 +414,16 @@ it('takes a published storefront offline when the local trial expires', function
         'subscription_renews_at' => now()->subDay(),
     ])->save();
 
+    expect($store->merchant->fresh()->canReceivePayouts())->toBeFalse();
+
     $this->getJson('/api/storehause/public/storefronts/glow-rituals')
-        ->assertForbidden()
-        ->assertJsonPath('message', 'This storefront is temporarily unavailable while the merchant renews their subscription.');
+        ->assertOk()
+        ->assertJsonPath('store.slug', 'glow-rituals')
+        ->assertJsonPath('store.can_receive_payouts', false);
 
     $this->getJson('/api/storehause/public/storefronts')
         ->assertOk()
-        ->assertJsonCount(0, 'data');
+        ->assertJsonCount(1, 'data');
 });
 
 it('allows publish for an active paid subscription', function () {
