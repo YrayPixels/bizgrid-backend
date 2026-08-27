@@ -456,6 +456,7 @@ class AdminMerchantController extends Controller
             'subscription_plan' => $merchant->subscription_plan,
             'subscription_status' => $merchant->subscription_status,
             'subscription_renews_at' => $merchant->subscription_renews_at?->toIso8601String(),
+            'can_receive_payouts' => $merchant->canReceivePayouts(),
             'dodo_customer_id' => $merchant->dodo_customer_id,
             'dodo_subscription_id' => $merchant->dodo_subscription_id,
             'activated_at' => $merchant->activated_at?->toIso8601String(),

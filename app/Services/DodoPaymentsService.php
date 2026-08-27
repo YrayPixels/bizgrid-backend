@@ -76,6 +76,7 @@ class DodoPaymentsService
                 && blank($merchant->dodo_subscription_id),
             'trial_expired' => $merchant->isExpiredLocalTrial(),
             'can_access_live_storefront' => $merchant->canAccessLiveStorefront(),
+            'can_receive_payouts' => $merchant->canReceivePayouts(),
             'limits' => $this->usage->planLimits($plan),
             'usage' => $this->usage->formatUsage($merchant),
             'has_payment_method' => filled($merchant->dodo_subscription_id),

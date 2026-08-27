@@ -168,8 +168,10 @@ class Merchant extends Model
     }
 
     /**
-     * Whether the merchant may keep a storefront live / publish changes.
-     * Active (or on-hold) paid subs, and in-window local trials, qualify.
+     * Whether the merchant has an eligible subscription/trial.
+     * Required to publish storefront updates and to receive payouts.
+     * Public storefronts stay live (and still collect payments) when this is false;
+     * only a suspended merchant account takes the shop offline.
      */
     public function canAccessLiveStorefront(): bool
     {
@@ -189,6 +191,15 @@ class Merchant extends Model
         $trialEndsAt = $this->localTrialEndsAt();
 
         return $trialEndsAt !== null && $trialEndsAt->isFuture();
+    }
+
+    /**
+     * Whether Bizgrid may settle order earnings to the merchant.
+     * Expired / cancelled subscriptions keep collecting customer payments but hold payouts.
+     */
+    public function canReceivePayouts(): bool
+    {
+        return $this->canAccessLiveStorefront();
     }
 
     /**

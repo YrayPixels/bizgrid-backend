@@ -1440,7 +1440,7 @@ class MerchantWhatsAppAgentService
      */
     private function toolGetPayouts(Store $store): array
     {
-        $store = $store->fresh() ?? $store;
+        $store = $store->fresh(['merchant']) ?? $store;
         $pending = (float) StoreOrder::query()
             ->where('store_id', $store->id)
             ->where('payment_status', 'paid')
@@ -1455,6 +1455,7 @@ class MerchantWhatsAppAgentService
         $configured = filled($store->payout_account_name)
             && filled($store->payout_bank_name)
             && filled($store->payout_account_number);
+        $canReceivePayouts = (bool) ($store->merchant?->canReceivePayouts() ?? false);
 
         $missing = [];
         if (! filled($store->payout_account_name)) {
@@ -1467,20 +1468,24 @@ class MerchantWhatsAppAgentService
             $missing[] = 'account number';
         }
 
+        $hint = match (true) {
+            ! $canReceivePayouts => 'Payouts are paused until you subscribe. Your storefront stays live and can still collect payments.',
+            $pending > 0 => 'Payout pending. Paystack usually settles to the linked bank in 1–2 working days.',
+            $configured => 'Nothing waiting to settle.',
+            default => 'Add your bank account so Bizgrid can settle order earnings to you.',
+        };
+
         return [
             'ok' => true,
             'payouts_configured' => $configured,
+            'can_receive_payouts' => $canReceivePayouts,
             'missing_payout_fields' => $missing === [] ? null : $missing,
             'pending_label' => 'NGN '.number_format($pending, 0),
             'received_today_label' => 'NGN '.number_format($paidToday, 0),
             'payout_account' => $store->payout_bank_name
                 ? trim($store->payout_bank_name.' '.substr((string) $store->payout_account_number, -4))
                 : null,
-            'hint' => $pending > 0
-                ? 'Payout pending. Paystack usually settles to the linked bank in 1–2 working days.'
-                : ($configured
-                    ? 'Nothing waiting to settle.'
-                    : 'Add your bank account so Bizgrid can settle order earnings to you.'),
+            'hint' => $hint,
         ];
     }
 

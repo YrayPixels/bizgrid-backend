@@ -59,6 +59,7 @@ it('saves merchant payout bank details', function () {
         ])
         ->assertOk()
         ->assertJsonPath('payments.payouts_configured', true)
+        ->assertJsonPath('payments.can_receive_payouts', true)
         ->assertJsonPath('payments.checkout_enabled', true);
 
     $store->refresh();

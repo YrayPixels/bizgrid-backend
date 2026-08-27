@@ -82,7 +82,7 @@ class PublicStorefrontController extends Controller
             'data' => $stores
                 ->filter(function (Store $store) {
                     return $this->publishService->isPublished($store)
-                        && ($store->merchant?->canAccessLiveStorefront() ?? false);
+                        && ($store->merchant?->status !== 'suspended');
                 })
                 ->map(function (Store $store) {
                     $published = is_array($store->published_json) ? $store->published_json : [];

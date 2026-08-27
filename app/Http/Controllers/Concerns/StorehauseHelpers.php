@@ -132,6 +132,7 @@ trait StorehauseHelpers
                 && $store->merchant?->subscription_status === 'trialing'
                 && blank($store->merchant?->dodo_subscription_id),
             'trial_expired' => (bool) $store->merchant?->isExpiredLocalTrial(),
+            'can_receive_payouts' => (bool) ($store->merchant?->canReceivePayouts() ?? false),
             'has_payment_method' => filled($store->merchant?->dodo_subscription_id),
             'staff_count' => $store->staff_count,
             'physical_store_count' => $store->physical_store_count,
@@ -461,12 +462,10 @@ trait StorehauseHelpers
     protected function ensureStoreMerchantActive(Store $store): void
     {
         $store->loadMissing('merchant');
+        // Expired / cancelled subscriptions keep the shop live and collecting payments;
+        // only a suspended merchant account takes the storefront offline.
         if ($store->merchant?->status === 'suspended') {
             abort(403, 'This storefront is temporarily unavailable.');
-        }
-
-        if ($store->merchant && ! $store->merchant->canAccessLiveStorefront()) {
-            abort(403, 'This storefront is temporarily unavailable while the merchant renews their subscription.');
         }
     }
 
