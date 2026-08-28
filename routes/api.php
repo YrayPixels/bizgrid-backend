@@ -30,6 +30,7 @@ use App\Http\Controllers\MarketingController;
 use App\Http\Controllers\OpenTokenController;
 use App\Http\Controllers\OrderController;
 use App\Http\Controllers\PaystackWebhookController;
+use App\Http\Controllers\PlatformCatalogController;
 use App\Http\Controllers\PlatformEventController;
 use App\Http\Controllers\PlatformVisitController;
 use App\Http\Controllers\PosController;
@@ -162,6 +163,10 @@ Route::prefix('storehause')->group(function () {
         Route::get('/public/storefronts/resolve-host', [PublicStorefrontController::class, 'resolveHost']);
         Route::get('/public/storefronts/{slug}', [PublicStorefrontController::class, 'publicStorefront']);
         Route::get('/public/generations/{generationId}', [PublicStorefrontController::class, 'publicGeneration']);
+        Route::get('/public/catalog/search', [PlatformCatalogController::class, 'search']);
+        Route::get('/public/catalog/stores', [PlatformCatalogController::class, 'listStores']);
+        Route::get('/public/catalog/stores/{slug}', [PlatformCatalogController::class, 'store']);
+        Route::get('/public/catalog/stores/{storeSlug}/products/{productRef}', [PlatformCatalogController::class, 'product']);
     });
     Route::post('/public/storefronts/{slug}/orders', [PublicStorefrontController::class, 'placeOrder'])->middleware('throttle:30,1');
     Route::post('/public/storefronts/{slug}/orders/verify', [PublicStorefrontController::class, 'verifyPayment'])->middleware('throttle:60,1');
