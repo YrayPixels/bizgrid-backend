@@ -99,6 +99,73 @@ class PlatformCatalogService
     }
 
     /**
+     * Paginated active products across published stores (platform-wide catalog).
+     *
+     * @param  array<string, mixed>  $params
+     * @return array{data: list<array<string, mixed>>, meta: array<string, mixed>}
+     */
+    public function listProducts(array $params): array
+    {
+        $limit = min(100, max(1, (int) ($params['limit'] ?? 50)));
+        $offset = max(0, (int) ($params['offset'] ?? 0));
+        $storeSlug = trim((string) ($params['store_slug'] ?? ''));
+
+        $stores = $this->publishedStores($storeSlug !== '' ? $storeSlug : null);
+        if ($stores->isEmpty()) {
+            return [
+                'data' => [],
+                'meta' => [
+                    'total' => 0,
+                    'limit' => $limit,
+                    'offset' => $offset,
+                    'has_more' => false,
+                    'next_offset' => null,
+                ],
+            ];
+        }
+
+        $storeById = $stores->keyBy(fn (Store $store) => (string) $store->id);
+        $storeIds = $stores->pluck('id')->all();
+
+        $query = StoreProduct::query()
+            ->with('categoryRelation')
+            ->whereIn('store_id', $storeIds)
+            ->where('status', 'active')
+            ->orderBy('store_id')
+            ->orderBy('sort_order')
+            ->orderBy('name');
+
+        $total = (clone $query)->count();
+        $products = $query->offset($offset)->limit($limit)->get();
+
+        $data = [];
+        foreach ($products as $product) {
+            $store = $storeById->get((string) $product->store_id);
+            if (! $store instanceof Store) {
+                continue;
+            }
+
+            $data[] = [
+                'store' => $this->formatStore($store),
+                'product' => $this->productService->format($product),
+            ];
+        }
+
+        $nextOffset = ($offset + $limit) < $total ? $offset + $limit : null;
+
+        return [
+            'data' => $data,
+            'meta' => [
+                'total' => $total,
+                'limit' => $limit,
+                'offset' => $offset,
+                'has_more' => $nextOffset !== null,
+                'next_offset' => $nextOffset,
+            ],
+        ];
+    }
+
+    /**
      * @return array<string, mixed>|null
      */
     public function store(string $slug): ?array

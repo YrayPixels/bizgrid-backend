@@ -164,6 +164,7 @@ Route::prefix('storehause')->group(function () {
         Route::get('/public/storefronts/{slug}', [PublicStorefrontController::class, 'publicStorefront']);
         Route::get('/public/generations/{generationId}', [PublicStorefrontController::class, 'publicGeneration']);
         Route::get('/public/catalog/search', [PlatformCatalogController::class, 'search']);
+        Route::get('/public/catalog/products', [PlatformCatalogController::class, 'listProducts']);
         Route::get('/public/catalog/stores', [PlatformCatalogController::class, 'listStores']);
         Route::get('/public/catalog/stores/{slug}', [PlatformCatalogController::class, 'store']);
         Route::get('/public/catalog/stores/{storeSlug}/products/{productRef}', [PlatformCatalogController::class, 'product']);

@@ -93,3 +93,86 @@ it('lists published stores for the platform catalog', function () {
         ->assertJsonPath('data.0.slug', 'glow-rituals')
         ->assertJsonPath('data.0.business_name', 'Glow Rituals');
 });
+
+it('lists active products across published stores with store context', function () {
+    $user = User::factory()->create();
+    $store = platformCatalogStore($user);
+
+    StoreProduct::create([
+        'store_id' => $store->id,
+        'slug' => 'vitamin-serum',
+        'name' => 'Vitamin C Serum',
+        'description' => 'Brightening daily serum.',
+        'price' => 8500,
+        'currency' => 'NGN',
+        'status' => 'active',
+        'stock_quantity' => 10,
+        'sort_order' => 1,
+    ]);
+
+    StoreProduct::create([
+        'store_id' => $store->id,
+        'slug' => 'draft-cream',
+        'name' => 'Draft Cream',
+        'description' => 'Should not appear.',
+        'price' => 2000,
+        'currency' => 'NGN',
+        'status' => 'draft',
+        'stock_quantity' => 10,
+        'sort_order' => 2,
+    ]);
+
+    $response = $this->getJson('/api/storehause/public/catalog/products?limit=10');
+
+    $response->assertOk()
+        ->assertJsonPath('meta.total', 1)
+        ->assertJsonPath('meta.has_more', false)
+        ->assertJsonPath('data.0.store.slug', 'glow-rituals')
+        ->assertJsonPath('data.0.product.name', 'Vitamin C Serum')
+        ->assertJsonMissing(['name' => 'Draft Cream']);
+});
+
+it('paginates the platform catalog and filters by store slug', function () {
+    $user = User::factory()->create();
+    $storeA = platformCatalogStore($user, 'glow-rituals');
+    $storeB = platformCatalogStore(User::factory()->create(), 'ankara-house');
+
+    foreach (['Alpha', 'Beta', 'Gamma'] as $index => $name) {
+        StoreProduct::create([
+            'store_id' => $storeA->id,
+            'slug' => strtolower($name).'-a',
+            'name' => $name,
+            'description' => "{$name} product",
+            'price' => 1000 + $index,
+            'currency' => 'NGN',
+            'status' => 'active',
+            'stock_quantity' => 5,
+            'sort_order' => $index,
+        ]);
+    }
+
+    StoreProduct::create([
+        'store_id' => $storeB->id,
+        'slug' => 'wrapper',
+        'name' => 'Wrapper',
+        'description' => 'Other store',
+        'price' => 5000,
+        'currency' => 'NGN',
+        'status' => 'active',
+        'stock_quantity' => 3,
+        'sort_order' => 0,
+    ]);
+
+    $page = $this->getJson('/api/storehause/public/catalog/products?store_slug=glow-rituals&limit=2&offset=0');
+    $page->assertOk()
+        ->assertJsonPath('meta.total', 3)
+        ->assertJsonPath('meta.has_more', true)
+        ->assertJsonPath('meta.next_offset', 2)
+        ->assertJsonCount(2, 'data');
+
+    $filtered = $this->getJson('/api/storehause/public/catalog/products?store_slug=ankara-house');
+    $filtered->assertOk()
+        ->assertJsonPath('meta.total', 1)
+        ->assertJsonPath('data.0.store.slug', 'ankara-house')
+        ->assertJsonPath('data.0.product.name', 'Wrapper');
+});
