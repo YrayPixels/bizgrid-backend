@@ -47,6 +47,22 @@ class PlatformCatalogController extends Controller
         ]);
     }
 
+    public function listProducts(Request $request): JsonResponse
+    {
+        $validated = $request->validate([
+            'limit' => ['nullable', 'integer', 'min:1', 'max:100'],
+            'offset' => ['nullable', 'integer', 'min:0'],
+            'store_slug' => ['nullable', 'string', 'max:120'],
+        ]);
+
+        $result = $this->catalog->listProducts($validated);
+
+        return response()->json([
+            'data' => $result['data'],
+            'meta' => $result['meta'],
+        ]);
+    }
+
     public function store(string $slug): JsonResponse
     {
         $result = $this->catalog->store($slug);
