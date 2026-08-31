@@ -1,5 +1,6 @@
 <?php
 
+use App\Http\Controllers\AdminBizfestApplicationController;
 use App\Http\Controllers\AdminAgentLogController;
 use App\Http\Controllers\AdminAiSettingsController;
 use App\Http\Controllers\AdminAnalyticsController;
@@ -21,6 +22,7 @@ use App\Http\Controllers\AdminWhatsAppSettingsController;
 use App\Http\Controllers\AiChatController;
 use App\Http\Controllers\AiConfigController;
 use App\Http\Controllers\AuthController;
+use App\Http\Controllers\BizfestApplicationController;
 use App\Http\Controllers\BillingController;
 use App\Http\Controllers\CustomerAuthController;
 use App\Http\Controllers\CustomerController;
@@ -108,6 +110,10 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::get('/inquiries', [AdminInquiryController::class, 'index']);
             Route::patch('/inquiries/{id}/status', [AdminInquiryController::class, 'updateStatus']);
 
+            Route::get('/bizfest/applications', [AdminBizfestApplicationController::class, 'index']);
+            Route::get('/bizfest/applications/{id}', [AdminBizfestApplicationController::class, 'show']);
+            Route::patch('/bizfest/applications/{id}/status', [AdminBizfestApplicationController::class, 'updateStatus']);
+
             Route::get('/builder/sessions', [AdminBuilderController::class, 'index']);
             Route::get('/builder/sessions/stats', [AdminBuilderController::class, 'stats']);
             Route::get('/builder/sessions/{id}', [AdminBuilderController::class, 'show']);
@@ -187,6 +193,7 @@ Route::prefix('storehause')->group(function () {
     Route::post('/public/storefronts/{slug}/visits', [PublicStorefrontController::class, 'recordVisit'])->middleware('throttle:60,1');
     Route::post('/public/platform/visits', [PlatformVisitController::class, 'store'])->middleware('throttle:60,1');
     Route::post('/public/platform/events', [PlatformEventController::class, 'store'])->middleware('throttle:60,1');
+    Route::post('/public/bizfest/applications', [BizfestApplicationController::class, 'store'])->middleware('throttle:10,1');
 
     // AI chat proxy — uses backend API key, no user auth needed
     Route::post('/billing/webhook', [BillingController::class, 'webhook'])->middleware('throttle:120,1');
