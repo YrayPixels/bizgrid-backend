@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Http\Controllers;
 
+use App\Models\BizfestApplication;
 use App\Models\Merchant;
 use App\Models\PlatformEvent;
 use App\Models\PlatformVisit;
@@ -149,6 +150,15 @@ class AdminAnalyticsController extends Controller
         $claimClickedTotal = $this->distinctEventSessions('claim_store_clicked');
         $previewSignupTotal = $this->distinctEventSessions('preview_signup_completed');
 
+        $bizfestLandingPeriod = $this->distinctGrantsSessions($since);
+        $bizfestApplyPeriod = $this->distinctEventSessions('bizfest_apply_clicked', $since);
+        $bizfestApplicationsPeriod = BizfestApplication::query()
+            ->where('created_at', '>=', $since)
+            ->count();
+        $bizfestLandingTotal = $this->distinctGrantsSessions();
+        $bizfestApplyTotal = $this->distinctEventSessions('bizfest_apply_clicked');
+        $bizfestApplicationsTotal = BizfestApplication::query()->count();
+
         $funnel = [
             [
                 'key' => 'visits',
@@ -209,6 +219,27 @@ class AdminAnalyticsController extends Controller
             ],
         ];
 
+        $bizfestFunnel = [
+            [
+                'key' => 'bizfest_landing',
+                'label' => 'BizFest landing',
+                'count' => $bizfestLandingPeriod,
+                'conversion_from_previous' => null,
+            ],
+            [
+                'key' => 'bizfest_apply_clicked',
+                'label' => 'Apply clicked',
+                'count' => $bizfestApplyPeriod,
+                'conversion_from_previous' => $this->conversionRate($bizfestApplyPeriod, $bizfestLandingPeriod),
+            ],
+            [
+                'key' => 'bizfest_applications',
+                'label' => 'Applications submitted',
+                'count' => $bizfestApplicationsPeriod,
+                'conversion_from_previous' => $this->conversionRate($bizfestApplicationsPeriod, $bizfestApplyPeriod),
+            ],
+        ];
+
         return response()->json([
             'success' => true,
             'data' => [
@@ -238,6 +269,18 @@ class AdminAnalyticsController extends Controller
                         'total' => $previewSignupTotal,
                         'period' => $previewSignupPeriod,
                     ],
+                    'bizfest_landing' => [
+                        'total' => $bizfestLandingTotal,
+                        'period' => $bizfestLandingPeriod,
+                    ],
+                    'bizfest_apply_clicked' => [
+                        'total' => $bizfestApplyTotal,
+                        'period' => $bizfestApplyPeriod,
+                    ],
+                    'bizfest_applications' => [
+                        'total' => $bizfestApplicationsTotal,
+                        'period' => $bizfestApplicationsPeriod,
+                    ],
                     'signups' => [
                         'total' => $signupsTotal,
                         'period' => $signupsPeriod,
@@ -253,6 +296,7 @@ class AdminAnalyticsController extends Controller
                 ],
                 'funnel' => $funnel,
                 'preview_funnel' => $previewFunnel,
+                'bizfest_funnel' => $bizfestFunnel,
                 'session_flow' => $this->sessionFlowTree($since),
                 'charts' => [
                     'visits_by_day' => $this->visitsByDay($since),
@@ -264,6 +308,8 @@ class AdminAnalyticsController extends Controller
                     'first_stores_by_day' => $this->firstStoresByDay($since),
                     'preview_started_by_day' => $this->eventsByDay('preview_started', $since),
                     'claim_store_clicked_by_day' => $this->eventsByDay('claim_store_clicked', $since),
+                    'bizfest_landing_by_day' => $this->eventsByDay('bizfest_landing_viewed', $since),
+                    'bizfest_apply_by_day' => $this->eventsByDay('bizfest_apply_clicked', $since),
                 ],
                 'breakdowns' => [
                     'top_paths' => $this->topGrouped(
@@ -296,10 +342,13 @@ class AdminAnalyticsController extends Controller
         'preview_ready' => 'Preview ready',
         'claim_store_clicked' => 'Claim store',
         'preview_signup_completed' => 'Signed up',
+        'bizfest_landing_viewed' => 'BizFest landing',
+        'bizfest_apply_clicked' => 'BizFest apply',
     ];
 
     private const TERMINAL_FLOW_KEYS = [
         'event:preview_signup_completed',
+        'event:bizfest_apply_clicked',
     ];
 
     private function distinctEventSessions(string $event, ?\DateTimeInterface $since = null): int
@@ -315,6 +364,39 @@ class AdminAnalyticsController extends Controller
         return (int) $query
             ->selectRaw('COUNT(DISTINCT session_id) as aggregate')
             ->value('aggregate');
+    }
+
+    /**
+     * Unique sessions that hit /grants (visit path or landing event).
+     */
+    private function distinctGrantsSessions(?\DateTimeInterface $since = null): int
+    {
+        $visitQuery = PlatformVisit::query()
+            ->whereNotNull('session_id')
+            ->where('session_id', '!=', '')
+            ->where(function ($query) {
+                $query->where('path', '/grants')
+                    ->orWhere('path', 'like', '/grants/%');
+            });
+
+        if ($since !== null) {
+            $visitQuery->where('visited_at', '>=', $since);
+        }
+
+        $visitSessions = $visitQuery->distinct()->pluck('session_id');
+
+        $eventQuery = PlatformEvent::query()
+            ->where('event', 'bizfest_landing_viewed')
+            ->whereNotNull('session_id')
+            ->where('session_id', '!=', '');
+
+        if ($since !== null) {
+            $eventQuery->where('occurred_at', '>=', $since);
+        }
+
+        $eventSessions = $eventQuery->distinct()->pluck('session_id');
+
+        return $visitSessions->merge($eventSessions)->unique()->count();
     }
 
     /**
@@ -557,6 +639,14 @@ class AdminAnalyticsController extends Controller
     {
         if ($path === '/') {
             return 'Home';
+        }
+
+        if ($path === '/grants') {
+            return 'BizFest';
+        }
+
+        if ($path === '/grants/apply') {
+            return 'BizFest apply';
         }
 
         return $path;
