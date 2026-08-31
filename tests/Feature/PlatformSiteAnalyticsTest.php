@@ -153,8 +153,10 @@ it('returns site analytics for admins', function () {
         ->assertJsonPath('data.kpis.first_stores.period', 1)
         ->assertJsonCount(4, 'data.funnel')
         ->assertJsonCount(5, 'data.preview_funnel')
+        ->assertJsonCount(3, 'data.bizfest_funnel')
         ->assertJsonPath('data.preview_funnel.1.key', 'preview_started')
         ->assertJsonPath('data.preview_funnel.3.key', 'claim_store_clicked')
+        ->assertJsonPath('data.bizfest_funnel.0.key', 'bizfest_landing')
         ->assertJsonPath('data.session_flow.count', 2)
         ->assertJsonPath('data.session_flow.kind', 'root')
         ->assertJsonStructure([
@@ -174,6 +176,8 @@ it('returns site analytics for admins', function () {
                     'first_stores_by_day',
                     'preview_started_by_day',
                     'claim_store_clicked_by_day',
+                    'bizfest_landing_by_day',
+                    'bizfest_apply_by_day',
                 ],
                 'breakdowns' => [
                     'top_paths',
