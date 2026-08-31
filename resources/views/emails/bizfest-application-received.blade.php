@@ -53,6 +53,23 @@
         You can revisit programme details anytime at
         <a href="{{ $grantsUrl }}" style="color:{{ $brand['primary_color'] ?? '#0d9488' }};text-decoration:none;">{{ $grantsUrl }}</a>.
     </p>
+
+    @if (!empty($socialLinks))
+        <p style="margin:24px 0 12px 0;font-size:15px;color:#0f172a;">
+            <strong>Stay close to BizFest</strong> — follow Bizgrid for updates, tips, and announcements:
+        </p>
+        <table role="presentation" cellspacing="0" cellpadding="0" border="0">
+            <tr>
+                @foreach ($socialLinks as $link)
+                    <td style="padding-right:10px;padding-bottom:8px;">
+                        <a href="{{ $link['href'] }}" style="display:inline-block;padding:10px 14px;border:1px solid #e2e8f0;border-radius:8px;font-size:14px;font-weight:600;color:#0f172a;text-decoration:none;">
+                            {{ $link['label'] }}
+                        </a>
+                    </td>
+                @endforeach
+            </tr>
+        </table>
+    @endif
 @endsection
 
 @section('footer')

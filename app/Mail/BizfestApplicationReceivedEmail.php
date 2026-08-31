@@ -46,6 +46,7 @@ class BizfestApplicationReceivedEmail extends Mailable
                 'brand' => $brand,
                 'grantsUrl' => $grantsUrl,
                 'signupUrl' => $appUrl.'/signup?from=bizfest',
+                'socialLinks' => config('storehause.bizfest_social_links', []),
             ],
         );
     }

@@ -63,6 +63,12 @@ it('renders bizfest application received email', function () {
         ->toContain('ada@bizgrid.test')
         ->toContain('Create your store')
         ->toContain('/signup?from=bizfest')
+        ->toContain('Instagram')
+        ->toContain('https://www.instagram.com/biz_grid/')
+        ->toContain('TikTok')
+        ->toContain('https://www.tiktok.com/@biz_grid')
+        ->toContain('LinkedIn')
+        ->toContain('https://www.linkedin.com/company/137043993')
         ->not->toContain('HeySolana');
 });
 
