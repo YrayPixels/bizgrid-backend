@@ -23,6 +23,7 @@ class BizfestApplication extends Model
         'online_presence_url',
         'how_heard',
         'team_type',
+        'followed_social',
         'status',
         'user_id',
         'merchant_id',
@@ -41,6 +42,7 @@ class BizfestApplication extends Model
         return [
             'has_store' => 'boolean',
             'store_published' => 'boolean',
+            'followed_social' => 'boolean',
             'matched_at' => 'datetime',
             'meta' => 'array',
         ];

@@ -12,6 +12,35 @@ return [
     'admin_app_url' => env('STOREHAUSE_ADMIN_APP_URL', 'http://localhost:5173'),
     'welcome_cc_email' => env('STOREHAUSE_WELCOME_CC_EMAIL', env('MAIL_FROM_ADDRESS')),
 
+    // Public social profiles promoted during BizFest application / welcome email.
+    'bizfest_social_links' => array_values(array_filter([
+        [
+            'id' => 'instagram',
+            'label' => 'Instagram',
+            'href' => env('BIZGRID_INSTAGRAM_URL', 'https://www.instagram.com/biz_grid/'),
+        ],
+        [
+            'id' => 'tiktok',
+            'label' => 'TikTok',
+            'href' => env('BIZGRID_TIKTOK_URL', 'https://www.tiktok.com/@biz_grid'),
+        ],
+        [
+            'id' => 'x',
+            'label' => 'X',
+            'href' => env('BIZGRID_X_URL', 'https://x.com/biz_grid'),
+        ],
+        [
+            'id' => 'linkedin',
+            'label' => 'LinkedIn',
+            'href' => env('BIZGRID_LINKEDIN_URL', 'https://www.linkedin.com/company/137043993'),
+        ],
+        [
+            'id' => 'facebook',
+            'label' => 'Facebook',
+            'href' => env('BIZGRID_FACEBOOK_URL'),
+        ],
+    ], static fn (array $link): bool => filled($link['href'] ?? null))),
+
     // Extra hosts allowed for customer Google OAuth return_url (comma-separated).
     'customer_auth_allowed_hosts' => array_values(array_filter(array_map(
         static fn (string $host): string => strtolower(trim($host)),

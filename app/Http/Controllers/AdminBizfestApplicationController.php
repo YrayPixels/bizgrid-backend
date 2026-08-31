@@ -147,6 +147,7 @@ class AdminBizfestApplicationController extends Controller
             'store_published' => (bool) $application->store_published,
             'team_type' => $application->team_type,
             'how_heard' => $application->how_heard,
+            'followed_social' => (bool) $application->followed_social,
             'matched_at' => $application->matched_at?->toIso8601String(),
             'created_at' => $application->created_at?->toIso8601String(),
             'store' => $store ? [
