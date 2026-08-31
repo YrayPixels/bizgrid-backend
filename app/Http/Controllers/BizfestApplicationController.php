@@ -4,11 +4,14 @@ declare(strict_types=1);
 
 namespace App\Http\Controllers;
 
+use App\Mail\BizfestApplicationReceivedEmail;
 use App\Models\BizfestApplication;
 use App\Models\Store;
 use App\Models\User;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
 
@@ -94,6 +97,16 @@ class BizfestApplicationController extends Controller
         ]);
 
         $this->matchStore($application);
+
+        try {
+            Mail::to($application->email)->send(new BizfestApplicationReceivedEmail($application));
+        } catch (\Throwable $e) {
+            Log::warning('Failed to send BizFest application email', [
+                'application_id' => $application->id,
+                'email' => $application->email,
+                'error' => $e->getMessage(),
+            ]);
+        }
 
         return response()->json([
             'success' => true,

@@ -5,9 +5,11 @@ use App\Mail\AdminCreated;
 use App\Mail\AdminPasswordReset;
 use App\Mail\AdminPasswordResetCode;
 use App\Mail\AdminVerificationCode;
+use App\Mail\BizfestApplicationReceivedEmail;
 use App\Mail\MerchantPasswordResetCodeEmail;
 use App\Mail\MerchantWelcomeEmail;
 use App\Mail\WhatsAppAccountLinkCodeEmail;
+use App\Models\BizfestApplication;
 use App\Models\Merchant;
 use App\Models\Store;
 use App\Models\User;
@@ -39,6 +41,28 @@ it('renders bizgrid branded merchant welcome email', function () {
         ->toContain('ada@bizgrid.test')
         ->toContain('Set up your store')
         ->toContain('/admin/onboarding')
+        ->not->toContain('HeySolana');
+});
+
+it('renders bizfest application received email', function () {
+    $application = new BizfestApplication([
+        'owner_name' => 'Ada Okafor',
+        'business_name' => 'Ada Fashion',
+        'email' => 'ada@bizgrid.test',
+        'category' => 'Fashion',
+        'city' => 'Lagos',
+        'has_store' => false,
+    ]);
+
+    $html = (new BizfestApplicationReceivedEmail($application))->render();
+
+    expect($html)
+        ->toContain('BizFest')
+        ->toContain('Ada Okafor')
+        ->toContain('Ada Fashion')
+        ->toContain('ada@bizgrid.test')
+        ->toContain('Create your store')
+        ->toContain('/signup?from=bizfest')
         ->not->toContain('HeySolana');
 });
 
