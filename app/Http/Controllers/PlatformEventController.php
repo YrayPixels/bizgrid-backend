@@ -17,6 +17,11 @@ class PlatformEventController extends Controller
         'preview_ready',
         'claim_store_clicked',
         'preview_signup_completed',
+        'ad_landing_viewed',
+        'ad_signup_clicked',
+        'ad_signup_completed',
+        'bizfest_landing_viewed',
+        'bizfest_apply_clicked',
     ];
 
     public function store(Request $request): JsonResponse
