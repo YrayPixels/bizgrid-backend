@@ -1,6 +1,7 @@
 <?php
 
 use App\Http\Controllers\AdminBizfestApplicationController;
+use App\Http\Controllers\AdminBizfestPartnerController;
 use App\Http\Controllers\AdminAgentLogController;
 use App\Http\Controllers\AdminAiSettingsController;
 use App\Http\Controllers\AdminAnalyticsController;
@@ -23,6 +24,8 @@ use App\Http\Controllers\AiChatController;
 use App\Http\Controllers\AiConfigController;
 use App\Http\Controllers\AuthController;
 use App\Http\Controllers\BizfestApplicationController;
+use App\Http\Controllers\BizfestPartnerController;
+use App\Http\Controllers\BizfestPartnerInquiryController;
 use App\Http\Controllers\BillingController;
 use App\Http\Controllers\CustomerAuthController;
 use App\Http\Controllers\CustomerController;
@@ -114,6 +117,12 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::get('/bizfest/applications/{id}', [AdminBizfestApplicationController::class, 'show']);
             Route::patch('/bizfest/applications/{id}/status', [AdminBizfestApplicationController::class, 'updateStatus']);
 
+            Route::get('/bizfest/partners', [AdminBizfestPartnerController::class, 'index']);
+            Route::post('/bizfest/partners/upload-logo', [AdminBizfestPartnerController::class, 'uploadLogo']);
+            Route::post('/bizfest/partners', [AdminBizfestPartnerController::class, 'store']);
+            Route::patch('/bizfest/partners/{id}', [AdminBizfestPartnerController::class, 'update']);
+            Route::delete('/bizfest/partners/{id}', [AdminBizfestPartnerController::class, 'destroy']);
+
             Route::get('/builder/sessions', [AdminBuilderController::class, 'index']);
             Route::get('/builder/sessions/stats', [AdminBuilderController::class, 'stats']);
             Route::get('/builder/sessions/{id}', [AdminBuilderController::class, 'show']);
@@ -194,6 +203,8 @@ Route::prefix('storehause')->group(function () {
     Route::post('/public/platform/visits', [PlatformVisitController::class, 'store'])->middleware('throttle:60,1');
     Route::post('/public/platform/events', [PlatformEventController::class, 'store'])->middleware('throttle:60,1');
     Route::post('/public/bizfest/applications', [BizfestApplicationController::class, 'store'])->middleware('throttle:10,1');
+    Route::post('/public/bizfest/partner-inquiries', [BizfestPartnerInquiryController::class, 'store'])->middleware('throttle:10,1');
+    Route::get('/public/bizfest/partners', [BizfestPartnerController::class, 'index'])->middleware('throttle:60,1');
 
     // AI chat proxy — uses backend API key, no user auth needed
     Route::post('/billing/webhook', [BillingController::class, 'webhook'])->middleware('throttle:120,1');
