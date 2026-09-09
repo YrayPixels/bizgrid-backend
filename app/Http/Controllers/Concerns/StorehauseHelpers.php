@@ -130,10 +130,10 @@ trait StorehauseHelpers
             'subscription_renews_at' => $store->merchant?->subscription_renews_at?->toIso8601String(),
             'trial_active' => (bool) $store->merchant?->canAccessLiveStorefront()
                 && $store->merchant?->subscription_status === 'trialing'
-                && blank($store->merchant?->dodo_subscription_id),
+                && blank($store->merchant?->paystack_subscription_code),
             'trial_expired' => (bool) $store->merchant?->isExpiredLocalTrial(),
             'can_receive_payouts' => (bool) ($store->merchant?->canReceivePayouts() ?? false),
-            'has_payment_method' => filled($store->merchant?->dodo_subscription_id),
+            'has_payment_method' => filled($store->merchant?->paystack_subscription_code),
             'staff_count' => $store->staff_count,
             'physical_store_count' => $store->physical_store_count,
             'storefront_template_id' => $store->storefront_template_id ?? StorefrontTemplate::DEFAULT_ID,

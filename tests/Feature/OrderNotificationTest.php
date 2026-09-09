@@ -11,7 +11,7 @@ use App\Models\Store;
 use App\Models\StoreOrder;
 use App\Models\StoreProduct;
 use App\Models\User;
-use App\Services\DodoPaymentsService;
+use App\Services\PaystackBillingService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Mail;
@@ -225,12 +225,13 @@ it('sends low stock alerts when inventory drops below threshold', function () {
     Mail::assertSent(MerchantLowStockEmail::class, fn ($mail) => $mail->hasTo('orders@glow.test'));
 });
 
-it('sends billing emails from dodo webhook events', function () {
+it('sends billing emails from paystack webhook events', function () {
     Mail::fake();
 
     config([
-        'dodopayments.api_key' => 'test_api_key',
-        'dodopayments.plans.growth.product_id' => 'prod_growth_test',
+        'paystack.public_key' => 'pk_test',
+        'paystack.secret_key' => 'sk_test_secret',
+        'billing.plans.growth.plan_code' => 'PLN_growth_test',
     ]);
 
     $user = User::factory()->create(['email' => 'merchant@example.com']);
@@ -244,13 +245,21 @@ it('sends billing emails from dodo webhook events', function () {
         'subscription_status' => 'trialing',
     ]);
 
-    app(DodoPaymentsService::class)->handleWebhook(json_encode([
-        'type' => 'subscription.active',
+    $payload = json_encode([
+        'event' => 'subscription.create',
         'data' => [
+            'subscription_code' => 'SUB_mail_1',
+            'email_token' => 'tok_mail',
+            'customer' => ['customer_code' => 'CUS_mail_1'],
+            'plan' => ['plan_code' => 'PLN_growth_test'],
             'metadata' => ['merchant_id' => (string) $merchant->id, 'plan' => 'growth'],
-            'product_id' => 'prod_growth_test',
         ],
-    ]), []);
+    ], JSON_THROW_ON_ERROR);
+
+    app(PaystackBillingService::class)->handleWebhook(
+        $payload,
+        hash_hmac('sha512', $payload, 'sk_test_secret'),
+    );
 
     Mail::assertSent(MerchantBillingEmail::class, function (MerchantBillingEmail $mail) {
         return $mail->hasTo('merchant@example.com') && $mail->event === 'subscription_active';

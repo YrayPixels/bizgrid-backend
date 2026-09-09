@@ -29,7 +29,7 @@ git clone https://github.com/YrayPixels/storehouseadmin.git storehouseadmin   # 
 - AI storefront generation and builder chat (OpenAI, DeepSeek, or Gemini)
 - Shopping agents, product vision, and marketing copy (Gemini when `GEMINI_API_KEY` is set)
 - Public storefront API (catalog, orders, visit tracking, AI shopper)
-- Paystack checkout and Dodo subscription billing
+- Paystack checkout and merchant subscription billing
 - Platform admin API (merchants, templates, agent execution logs, health)
 - Optional WhatsApp / Facebook / TikTok marketing hooks and PerfectCorp try-on
 
@@ -40,7 +40,7 @@ git clone https://github.com/YrayPixels/storehouseadmin.git storehouseadmin   # 
 - Composer 2.x
 - OpenAI, DeepSeek, and/or Gemini API key (Gemini is used for shopper, vision, and marketing when set)
 
-Optional: Redis (`docker compose up -d` in this repo), queue worker, Paystack / Dodo / Google OAuth keys.
+Optional: Redis (`docker compose up -d` in this repo), queue worker, Paystack / Google OAuth keys.
 
 ## Installation
 
@@ -106,7 +106,7 @@ See [`.env.example`](./.env.example) for the full list. Common groups:
 | Platform | `STOREHAUSE_APP_URL`, `STOREHAUSE_PLATFORM_DOMAIN`, `STOREHAUSE_BRAND_NAME` |
 | Admin seed | `STOREHAUSE_ADMIN_EMAIL`, `STOREHAUSE_ADMIN_PASSWORD` |
 | Demo merchant | `STOREHAUSE_DEMO_LOGIN`, `STOREHAUSE_DEMO_EMAIL` |
-| Payments | `PAYSTACK_*`, `DODO_PAYMENTS_*` |
+| Payments | `PAYSTACK_*` (orders + subscriptions) |
 | Google sign-in | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` |
 | Deploy | `DEPLOY_KEY` (protects `/maintenance/*`) |
 

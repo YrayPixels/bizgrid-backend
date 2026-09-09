@@ -6,6 +6,7 @@ use App\Models\Store;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Mail;
 
 uses(RefreshDatabase::class);
 
@@ -33,10 +34,16 @@ function createBillingMerchant(User $user, array $overrides = []): Merchant
     return $merchant;
 }
 
+function paystackSignature(string $payload): string
+{
+    return hash_hmac('sha512', $payload, (string) config('paystack.secret_key'));
+}
+
 it('returns subscription and plan catalog for the signed in merchant', function () {
     config([
-        'dodopayments.plans.starter.product_id' => 'prod_starter_test',
-        'dodopayments.api_key' => 'test_api_key',
+        'paystack.public_key' => 'pk_test',
+        'paystack.secret_key' => 'sk_test',
+        'billing.plans.starter.plan_code' => 'PLN_starter',
     ]);
 
     $user = User::factory()->create();
@@ -55,18 +62,23 @@ it('returns subscription and plan catalog for the signed in merchant', function 
         ->assertJsonCount(3, 'plans');
 });
 
-it('creates a dodo checkout session for a selected plan', function () {
+it('creates a paystack checkout session for a selected plan', function () {
     config([
-        'dodopayments.api_key' => 'test_api_key',
-        'dodopayments.environment' => 'test_mode',
-        'dodopayments.app_url' => 'http://localhost:3000',
-        'dodopayments.plans.growth.product_id' => 'prod_growth_test',
+        'paystack.public_key' => 'pk_test',
+        'paystack.secret_key' => 'sk_test',
+        'paystack.base_url' => 'https://api.paystack.co',
+        'billing.app_url' => 'http://localhost:3000',
+        'billing.plans.growth.plan_code' => 'PLN_growth_test',
     ]);
 
     Http::fake([
-        'https://test.dodopayments.com/checkouts' => Http::response([
-            'session_id' => 'cs_test_123',
-            'checkout_url' => 'https://checkout.dodopayments.com/session/cs_test_123',
+        'https://api.paystack.co/transaction/initialize' => Http::response([
+            'status' => true,
+            'data' => [
+                'authorization_url' => 'https://checkout.paystack.com/test_growth',
+                'access_code' => 'access_test',
+                'reference' => 'bg-sub-test-123',
+            ],
         ], 200),
     ]);
 
@@ -77,110 +89,131 @@ it('creates a dodo checkout session for a selected plan', function () {
         ->postJson('/api/storehause/billing/checkout', ['plan' => 'growth'])
         ->assertOk()
         ->assertJsonPath('mode', 'checkout')
-        ->assertJsonPath('checkout_url', 'https://checkout.dodopayments.com/session/cs_test_123');
+        ->assertJsonPath('checkout_url', 'https://checkout.paystack.com/test_growth');
 
     Http::assertSent(function ($request) use ($user) {
         $body = $request->data();
 
-        return $request->url() === 'https://test.dodopayments.com/checkouts'
-            && ($body['product_cart'][0]['product_id'] ?? null) === 'prod_growth_test'
-            && ($body['customer']['email'] ?? null) === $user->email
-            && ($body['metadata']['plan'] ?? null) === 'growth';
+        return $request->url() === 'https://api.paystack.co/transaction/initialize'
+            && ($body['plan'] ?? null) === 'PLN_growth_test'
+            && ($body['email'] ?? null) === $user->email
+            && ($body['metadata']['plan'] ?? null) === 'growth'
+            && ($body['metadata']['billing_purpose'] ?? null) === 'subscription';
     });
 });
 
 it('activates merchant subscription from webhook payload', function () {
     config([
-        'dodopayments.webhook_secret' => null,
-        'dodopayments.plans.growth.product_id' => 'prod_growth_test',
+        'paystack.public_key' => 'pk_test',
+        'paystack.secret_key' => 'sk_test_secret',
+        'billing.plans.growth.plan_code' => 'PLN_growth_test',
     ]);
 
     $user = User::factory()->create();
     $merchant = createBillingMerchant($user);
 
     $payload = json_encode([
-        'type' => 'subscription.active',
+        'event' => 'subscription.create',
         'data' => [
-            'subscription_id' => 'sub_test_123',
-            'customer_id' => 'cus_test_123',
-            'product_id' => 'prod_growth_test',
+            'subscription_code' => 'SUB_test_123',
+            'email_token' => 'email_token_123',
+            'customer' => ['customer_code' => 'CUS_test_123'],
+            'plan' => ['plan_code' => 'PLN_growth_test'],
             'metadata' => [
                 'merchant_id' => (string) $merchant->id,
                 'plan' => 'growth',
             ],
-            'next_billing_date' => '2026-08-04T00:00:00Z',
+            'next_payment_date' => '2026-08-04T00:00:00Z',
         ],
     ], JSON_THROW_ON_ERROR);
 
-    $this->postJson('/api/storehause/billing/webhook', json_decode($payload, true), [
-        'Content-Type' => 'application/json',
-    ])->assertOk();
+    $this->call(
+        'POST',
+        '/api/storehause/billing/webhook',
+        [],
+        [],
+        [],
+        [
+            'CONTENT_TYPE' => 'application/json',
+            'HTTP_X-PAYSTACK-SIGNATURE' => paystackSignature($payload),
+        ],
+        $payload,
+    )->assertOk();
 
     $merchant->refresh();
 
     expect($merchant->subscription_plan)->toBe('growth')
         ->and($merchant->subscription_status)->toBe('active')
-        ->and($merchant->dodo_subscription_id)->toBe('sub_test_123')
-        ->and($merchant->dodo_customer_id)->toBe('cus_test_123');
+        ->and($merchant->paystack_subscription_code)->toBe('SUB_test_123')
+        ->and($merchant->paystack_customer_code)->toBe('CUS_test_123');
 });
 
 it('ignores a redelivered webhook so allowances are not granted twice', function () {
     config([
-        'dodopayments.webhook_secret' => null,
-        'dodopayments.plans.growth.product_id' => 'prod_growth_test',
+        'paystack.public_key' => 'pk_test',
+        'paystack.secret_key' => 'sk_test_secret',
+        'billing.plans.growth.plan_code' => 'PLN_growth_test',
     ]);
 
     $user = User::factory()->create();
     $merchant = createBillingMerchant($user);
 
-    $payload = [
-        'type' => 'subscription.active',
+    $payloadArray = [
+        'event' => 'subscription.create',
         'data' => [
-            'subscription_id' => 'sub_test_123',
-            'customer_id' => 'cus_test_123',
-            'product_id' => 'prod_growth_test',
+            'id' => 991122,
+            'subscription_code' => 'SUB_test_123',
+            'email_token' => 'email_token_123',
+            'customer' => ['customer_code' => 'CUS_test_123'],
+            'plan' => ['plan_code' => 'PLN_growth_test'],
             'metadata' => ['merchant_id' => (string) $merchant->id, 'plan' => 'growth'],
-            'next_billing_date' => '2026-09-04T00:00:00Z',
+            'next_payment_date' => '2026-09-04T00:00:00Z',
         ],
     ];
+    $payload = json_encode($payloadArray, JSON_THROW_ON_ERROR);
+    $headers = [
+        'CONTENT_TYPE' => 'application/json',
+        'HTTP_X-PAYSTACK-SIGNATURE' => paystackSignature($payload),
+    ];
 
-    $this->postJson('/api/storehause/billing/webhook', $payload, ['webhook-id' => 'evt_replayed'])
+    $this->call('POST', '/api/storehause/billing/webhook', [], [], [], $headers, $payload)
         ->assertOk();
 
-    // Stand in for a month of trading between the original delivery and the replay.
     $merchant->refresh();
     $merchant->monthly_processed_ngn = 42_000;
     $merchant->save();
 
-    $this->postJson('/api/storehause/billing/webhook', $payload, ['webhook-id' => 'evt_replayed'])
+    $this->call('POST', '/api/storehause/billing/webhook', [], [], [], $headers, $payload)
         ->assertOk();
 
     $merchant->refresh();
 
-    expect(BillingWebhookEvent::where('event_id', 'evt_replayed')->count())->toBe(1)
+    expect(BillingWebhookEvent::where('event_id', 'subscription.create:991122')->count())->toBe(1)
         ->and((float) $merchant->monthly_processed_ngn)->toBe(42_000.0)
         ->and($merchant->subscription_status)->toBe('active');
 });
 
 it('activates a merchant from the reconciler when the webhook never arrived', function () {
     config([
-        'dodopayments.api_key' => 'test_api_key',
-        'dodopayments.environment' => 'test_mode',
-        'dodopayments.plans.growth.product_id' => 'prod_growth_test',
+        'paystack.public_key' => 'pk_test',
+        'paystack.secret_key' => 'sk_test',
+        'paystack.base_url' => 'https://api.paystack.co',
+        'billing.plans.growth.plan_code' => 'PLN_growth_test',
     ]);
 
     $user = User::factory()->create();
     $merchant = createBillingMerchant($user);
 
     Http::fake([
-        'https://test.dodopayments.com/subscriptions*' => Http::response([
-            'items' => [[
-                'subscription_id' => 'sub_recovered_1',
+        'https://api.paystack.co/subscription*' => Http::response([
+            'status' => true,
+            'data' => [[
+                'subscription_code' => 'SUB_recovered_1',
                 'status' => 'active',
-                'product_id' => 'prod_growth_test',
-                'customer' => ['customer_id' => 'cus_recovered_1'],
+                'plan' => ['plan_code' => 'PLN_growth_test'],
+                'customer' => ['customer_code' => 'CUS_recovered_1'],
                 'metadata' => ['merchant_id' => (string) $merchant->id, 'plan' => 'growth'],
-                'next_billing_date' => '2026-09-04T00:00:00Z',
+                'next_payment_date' => '2026-09-04T00:00:00Z',
             ]],
         ], 200),
     ]);
@@ -191,37 +224,39 @@ it('activates a merchant from the reconciler when the webhook never arrived', fu
 
     expect($merchant->subscription_status)->toBe('active')
         ->and($merchant->subscription_plan)->toBe('growth')
-        ->and($merchant->dodo_subscription_id)->toBe('sub_recovered_1')
-        ->and($merchant->dodo_customer_id)->toBe('cus_recovered_1')
+        ->and($merchant->paystack_subscription_code)->toBe('SUB_recovered_1')
+        ->and($merchant->paystack_customer_code)->toBe('CUS_recovered_1')
         ->and($merchant->sms_included_remaining)->toBe(300);
 });
 
 it('leaves an already-synced merchant untouched so usage counters survive', function () {
     config([
-        'dodopayments.api_key' => 'test_api_key',
-        'dodopayments.environment' => 'test_mode',
-        'dodopayments.plans.growth.product_id' => 'prod_growth_test',
+        'paystack.public_key' => 'pk_test',
+        'paystack.secret_key' => 'sk_test',
+        'paystack.base_url' => 'https://api.paystack.co',
+        'billing.plans.growth.plan_code' => 'PLN_growth_test',
     ]);
 
     $user = User::factory()->create();
     $merchant = createBillingMerchant($user, [
         'subscription_plan' => 'growth',
         'subscription_status' => 'active',
-        'dodo_subscription_id' => 'sub_synced_1',
-        'dodo_customer_id' => 'cus_synced_1',
+        'paystack_subscription_code' => 'SUB_synced_1',
+        'paystack_customer_code' => 'CUS_synced_1',
         'subscription_renews_at' => '2026-09-04T00:00:00Z',
         'monthly_processed_ngn' => 88_000,
     ]);
 
     Http::fake([
-        'https://test.dodopayments.com/subscriptions*' => Http::response([
-            'items' => [[
-                'subscription_id' => 'sub_synced_1',
+        'https://api.paystack.co/subscription*' => Http::response([
+            'status' => true,
+            'data' => [[
+                'subscription_code' => 'SUB_synced_1',
                 'status' => 'active',
-                'product_id' => 'prod_growth_test',
-                'customer' => ['customer_id' => 'cus_synced_1'],
+                'plan' => ['plan_code' => 'PLN_growth_test'],
+                'customer' => ['customer_code' => 'CUS_synced_1'],
                 'metadata' => ['merchant_id' => (string) $merchant->id, 'plan' => 'growth'],
-                'next_billing_date' => '2026-09-04T00:00:00Z',
+                'next_payment_date' => '2026-09-04T00:00:00Z',
             ]],
         ], 200),
     ]);
@@ -235,28 +270,30 @@ it('leaves an already-synced merchant untouched so usage counters survive', func
     expect((float) $merchant->monthly_processed_ngn)->toBe(88_000.0);
 });
 
-it('drops a merchant to starter when dodo reports the subscription cancelled', function () {
+it('drops a merchant to starter when paystack reports the subscription cancelled', function () {
     config([
-        'dodopayments.api_key' => 'test_api_key',
-        'dodopayments.environment' => 'test_mode',
-        'dodopayments.plans.growth.product_id' => 'prod_growth_test',
+        'paystack.public_key' => 'pk_test',
+        'paystack.secret_key' => 'sk_test',
+        'paystack.base_url' => 'https://api.paystack.co',
+        'billing.plans.growth.plan_code' => 'PLN_growth_test',
     ]);
 
     $user = User::factory()->create();
     $merchant = createBillingMerchant($user, [
         'subscription_plan' => 'growth',
         'subscription_status' => 'active',
-        'dodo_subscription_id' => 'sub_gone_1',
-        'dodo_customer_id' => 'cus_gone_1',
+        'paystack_subscription_code' => 'SUB_gone_1',
+        'paystack_customer_code' => 'CUS_gone_1',
     ]);
 
     Http::fake([
-        'https://test.dodopayments.com/subscriptions*' => Http::response([
-            'items' => [[
-                'subscription_id' => 'sub_gone_1',
+        'https://api.paystack.co/subscription*' => Http::response([
+            'status' => true,
+            'data' => [[
+                'subscription_code' => 'SUB_gone_1',
                 'status' => 'cancelled',
-                'product_id' => 'prod_growth_test',
-                'customer' => ['customer_id' => 'cus_gone_1'],
+                'plan' => ['plan_code' => 'PLN_growth_test'],
+                'customer' => ['customer_code' => 'CUS_gone_1'],
                 'metadata' => ['merchant_id' => (string) $merchant->id],
             ]],
         ], 200),
@@ -268,44 +305,50 @@ it('drops a merchant to starter when dodo reports the subscription cancelled', f
 
     expect($merchant->subscription_status)->toBe('cancelled')
         ->and($merchant->subscription_plan)->toBe('starter')
-        ->and($merchant->dodo_subscription_id)->toBeNull();
+        ->and($merchant->paystack_subscription_code)->toBeNull();
 });
 
 it('flags an active subscription that matches no merchant', function () {
     config([
-        'dodopayments.api_key' => 'test_api_key',
-        'dodopayments.environment' => 'test_mode',
+        'paystack.public_key' => 'pk_test',
+        'paystack.secret_key' => 'sk_test',
+        'paystack.base_url' => 'https://api.paystack.co',
     ]);
 
     Http::fake([
-        'https://test.dodopayments.com/subscriptions*' => Http::response([
-            'items' => [[
-                'subscription_id' => 'sub_orphan_1',
+        'https://api.paystack.co/subscription*' => Http::response([
+            'status' => true,
+            'data' => [[
+                'subscription_code' => 'SUB_orphan_1',
                 'status' => 'active',
-                'product_id' => 'prod_unknown',
-                'customer' => ['customer_id' => 'cus_orphan_1'],
+                'plan' => ['plan_code' => 'PLN_unknown'],
+                'customer' => ['customer_code' => 'CUS_orphan_1'],
                 'metadata' => [],
             ]],
         ], 200),
     ]);
 
     $this->artisan('storehause:reconcile-subscriptions')
-        ->expectsOutputToContain('ORPHAN: sub_orphan_1')
+        ->expectsOutputToContain('ORPHAN: SUB_orphan_1')
         ->assertExitCode(0);
 });
 
-it('creates a dodo checkout session for an add-on pack', function () {
+it('creates a paystack checkout session for an add-on pack', function () {
     config([
-        'dodopayments.api_key' => 'test_api_key',
-        'dodopayments.environment' => 'test_mode',
-        'dodopayments.app_url' => 'http://localhost:3000',
-        'dodopayments.add_ons.sms.0.product_id' => 'pdt_sms_500_test',
+        'paystack.public_key' => 'pk_test',
+        'paystack.secret_key' => 'sk_test',
+        'paystack.base_url' => 'https://api.paystack.co',
+        'billing.app_url' => 'http://localhost:3000',
     ]);
 
     Http::fake([
-        'https://test.dodopayments.com/checkouts' => Http::response([
-            'session_id' => 'cs_addon_123',
-            'checkout_url' => 'https://checkout.dodopayments.com/session/cs_addon_123',
+        'https://api.paystack.co/transaction/initialize' => Http::response([
+            'status' => true,
+            'data' => [
+                'authorization_url' => 'https://checkout.paystack.com/test_addon',
+                'access_code' => 'access_addon',
+                'reference' => 'bg-addon-test-123',
+            ],
         ], 200),
     ]);
 
@@ -319,63 +362,74 @@ it('creates a dodo checkout session for an add-on pack', function () {
         ])
         ->assertOk()
         ->assertJsonPath('mode', 'checkout')
-        ->assertJsonPath('checkout_url', 'https://checkout.dodopayments.com/session/cs_addon_123');
+        ->assertJsonPath('checkout_url', 'https://checkout.paystack.com/test_addon');
 
     Http::assertSent(function ($request) {
         $body = $request->data();
 
-        return $request->url() === 'https://test.dodopayments.com/checkouts'
-            && ($body['product_cart'][0]['product_id'] ?? null) === 'pdt_sms_500_test'
+        return $request->url() === 'https://api.paystack.co/transaction/initialize'
+            && ($body['metadata']['billing_purpose'] ?? null) === 'add_on'
             && ($body['metadata']['add_on_type'] ?? null) === 'sms'
-            && ($body['metadata']['add_on_pack_id'] ?? null) === 'sms_500';
+            && ($body['metadata']['add_on_pack_id'] ?? null) === 'sms_500'
+            && (int) ($body['amount'] ?? 0) === 300_000;
     });
 });
 
-it('notifies on add-on payment without bumping local purchased balances', function () {
-    \Illuminate\Support\Facades\Mail::fake();
+it('grants local purchased balances on add-on payment', function () {
+    Mail::fake();
 
     config([
-        'dodopayments.webhook_secret' => null,
-        'dodopayments.add_ons.sms.0.product_id' => 'pdt_sms_500_test',
+        'paystack.public_key' => 'pk_test',
+        'paystack.secret_key' => 'sk_test_secret',
     ]);
 
     $user = User::factory()->create();
     $merchant = createBillingMerchant($user, [
         'sms_purchased_balance' => 10,
-        'dodo_customer_id' => null,
+        'paystack_customer_code' => null,
     ]);
 
-    $payload = [
-        'type' => 'payment.succeeded',
+    $payload = json_encode([
+        'event' => 'charge.success',
         'data' => [
-            'customer_id' => 'cus_topup_1',
+            'id' => 445566,
+            'reference' => 'bg-addon-paid-1',
+            'status' => 'success',
+            'customer' => ['customer_code' => 'CUS_topup_1'],
             'metadata' => [
+                'billing_purpose' => 'add_on',
                 'merchant_id' => (string) $merchant->id,
                 'add_on_type' => 'sms',
                 'add_on_pack_id' => 'sms_500',
             ],
         ],
-    ];
+    ], JSON_THROW_ON_ERROR);
 
-    $this->postJson('/api/storehause/billing/webhook', $payload, [
-        'webhook-id' => 'evt_addon_1',
-    ])->assertOk();
+    $this->call(
+        'POST',
+        '/api/storehause/billing/webhook',
+        [],
+        [],
+        [],
+        [
+            'CONTENT_TYPE' => 'application/json',
+            'HTTP_X-PAYSTACK-SIGNATURE' => paystackSignature($payload),
+        ],
+        $payload,
+    )->assertOk();
 
     $merchant->refresh();
 
-    // Dodo grants the entitlement; local purchased stock must stay unchanged.
-    expect((int) $merchant->sms_purchased_balance)->toBe(10)
-        ->and($merchant->dodo_customer_id)->toBe('cus_topup_1');
+    expect((int) $merchant->sms_purchased_balance)->toBe(510)
+        ->and($merchant->paystack_customer_code)->toBe('CUS_topup_1');
 
-    \Illuminate\Support\Facades\Mail::assertSent(\App\Mail\MerchantBillingEmail::class);
+    Mail::assertSent(\App\Mail\MerchantBillingEmail::class);
 });
 
-it('lists packs as available when product ids are configured', function () {
+it('lists packs as available when paystack is configured', function () {
     config([
-        'dodopayments.api_key' => 'test_api_key',
-        'dodopayments.add_ons.sms.0.product_id' => 'pdt_sms_500_test',
-        'dodopayments.add_ons.whatsapp.0.product_id' => 'pdt_wa_200_test',
-        'dodopayments.add_ons.ai_credits.0.product_id' => 'pdt_ai_50_test',
+        'paystack.public_key' => 'pk_test',
+        'paystack.secret_key' => 'sk_test',
     ]);
 
     $user = User::factory()->create();

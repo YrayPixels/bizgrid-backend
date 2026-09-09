@@ -431,7 +431,7 @@ it('allows publish for an active paid subscription', function () {
     $store = publishTestStorefront($user, [
         'subscription_status' => 'active',
         'subscription_renews_at' => now()->addMonth(),
-        'dodo_subscription_id' => 'sub_paid_1',
+        'paystack_subscription_code' => 'SUB_paid_1',
     ]);
 
     $this->actingAs($user, 'sanctum')

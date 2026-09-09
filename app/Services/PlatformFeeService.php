@@ -30,7 +30,7 @@ class PlatformFeeService
         // Prefer the plan override when present; otherwise the platform-wide rate.
         $plan = $this->usage->planConfig($merchant->subscription_plan ?: $this->usage->defaultPlanKey());
         $rate = $plan['transaction_fee_percent']
-            ?? config('dodopayments.transaction_fee_percent', 0);
+            ?? config('billing.transaction_fee_percent', 0);
 
         return max(0.0, (float) $rate);
     }

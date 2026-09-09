@@ -6,7 +6,7 @@ namespace App\Http\Controllers;
 
 use App\Http\Controllers\Concerns\StorehauseHelpers;
 use App\Models\Merchant;
-use App\Services\DodoPaymentsService;
+use App\Services\PaystackBillingService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Validation\Rule;
@@ -17,7 +17,7 @@ class BillingController extends Controller
     use StorehauseHelpers;
 
     public function __construct(
-        private readonly DodoPaymentsService $dodoPayments,
+        private readonly PaystackBillingService $billing,
     ) {}
 
     public function subscription(Request $request): JsonResponse
@@ -25,42 +25,30 @@ class BillingController extends Controller
         $merchant = $this->findOwnedMerchant($request);
 
         return response()->json([
-            'subscription' => $this->dodoPayments->formatSubscription($merchant),
-            'plans' => $this->dodoPayments->listPlans(),
-            'add_ons' => $this->dodoPayments->listAddOns(),
+            'subscription' => $this->billing->formatSubscription($merchant),
+            'plans' => $this->billing->listPlans(),
+            'add_ons' => $this->billing->listAddOns(),
         ]);
     }
 
     public function checkout(Request $request): JsonResponse
     {
         $data = $request->validate([
-            'plan' => ['required', 'string', Rule::in(array_keys(config('dodopayments.plans', [])))],
+            'plan' => ['required', 'string', Rule::in(array_keys(config('billing.plans', [])))],
         ]);
 
         try {
             $merchant = $this->findOwnedMerchant($request);
             $user = $request->user();
 
-            if (
-                filled($merchant->dodo_subscription_id)
+            // Plan changes go through hosted checkout (Paystack has no prorated change-plan).
+            $session = filled($merchant->paystack_subscription_code)
                 && in_array($merchant->subscription_status, ['active', 'on_hold'], true)
                 && $merchant->subscription_plan !== $data['plan']
-            ) {
-                $this->dodoPayments->changePlan($merchant, $data['plan']);
-                $merchant->subscription_plan = $data['plan'];
-                $merchant->save();
-                $this->dodoPayments->grantMonthlyAllowances($merchant);
-                $merchant->refresh();
+                ? $this->billing->changePlan($merchant, $user, $data['plan'])
+                : $this->billing->createCheckoutSession($merchant, $user, $data['plan']);
 
-                return response()->json([
-                    'mode' => 'plan_change',
-                    'subscription' => $this->dodoPayments->formatSubscription($merchant),
-                    'message' => 'Your plan change has been submitted.',
-                ]);
-            }
-
-            $session = $this->dodoPayments->createCheckoutSession($merchant, $user, $data['plan']);
-            $checkoutUrl = $session['checkout_url'] ?? $session['checkoutUrl'] ?? null;
+            $checkoutUrl = $session['checkout_url'] ?? null;
 
             if (! is_string($checkoutUrl) || $checkoutUrl === '') {
                 throw new RuntimeException('Checkout session did not return a checkout URL.');
@@ -69,7 +57,7 @@ class BillingController extends Controller
             return response()->json([
                 'mode' => 'checkout',
                 'checkout_url' => $checkoutUrl,
-                'session_id' => $session['session_id'] ?? $session['sessionId'] ?? null,
+                'session_id' => $session['session_id'] ?? $session['reference'] ?? null,
             ]);
         } catch (RuntimeException $exception) {
             return response()->json(['message' => $exception->getMessage()], 422);
@@ -80,8 +68,8 @@ class BillingController extends Controller
     {
         try {
             $merchant = $this->findOwnedMerchant($request);
-            $session = $this->dodoPayments->createCustomerPortalSession($merchant);
-            $portalUrl = $session['url'] ?? $session['portal_url'] ?? $session['customer_portal_url'] ?? null;
+            $session = $this->billing->createCustomerPortalSession($merchant);
+            $portalUrl = $session['url'] ?? $session['portal_url'] ?? null;
 
             if (! is_string($portalUrl) || $portalUrl === '') {
                 throw new RuntimeException('Customer portal session did not return a URL.');
@@ -104,13 +92,13 @@ class BillingController extends Controller
 
         try {
             $merchant = $this->findOwnedMerchant($request);
-            $session = $this->dodoPayments->createAddOnCheckoutSession(
+            $session = $this->billing->createAddOnCheckoutSession(
                 $merchant,
                 $request->user(),
                 $data['type'],
                 $data['pack_id'],
             );
-            $checkoutUrl = $session['checkout_url'] ?? $session['checkoutUrl'] ?? null;
+            $checkoutUrl = $session['checkout_url'] ?? null;
 
             if (! is_string($checkoutUrl) || $checkoutUrl === '') {
                 throw new RuntimeException('Checkout session did not return a checkout URL.');
@@ -119,7 +107,7 @@ class BillingController extends Controller
             return response()->json([
                 'mode' => 'checkout',
                 'checkout_url' => $checkoutUrl,
-                'session_id' => $session['session_id'] ?? $session['sessionId'] ?? null,
+                'session_id' => $session['session_id'] ?? $session['reference'] ?? null,
             ]);
         } catch (RuntimeException $exception) {
             return response()->json(['message' => $exception->getMessage()], 422);
@@ -129,11 +117,9 @@ class BillingController extends Controller
     public function webhook(Request $request): JsonResponse
     {
         try {
-            $this->dodoPayments->handleWebhook(
+            $this->billing->handleWebhook(
                 $request->getContent(),
-                collect($request->headers->all())
-                    ->mapWithKeys(fn (array $values, string $key) => [$key => $values[0] ?? null])
-                    ->all(),
+                $request->header('x-paystack-signature'),
             );
         } catch (RuntimeException $exception) {
             return response()->json(['message' => $exception->getMessage()], 401);
@@ -150,7 +136,7 @@ class BillingController extends Controller
             ->first();
 
         if (! $merchant) {
-            abort(404, 'Merchant account not found.');
+            abort(404, 'Merchant not found.');
         }
 
         return $merchant;
