@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace App\Console\Commands;
 
-use App\Services\DodoPaymentsService;
+use App\Services\PaystackBillingService;
 use Illuminate\Console\Command;
 use Throwable;
 
@@ -12,25 +12,25 @@ class ReconcileSubscriptionsCommand extends Command
 {
     protected $signature = 'storehause:reconcile-subscriptions {--dry-run : Report drift without writing changes}';
 
-    protected $description = 'Sync merchant subscriptions with Dodo Payments, catching state that webhooks never delivered';
+    protected $description = 'Sync merchant subscriptions with Paystack, catching state that webhooks never delivered';
 
-    public function handle(DodoPaymentsService $dodoPayments): int
+    public function handle(PaystackBillingService $billing): int
     {
-        if (! $dodoPayments->isConfigured()) {
-            $this->warn('Dodo Payments is not configured — nothing to reconcile.');
+        if (! $billing->isConfigured()) {
+            $this->warn('Paystack billing is not configured — nothing to reconcile.');
 
             return self::SUCCESS;
         }
 
         try {
-            $remote = $dodoPayments->fetchRemoteSubscriptions();
+            $remote = $billing->fetchRemoteSubscriptions();
         } catch (Throwable $exception) {
-            $this->error("Could not fetch subscriptions from Dodo: {$exception->getMessage()}");
+            $this->error("Could not fetch subscriptions from Paystack: {$exception->getMessage()}");
 
             return self::FAILURE;
         }
 
-        $this->info(sprintf('Fetched %d subscription(s) from Dodo.', count($remote)));
+        $this->info(sprintf('Fetched %d subscription(s) from Paystack.', count($remote)));
 
         $changed = 0;
         $orphaned = 0;
@@ -41,18 +41,16 @@ class ReconcileSubscriptionsCommand extends Command
             }
 
             if ($this->option('dry-run')) {
-                // Reconciling writes, so a dry run can only report what it cannot match.
-                // Drift on matched merchants is left to the real run.
-                $subscriptionId = $subscription['subscription_id'] ?? '?';
-                $this->line("  would reconcile {$subscriptionId} (status: ".($subscription['status'] ?? '?').')');
+                $subscriptionId = $subscription['subscription_code'] ?? '?';
+                $this->line('  would reconcile '.$subscriptionId.' (status: '.($subscription['status'] ?? '?').')');
 
                 continue;
             }
 
             try {
-                $result = $dodoPayments->reconcileSubscription($subscription);
+                $result = $billing->reconcileSubscription($subscription);
             } catch (Throwable $exception) {
-                $subscriptionId = $subscription['subscription_id'] ?? '?';
+                $subscriptionId = $subscription['subscription_code'] ?? '?';
                 $this->error("  {$subscriptionId}: {$exception->getMessage()}");
 
                 continue;
@@ -65,17 +63,17 @@ class ReconcileSubscriptionsCommand extends Command
                 continue;
             }
 
-            // A paid subscription we cannot tie to a merchant is the failure mode worth
-            // shouting about: someone was charged and got nothing. It happens when a
-            // checkout is created outside our flow, so it carries no merchant_id metadata.
-            if (($subscription['status'] ?? null) === 'active'
-                && ! filled($subscription['metadata']['merchant_id'] ?? null)
+            $status = strtolower((string) ($subscription['status'] ?? ''));
+            $metadata = is_array($subscription['metadata'] ?? null) ? $subscription['metadata'] : [];
+            if (
+                $status === 'active'
+                && ! filled($metadata['merchant_id'] ?? null)
             ) {
                 $orphaned++;
                 $this->warn(sprintf(
                     '  ORPHAN: %s is active but matches no merchant (customer: %s)',
-                    $subscription['subscription_id'] ?? '?',
-                    $subscription['customer']['customer_id'] ?? '?',
+                    $subscription['subscription_code'] ?? '?',
+                    data_get($subscription, 'customer.customer_code') ?? '?',
                 ));
             }
         }

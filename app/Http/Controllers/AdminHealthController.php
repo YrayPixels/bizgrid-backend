@@ -76,7 +76,8 @@ class AdminHealthController extends Controller
                     'warning' => $warning,
                 ],
                 'billing' => [
-                    'dodo_configured' => filled(config('dodopayments.api_key')),
+                    'paystack_billing_configured' => filled(config('paystack.secret_key'))
+                        && filled(config('paystack.public_key')),
                     'last_webhook_at' => $lastWebhook?->created_at?->toIso8601String(),
                     'last_webhook_type' => $lastWebhook?->event_type,
                 ],

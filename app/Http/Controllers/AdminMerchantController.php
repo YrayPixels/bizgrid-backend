@@ -314,7 +314,7 @@ class AdminMerchantController extends Controller
     public function updateBilling(Request $request, int $id): JsonResponse
     {
         $validator = Validator::make($request->all(), [
-            'subscription_plan' => 'sometimes|in:'.implode(',', array_keys(config('dodopayments.plans', []))),
+            'subscription_plan' => 'sometimes|in:'.implode(',', array_keys(config('billing.plans', []))),
             'subscription_status' => 'sometimes|in:'.implode(',', Merchant::SUBSCRIPTION_STATUSES),
             'sms_purchased_balance' => 'sometimes|integer|min:0',
             'whatsapp_purchased_balance' => 'sometimes|integer|min:0',
@@ -427,8 +427,8 @@ class AdminMerchantController extends Controller
             'subscription_plan' => $merchant->subscription_plan,
             'subscription_status' => $merchant->subscription_status,
             'subscription_renews_at' => $merchant->subscription_renews_at?->toIso8601String(),
-            'dodo_customer_id' => $merchant->dodo_customer_id,
-            'dodo_subscription_id' => $merchant->dodo_subscription_id,
+            'paystack_customer_code' => $merchant->paystack_customer_code,
+            'paystack_subscription_code' => $merchant->paystack_subscription_code,
             'plan_name' => $plan['name'] ?? ucfirst($planKey),
             'plan_price_label' => $plan['price_label'] ?? null,
             'usage' => $this->usage->formatUsage($merchant),
@@ -457,8 +457,8 @@ class AdminMerchantController extends Controller
             'subscription_status' => $merchant->subscription_status,
             'subscription_renews_at' => $merchant->subscription_renews_at?->toIso8601String(),
             'can_receive_payouts' => $merchant->canReceivePayouts(),
-            'dodo_customer_id' => $merchant->dodo_customer_id,
-            'dodo_subscription_id' => $merchant->dodo_subscription_id,
+            'paystack_customer_code' => $merchant->paystack_customer_code,
+            'paystack_subscription_code' => $merchant->paystack_subscription_code,
             'activated_at' => $merchant->activated_at?->toIso8601String(),
             'suspended_at' => $merchant->suspended_at?->toIso8601String(),
             'suspension_reason' => $merchant->suspension_reason,

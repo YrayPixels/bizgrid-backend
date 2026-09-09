@@ -15,8 +15,8 @@ class Merchant extends Model
     /**
      * The subscription statuses the system actually writes.
      *
-     * `trialing` and `on_hold` are the canonical spellings — Dodo's webhooks use them
-     * and so does DodoPaymentsService. Admin previously offered `trial` and `past_due`,
+     * `trialing` and `on_hold` are the canonical spellings — PaystackBillingService
+     * and local trial logic use them. Admin previously offered `trial` and `past_due`,
      * which nothing else in the system ever produced or understood.
      */
     public const SUBSCRIPTION_STATUSES = ['trialing', 'active', 'on_hold', 'cancelled'];
@@ -29,8 +29,9 @@ class Merchant extends Model
         'status',
         'subscription_plan',
         'subscription_status',
-        'dodo_customer_id',
-        'dodo_subscription_id',
+        'paystack_customer_code',
+        'paystack_subscription_code',
+        'paystack_email_token',
         'subscription_renews_at',
         'sms_included_remaining',
         'sms_purchased_balance',
@@ -135,7 +136,7 @@ class Merchant extends Model
      * Starter plan on a local free trial — used for every new merchant shell.
      * The trial clock starts at merchant signup (`created_at` + trial_days).
      * `subscription_renews_at` is a mirrored end date for billing UI.
-     * Configure Dodo products with 0 trial days so checkout starts paid billing immediately.
+     * Paystack plans should not include an extra trial so checkout starts paid billing immediately.
      *
      * @return array{subscription_plan: string, subscription_status: string, subscription_renews_at: \Illuminate\Support\Carbon}
      */
@@ -144,7 +145,7 @@ class Merchant extends Model
         $trialDays = static::configuredTrialDays();
 
         return [
-            'subscription_plan' => (string) config('dodopayments.default_plan', 'starter'),
+            'subscription_plan' => (string) config('billing.default_plan', 'starter'),
             'subscription_status' => 'trialing',
             'subscription_renews_at' => now()->addDays($trialDays),
         ];
@@ -152,7 +153,7 @@ class Merchant extends Model
 
     public static function configuredTrialDays(): int
     {
-        return max(1, (int) config('dodopayments.trial_days', 14));
+        return max(1, (int) config('billing.trial_days', 14));
     }
 
     /**
@@ -183,8 +184,8 @@ class Merchant extends Model
             return false;
         }
 
-        // Once Dodo has a subscription, trust that over the local clock.
-        if (filled($this->dodo_subscription_id)) {
+        // Once Paystack has a subscription, trust that over the local clock.
+        if (filled($this->paystack_subscription_code)) {
             return true;
         }
 
@@ -203,11 +204,11 @@ class Merchant extends Model
     }
 
     /**
-     * Local no-card trial that has passed its end date without a Dodo subscription.
+     * Local no-card trial that has passed its end date without a Paystack subscription.
      */
     public function isExpiredLocalTrial(): bool
     {
-        if ($this->subscription_status !== 'trialing' || filled($this->dodo_subscription_id)) {
+        if ($this->subscription_status !== 'trialing' || filled($this->paystack_subscription_code)) {
             return false;
         }
 

@@ -131,6 +131,11 @@ class PaystackService
             throw new RuntimeException('Invalid webhook payload.');
         }
 
+        // Merchant SaaS billing (subscriptions + credit packs) shares this webhook URL.
+        if (app(PaystackBillingService::class)->handleWebhookEvent($event)) {
+            return;
+        }
+
         if (($event['event'] ?? null) !== 'charge.success') {
             return;
         }

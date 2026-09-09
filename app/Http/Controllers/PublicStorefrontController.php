@@ -508,7 +508,7 @@ class PublicStorefrontController extends Controller
 
     private function defaultCheckoutCallback(Store $store, StoreOrder $order): string
     {
-        $base = rtrim((string) config('dodopayments.app_url', 'http://localhost:3000'), '/');
+        $base = rtrim((string) config('billing.app_url', 'http://localhost:3000'), '/');
         $platformDomain = config('storehause.platform_domain', 'bizgrid.shop');
         $query = 'order='.urlencode($order->order_number).'&email='.urlencode((string) $order->customer_email);
 

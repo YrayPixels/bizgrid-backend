@@ -7,25 +7,19 @@ namespace App\Services;
 use App\Models\Merchant;
 use App\Models\StoreCustomer;
 use Illuminate\Support\Carbon;
-use Illuminate\Support\Str;
-use RuntimeException;
 
 class MerchantUsageService
 {
-    public function __construct(
-        private readonly DodoCreditBalanceService $credits,
-    ) {}
-
     public function defaultPlanKey(): string
     {
-        return (string) config('dodopayments.default_plan', 'starter');
+        return (string) config('billing.default_plan', 'starter');
     }
 
     public function planConfig(string $planKey): array
     {
-        $default = config('dodopayments.plans.'.$this->defaultPlanKey(), []);
+        $default = config('billing.plans.'.$this->defaultPlanKey(), []);
 
-        return config("dodopayments.plans.{$planKey}", $default);
+        return config("billing.plans.{$planKey}", $default);
     }
 
     /**
@@ -35,7 +29,7 @@ class MerchantUsageService
     {
         $plan = $this->planConfig($planKey);
 
-        return (int) ($plan['ai_daily_credits'] ?? config('dodopayments.ai_daily_credits', 5));
+        return (int) ($plan['ai_daily_credits'] ?? config('billing.ai_daily_credits', 5));
     }
 
     public function ensureMonthlyPeriod(Merchant $merchant): void
@@ -162,16 +156,18 @@ class MerchantUsageService
 
     public function listAddOns(): array
     {
-        return collect(config('dodopayments.add_ons', []))
-            ->map(function (array $packs, string $type) {
-                return collect($packs)->map(function (array $pack) use ($type) {
+        $configured = filled(config('paystack.secret_key')) && filled(config('paystack.public_key'));
+
+        return collect(config('billing.add_ons', []))
+            ->map(function (array $packs, string $type) use ($configured) {
+                return collect($packs)->map(function (array $pack) use ($type, $configured) {
                     return [
                         'id' => $pack['id'],
                         'type' => $type,
                         'units' => $pack['units'] ?? $pack['credits'] ?? null,
                         'credits' => $pack['credits'] ?? null,
                         'price_label' => $pack['price_label'],
-                        'available' => filled($pack['product_id'] ?? null),
+                        'available' => $configured && (float) ($pack['price_ngn'] ?? 0) > 0,
                     ];
                 })->values()->all();
             })
@@ -180,7 +176,7 @@ class MerchantUsageService
 
     public function findAddOn(string $type, string $packId): ?array
     {
-        foreach (config("dodopayments.add_ons.{$type}", []) as $pack) {
+        foreach (config("billing.add_ons.{$type}", []) as $pack) {
             if (($pack['id'] ?? null) === $packId) {
                 return $pack;
             }
@@ -190,8 +186,7 @@ class MerchantUsageService
     }
 
     /**
-     * Legacy / admin path: bump local purchased columns. Webhook grants no longer call this —
-     * Dodo credit entitlements are the source of truth for paid packs.
+     * Credit purchased SMS / WhatsApp / AI packs onto local merchant balances.
      */
     public function applyAddOnPurchase(Merchant $merchant, string $type, string $packId): void
     {
@@ -219,11 +214,8 @@ class MerchantUsageService
     {
         $this->ensureMonthlyPeriod($merchant);
 
-        if ((int) $merchant->sms_included_remaining > 0 || (int) $merchant->sms_purchased_balance > 0) {
-            return true;
-        }
-
-        return $this->safeRemoteBalance($merchant, 'sms') > 0;
+        return (int) $merchant->sms_included_remaining > 0
+            || (int) $merchant->sms_purchased_balance > 0;
     }
 
     public function consumeSmsUnit(Merchant $merchant, ?string $idempotencyKey = null): void
@@ -238,15 +230,10 @@ class MerchantUsageService
             return;
         }
 
-        // Legacy / admin-granted local purchased before Dodo.
         if ((int) $merchant->sms_purchased_balance > 0) {
             $merchant->sms_purchased_balance = (int) $merchant->sms_purchased_balance - 1;
             $merchant->save();
-
-            return;
         }
-
-        $this->debitPurchased($merchant, 'sms', $idempotencyKey ?? ('sms:'.(string) Str::ulid()), 'SMS usage');
     }
 
     public function canSendWhatsapp(Merchant $merchant): bool
@@ -255,11 +242,8 @@ class MerchantUsageService
         // reads as out of units until something else happens to refresh them.
         $this->ensureMonthlyPeriod($merchant);
 
-        if ((int) $merchant->whatsapp_included_remaining > 0 || (int) $merchant->whatsapp_purchased_balance > 0) {
-            return true;
-        }
-
-        return $this->safeRemoteBalance($merchant, 'whatsapp') > 0;
+        return (int) $merchant->whatsapp_included_remaining > 0
+            || (int) $merchant->whatsapp_purchased_balance > 0;
     }
 
     public function consumeWhatsappUnit(Merchant $merchant, ?string $idempotencyKey = null): void
@@ -276,30 +260,17 @@ class MerchantUsageService
         if ((int) $merchant->whatsapp_purchased_balance > 0) {
             $merchant->whatsapp_purchased_balance = (int) $merchant->whatsapp_purchased_balance - 1;
             $merchant->save();
-
-            return;
         }
-
-        $this->debitPurchased(
-            $merchant,
-            'whatsapp',
-            $idempotencyKey ?? ('wa:'.(string) Str::ulid()),
-            'WhatsApp usage',
-        );
     }
 
     public function canUsePurchasedAi(Merchant $merchant): bool
     {
-        if ((int) $merchant->ai_purchased_credits > 0) {
-            return true;
-        }
-
-        return $this->safeRemoteBalance($merchant, 'ai') > 0;
+        return (int) $merchant->ai_purchased_credits > 0;
     }
 
     public function purchasedAiBalance(Merchant $merchant): int
     {
-        return (int) $merchant->ai_purchased_credits + $this->safeRemoteBalance($merchant, 'ai');
+        return (int) $merchant->ai_purchased_credits;
     }
 
     public function consumePurchasedAiCredit(Merchant $merchant, ?string $idempotencyKey = null): void
@@ -308,51 +279,14 @@ class MerchantUsageService
             $merchant->ai_purchased_credits = (int) $merchant->ai_purchased_credits - 1;
             $merchant->ai_credits_date = now()->toDateString();
             $merchant->save();
-
-            return;
         }
-
-        $this->debitPurchased(
-            $merchant,
-            'ai',
-            $idempotencyKey ?? ('ai:'.(string) Str::ulid()),
-            'AI usage',
-        );
-        $merchant->ai_credits_date = now()->toDateString();
-        $merchant->save();
     }
 
     private function purchasedMessagingBalance(Merchant $merchant, string $type): int
     {
-        $local = $type === 'sms'
+        return $type === 'sms'
             ? (int) $merchant->sms_purchased_balance
             : (int) $merchant->whatsapp_purchased_balance;
-
-        return $local + $this->safeRemoteBalance($merchant, $type);
-    }
-
-    private function safeRemoteBalance(Merchant $merchant, string $type): int
-    {
-        try {
-            return $this->credits->getBalance($merchant, $type);
-        } catch (RuntimeException) {
-            // Billing page should still load if Dodo is briefly unreachable.
-            return 0;
-        }
-    }
-
-    private function debitPurchased(
-        Merchant $merchant,
-        string $type,
-        string $idempotencyKey,
-        string $reason,
-    ): void {
-        // Nothing left to debit against — no-op matches historical local behaviour.
-        if ($this->safeRemoteBalance($merchant, $type) <= 0) {
-            return;
-        }
-
-        $this->credits->debit($merchant, $type, 1, $idempotencyKey, $reason);
     }
 
     private function countCustomers(Merchant $merchant): int
@@ -372,9 +306,9 @@ class MerchantUsageService
     {
         $caps = $plan['caps'] ?? [];
         $included = $plan['included_monthly'] ?? [];
-        $dailyAi = (int) ($plan['ai_daily_credits'] ?? config('dodopayments.ai_daily_credits', 5));
+        $dailyAi = (int) ($plan['ai_daily_credits'] ?? config('billing.ai_daily_credits', 5));
         $feePercent = (float) ($plan['transaction_fee_percent']
-            ?? config('dodopayments.transaction_fee_percent', 0));
+            ?? config('billing.transaction_fee_percent', 0));
 
         return [
             ['label' => 'Service fee', 'value' => $this->formatFeeLabel($feePercent)],
