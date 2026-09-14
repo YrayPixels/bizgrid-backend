@@ -71,43 +71,23 @@ Route::post('/maintenance/mail-test', function () {
         abort(403, 'Unauthorized');
     }
 
-    $to = request()->input('to') ?: config('mail.from.address');
-    if (! is_string($to) || ! filter_var($to, FILTER_VALIDATE_EMAIL)) {
+    $to = request()->input('to');
+    $result = app(\App\Services\PlatformMailConfigService::class)->probe(
+        is_string($to) ? $to : null
+    );
+
+    if (($result['error'] ?? null) === 'invalid_recipient') {
         return response()->json([
             'message' => 'Provide a valid ?to=email@example.com',
+            'config' => $result['config'],
         ], 422);
     }
 
-    $config = [
-        'mailer' => config('mail.default'),
-        'scheme' => config('mail.mailers.smtp.scheme'),
-        'host' => config('mail.mailers.smtp.host'),
-        'port' => config('mail.mailers.smtp.port'),
-        'username_set' => filled(config('mail.mailers.smtp.username')),
-        'from_address' => config('mail.from.address'),
-        'from_name' => config('mail.from.name'),
-        'to' => $to,
-    ];
-
-    try {
-        Illuminate\Support\Facades\Mail::raw(
-            'Bizgrid mail test at '.now()->toIso8601String()."\n\nIf you received this, SMTP delivery is working.",
-            function ($message) use ($to) {
-                $message->to($to)->subject('Bizgrid mail test');
-            }
-        );
-
-        return response()->json([
-            'message' => 'Test email accepted by the mailer',
-            'config' => $config,
-        ]);
-    } catch (\Throwable $e) {
-        return response()->json([
-            'message' => 'Test email failed',
-            'error' => $e->getMessage(),
-            'config' => $config,
-        ], 500);
-    }
+    return response()->json([
+        'message' => $result['ok'] ? 'Test email accepted by the mailer' : 'Test email failed',
+        'error' => $result['error'],
+        'config' => $result['config'],
+    ], $result['ok'] ? 200 : 500);
 });
 
 Route::match(['GET', 'POST'], '/maintenance/queue-work', function () {

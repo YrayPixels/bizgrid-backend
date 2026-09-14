@@ -9,6 +9,7 @@ use App\Models\Merchant;
 use App\Models\PlatformNotification;
 use App\Models\StoreOrder;
 use App\Services\PlatformAiConfigService;
+use App\Services\PlatformMailConfigService;
 use App\Services\PlatformNotificationService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Facades\DB;
@@ -19,6 +20,7 @@ class AdminHealthController extends Controller
     public function __construct(
         private readonly PlatformNotificationService $notifications,
         private readonly PlatformAiConfigService $aiConfig,
+        private readonly PlatformMailConfigService $mailConfig,
     ) {}
 
     public function status(): JsonResponse
@@ -34,11 +36,13 @@ class AdminHealthController extends Controller
         }
 
         $lastWebhook = BillingWebhookEvent::query()->latest('id')->first();
-        $mailer = (string) config('mail.default', 'log');
-        $fromAddress = (string) config('mail.from.address', '');
-        $scheme = config('mail.mailers.smtp.scheme');
-        $host = (string) config('mail.mailers.smtp.host', '');
-        $port = (int) config('mail.mailers.smtp.port', 0);
+        $this->mailConfig->applyToRuntime();
+        $mail = $this->mailConfig->adminConfig();
+        $mailer = $mail['mailer'];
+        $fromAddress = (string) ($mail['from_address'] ?? '');
+        $scheme = $mail['scheme'];
+        $host = (string) ($mail['host'] ?? '');
+        $port = (int) $mail['port'];
         $mailLooksBroken = $mailer === 'log'
             || $fromAddress === ''
             || str_contains($fromAddress, 'example.com')
@@ -47,11 +51,11 @@ class AdminHealthController extends Controller
 
         $warning = null;
         if ($mailer === 'log') {
-            $warning = 'MAIL_MAILER is log — emails are written to the app log, not inboxes.';
+            $warning = 'Mailer is log — emails are written to the app log, not inboxes. Configure SMTP under Mail settings.';
         } elseif (str_contains($fromAddress, 'example.com') || str_contains($fromAddress, 'hello@example')) {
-            $warning = 'MAIL_FROM_ADDRESS still looks like a placeholder.';
+            $warning = 'From address still looks like a placeholder. Update it under Mail settings.';
         } elseif ($mailer === 'smtp' && $port === 465 && blank($scheme)) {
-            $warning = 'Port 465 requires MAIL_SCHEME=smtps. Without it, delivery often never reaches the mail server.';
+            $warning = 'Port 465 requires scheme=smtps. Without it, delivery often never reaches the mail server.';
         }
 
         return response()->json([
@@ -69,9 +73,10 @@ class AdminHealthController extends Controller
                     'scheme' => $scheme,
                     'host' => $host,
                     'port' => $port,
-                    'username_set' => filled(config('mail.mailers.smtp.username')),
+                    'username_set' => filled($mail['username']),
                     'from_address' => $fromAddress,
-                    'from_name' => config('mail.from.name'),
+                    'from_name' => $mail['from_name'],
+                    'source' => $mail['source'],
                     'ok' => ! $mailLooksBroken,
                     'warning' => $warning,
                 ],

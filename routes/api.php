@@ -11,6 +11,7 @@ use App\Http\Controllers\AdminController;
 use App\Http\Controllers\AdminExportController;
 use App\Http\Controllers\AdminGcsSettingsController;
 use App\Http\Controllers\AdminHealthController;
+use App\Http\Controllers\AdminMailSettingsController;
 use App\Http\Controllers\AdminInquiryController;
 use App\Http\Controllers\AdminMerchantController;
 use App\Http\Controllers\AdminNotificationController;
@@ -140,6 +141,10 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::get('/gcs-settings', [AdminGcsSettingsController::class, 'show']);
             Route::patch('/gcs-settings', [AdminGcsSettingsController::class, 'update']);
             Route::post('/gcs-settings/probe', [AdminGcsSettingsController::class, 'probe']);
+
+            Route::get('/mail-settings', [AdminMailSettingsController::class, 'show']);
+            Route::patch('/mail-settings', [AdminMailSettingsController::class, 'update']);
+            Route::post('/mail-settings/probe', [AdminMailSettingsController::class, 'probe']);
 
             Route::get('/whatsapp-settings', [AdminWhatsAppSettingsController::class, 'show']);
             Route::patch('/whatsapp-settings', [AdminWhatsAppSettingsController::class, 'update']);
