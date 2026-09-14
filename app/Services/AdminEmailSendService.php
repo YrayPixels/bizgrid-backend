@@ -18,18 +18,26 @@ class AdminEmailSendService
     ) {}
 
     /**
-     * @param  array{to: string, subject: string, body_text: string, body_html?: string|null, provider_id?: string|null}  $input
+     * @param  array{
+     *     to?: string|list<string>|null,
+     *     merchant_ids?: list<int>|null,
+     *     subject: string,
+     *     body_text: string,
+     *     body_html?: string|null,
+     *     provider_id?: string|null
+     * }  $input
      */
     public function compose(array $input, ?User $admin = null): AdminEmailMessage
     {
-        $to = strtolower(trim($input['to']));
+        $recipients = $this->resolveRecipients($input);
+        if ($recipients === []) {
+            throw new \InvalidArgumentException('Add at least one recipient email or merchant.');
+        }
+
         $subject = trim($input['subject']);
         $bodyText = trim($input['body_text']);
         $bodyHtml = isset($input['body_html']) ? trim((string) $input['body_html']) : null;
 
-        if (! filter_var($to, FILTER_VALIDATE_EMAIL)) {
-            throw new \InvalidArgumentException('A valid recipient email is required.');
-        }
         if ($subject === '' || $bodyText === '') {
             throw new \InvalidArgumentException('Subject and message body are required.');
         }
@@ -39,9 +47,15 @@ class AdminEmailSendService
         $fromName = $this->mailConfig->fromName();
         $providerId = $this->filled($input['provider_id'] ?? null) ?? $this->mailConfig->activeProviderId();
         $messageId = $this->makeMessageId($fromAddress);
+        $toEmails = array_map(
+            fn (array $row): array => ['email' => $row['email'], 'name' => $row['name']],
+            $recipients
+        );
+        $toAddresses = array_column($recipients, 'email');
 
         return DB::transaction(function () use (
-            $to,
+            $toEmails,
+            $toAddresses,
             $subject,
             $bodyText,
             $bodyHtml,
@@ -51,14 +65,16 @@ class AdminEmailSendService
             $messageId,
             $admin
         ) {
+            $participants = $toEmails;
+            if ($fromAddress) {
+                $participants[] = ['email' => strtolower($fromAddress), 'name' => $fromName];
+            }
+
             $thread = AdminEmailThread::query()->create([
                 'mailbox_provider_id' => $providerId,
                 'subject' => $subject,
                 'subject_normalized' => $this->normalizeSubject($subject),
-                'participants' => [
-                    ['email' => $to, 'name' => null],
-                    ...($fromAddress ? [['email' => strtolower($fromAddress), 'name' => $fromName]] : []),
-                ],
+                'participants' => $participants,
                 'last_message_at' => now(),
                 'last_direction' => 'outbound',
                 'status' => 'open',
@@ -70,7 +86,7 @@ class AdminEmailSendService
                 'direction' => 'outbound',
                 'from_email' => $fromAddress,
                 'from_name' => $fromName,
-                'to_emails' => [['email' => $to, 'name' => null]],
+                'to_emails' => $toEmails,
                 'cc_emails' => [],
                 'subject' => $subject,
                 'body_text' => $bodyText,
@@ -81,7 +97,7 @@ class AdminEmailSendService
                 'status' => 'queued',
             ]);
 
-            $this->dispatchMail($message, [$to], $subject, $bodyText, $bodyHtml, $messageId, null, null);
+            $this->dispatchMail($message, $toAddresses, $subject, $bodyText, $bodyHtml, $messageId, null, null);
 
             $message->update(['status' => 'sent', 'error' => null]);
             $thread->update([
@@ -92,6 +108,56 @@ class AdminEmailSendService
 
             return $message->fresh(['thread']) ?? $message;
         });
+    }
+
+    /**
+     * @param  array{to?: mixed, merchant_ids?: mixed}  $input
+     * @return list<array{email: string, name: string|null}>
+     */
+    private function resolveRecipients(array $input): array
+    {
+        $map = [];
+
+        $to = $input['to'] ?? null;
+        $rawTos = [];
+        if (is_string($to) && trim($to) !== '') {
+            $rawTos = preg_split('/[,;]+/', $to) ?: [];
+        } elseif (is_array($to)) {
+            $rawTos = $to;
+        }
+
+        foreach ($rawTos as $item) {
+            $email = strtolower(trim((string) $item));
+            if ($email === '' || ! filter_var($email, FILTER_VALIDATE_EMAIL)) {
+                continue;
+            }
+            $map[$email] = ['email' => $email, 'name' => null];
+        }
+
+        $merchantIds = $input['merchant_ids'] ?? null;
+        if (is_array($merchantIds) && $merchantIds !== []) {
+            $ids = array_values(array_unique(array_filter(array_map('intval', $merchantIds), fn (int $id) => $id > 0)));
+            if ($ids !== []) {
+                $merchants = \App\Models\Merchant::query()
+                    ->with('owner:id,name,email')
+                    ->whereIn('id', $ids)
+                    ->get(['id', 'business_name', 'owner_user_id']);
+
+                foreach ($merchants as $merchant) {
+                    $email = strtolower(trim((string) ($merchant->owner?->email ?? '')));
+                    if ($email === '' || ! filter_var($email, FILTER_VALIDATE_EMAIL)) {
+                        continue;
+                    }
+                    $name = $merchant->owner?->name ?: $merchant->business_name;
+                    $map[$email] = [
+                        'email' => $email,
+                        'name' => filled($name) ? (string) $name : null,
+                    ];
+                }
+            }
+        }
+
+        return array_values($map);
     }
 
     /**
