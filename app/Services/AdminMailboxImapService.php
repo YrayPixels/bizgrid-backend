@@ -83,12 +83,24 @@ class AdminMailboxImapService
 
         try {
             $lastUid = (int) $connection['last_uid'];
-            $search = $lastUid > 0 ? ($lastUid + 1).':*' : '1:*';
-            $uids = imap_search($inbox, $search, SE_UID) ?: [];
+            // imap_search() needs IMAP SEARCH keys (ALL / UID n:*), not bare sequence sets.
+            $criterion = $lastUid > 0
+                ? 'UID '.($lastUid + 1).':*'
+                : 'ALL';
+            $uids = @imap_search($inbox, $criterion, SE_UID);
+            // Clear the IMAP error stack so a soft warning cannot become a second JSON
+            // payload during request shutdown (breaks response.json() in the admin app).
+            imap_errors();
+            imap_alerts();
+
             if ($uids === false) {
                 $uids = [];
             }
 
+            $uids = array_values(array_filter(
+                array_map('intval', $uids),
+                fn (int $uid): bool => $uid > $lastUid
+            ));
             sort($uids, SORT_NUMERIC);
             if ($limit !== null && $limit > 0) {
                 $uids = array_slice($uids, 0, $limit);
@@ -98,15 +110,19 @@ class AdminMailboxImapService
             $maxUid = $lastUid;
 
             foreach ($uids as $uid) {
-                $uid = (int) $uid;
-                if ($uid <= $lastUid) {
-                    continue;
+                try {
+                    if ($this->importUid($inbox, $connection, $uid)) {
+                        $imported++;
+                    }
+                    $maxUid = max($maxUid, $uid);
+                } catch (\Throwable $e) {
+                    Log::warning('admin.email.imap_import_failed', [
+                        'provider_id' => $providerId,
+                        'uid' => $uid,
+                        'error' => $e->getMessage(),
+                    ]);
+                    throw $e;
                 }
-
-                if ($this->importUid($inbox, $connection, $uid)) {
-                    $imported++;
-                }
-                $maxUid = max($maxUid, $uid);
             }
 
             if ($maxUid > $lastUid) {
@@ -115,6 +131,8 @@ class AdminMailboxImapService
 
             return $imported;
         } finally {
+            imap_errors();
+            imap_alerts();
             imap_close($inbox);
         }
     }
@@ -141,7 +159,7 @@ class AdminMailboxImapService
             return false;
         }
 
-        $rawHeaders = imap_fetchheader($inbox, (string) $uid, FT_UID) ?: '';
+        $rawHeaders = imap_fetchheader($inbox, $uid, FT_UID) ?: '';
         $messageId = $this->normalizeMessageId($header->message_id ?? $this->headerValue($rawHeaders, 'Message-ID'));
         if ($messageId !== null) {
             $byMessageId = AdminEmailMessage::query()->where('message_id', $messageId)->first();
@@ -191,7 +209,7 @@ class AdminMailboxImapService
                 messageId: $messageId,
                 inReplyTo: $inReplyTo,
                 references: $references,
-                participants: $this->participants($from, $to, $cc),
+                fromParticipants: $this->participants($from, $to, $cc),
             );
 
             AdminEmailMessage::query()->create([
@@ -296,9 +314,9 @@ class AdminMailboxImapService
      */
     private function extractBodies($inbox, int $uid): array
     {
-        $structure = imap_fetchstructure($inbox, (string) $uid, FT_UID);
+        $structure = imap_fetchstructure($inbox, $uid, FT_UID);
         if (! $structure) {
-            $raw = imap_body($inbox, (string) $uid, FT_UID) ?: '';
+            $raw = imap_body($inbox, $uid, FT_UID) ?: '';
 
             return [$this->stripToText($raw), null];
         }
@@ -327,7 +345,7 @@ class AdminMailboxImapService
                 return null;
             }
             $section = $prefix !== '' ? $prefix : '1';
-            $body = imap_fetchbody($inbox, (string) $uid, $section, FT_UID) ?: '';
+            $body = imap_fetchbody($inbox, $uid, $section, FT_UID) ?: '';
             $body = $this->decodePart($body, (int) ($structure->encoding ?? 0));
             if (! empty($structure->parameters)) {
                 foreach ($structure->parameters as $param) {
