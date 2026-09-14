@@ -141,12 +141,25 @@ class AdminEmailCenterController extends Controller
     public function compose(Request $request): JsonResponse
     {
         $validator = Validator::make($request->all(), [
-            'to' => 'required|email|max:255',
+            'to' => 'nullable',
+            'merchant_ids' => 'nullable|array',
+            'merchant_ids.*' => 'integer|min:1',
             'subject' => 'required|string|max:255',
             'body_text' => 'required|string|max:20000',
             'body_html' => 'nullable|string|max:50000',
             'provider_id' => 'nullable|string|max:64',
         ]);
+
+        $validator->after(function ($validator) use ($request): void {
+            $to = $request->input('to');
+            $merchantIds = $request->input('merchant_ids');
+            $hasTo = (is_string($to) && trim($to) !== '')
+                || (is_array($to) && array_filter($to, fn ($v) => filled($v)) !== []);
+            $hasMerchants = is_array($merchantIds) && $merchantIds !== [];
+            if (! $hasTo && ! $hasMerchants) {
+                $validator->errors()->add('to', 'Add at least one recipient email or merchant.');
+            }
+        });
 
         if ($validator->fails()) {
             return response()->json([
@@ -170,7 +183,8 @@ class AdminEmailCenterController extends Controller
 
         $this->audit->log($request, 'platform.email.composed', 'admin_email_thread', $thread?->id, [
             'message_id' => $message->id,
-            'to' => $validator->validated()['to'],
+            'to' => collect($message->to_emails ?? [])->pluck('email')->all(),
+            'merchant_ids' => $validator->validated()['merchant_ids'] ?? [],
         ]);
 
         return response()->json([
