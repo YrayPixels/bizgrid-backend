@@ -54,6 +54,13 @@ class AdminMailSettingsController extends Controller
                 }
             }],
             'upsert_provider.from_name' => 'nullable|string|max:120',
+            'upsert_provider.imap_enabled' => 'nullable|boolean',
+            'upsert_provider.imap_host' => 'nullable|string|max:255',
+            'upsert_provider.imap_port' => 'nullable|integer|min:1|max:65535',
+            'upsert_provider.imap_encryption' => 'nullable|string|in:ssl,tls,none',
+            'upsert_provider.imap_username' => 'nullable|string|max:255',
+            'upsert_provider.imap_password' => 'nullable|string|max:500',
+            'upsert_provider.imap_folder' => 'nullable|string|max:120',
             // Legacy flat fields (still accepted).
             'mailer' => ['nullable', 'string', Rule::in(PlatformMailConfigService::ALLOWED_MAILERS)],
             'name' => 'nullable|string|max:120',

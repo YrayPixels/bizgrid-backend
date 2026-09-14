@@ -8,6 +8,7 @@ use App\Http\Controllers\AdminAnalyticsController;
 use App\Http\Controllers\AdminAuditController;
 use App\Http\Controllers\AdminBuilderController;
 use App\Http\Controllers\AdminController;
+use App\Http\Controllers\AdminEmailCenterController;
 use App\Http\Controllers\AdminExportController;
 use App\Http\Controllers\AdminGcsSettingsController;
 use App\Http\Controllers\AdminHealthController;
@@ -145,6 +146,13 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::get('/mail-settings', [AdminMailSettingsController::class, 'show']);
             Route::patch('/mail-settings', [AdminMailSettingsController::class, 'update']);
             Route::post('/mail-settings/probe', [AdminMailSettingsController::class, 'probe']);
+
+            Route::get('/email-threads', [AdminEmailCenterController::class, 'index']);
+            Route::post('/email-threads', [AdminEmailCenterController::class, 'compose']);
+            Route::get('/email-threads/{id}', [AdminEmailCenterController::class, 'show'])->whereNumber('id');
+            Route::patch('/email-threads/{id}', [AdminEmailCenterController::class, 'update'])->whereNumber('id');
+            Route::post('/email-threads/{id}/reply', [AdminEmailCenterController::class, 'reply'])->whereNumber('id');
+            Route::post('/email-mailbox/poll', [AdminEmailCenterController::class, 'poll']);
 
             Route::get('/whatsapp-settings', [AdminWhatsAppSettingsController::class, 'show']);
             Route::patch('/whatsapp-settings', [AdminWhatsAppSettingsController::class, 'update']);

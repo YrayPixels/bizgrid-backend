@@ -30,3 +30,9 @@ Schedule::command('storehause:merchant-whatsapp-brief')
     ->dailyAt('08:00')
     ->timezone('Africa/Lagos')
     ->withoutOverlapping();
+
+// Admin email center — pull new IMAP mail into threads. Overlap guard so a slow
+// mailbox does not stack polls.
+Schedule::command('storehause:poll-admin-mailbox')
+    ->everyMinute()
+    ->withoutOverlapping();
