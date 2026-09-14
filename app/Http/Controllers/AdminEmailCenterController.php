@@ -199,10 +199,33 @@ class AdminEmailCenterController extends Controller
         return response()->json([
             'success' => true,
             'data' => $result,
-            'message' => $result['imported'] > 0
-                ? "Imported {$result['imported']} message(s)."
-                : 'Mailbox checked. No new messages.',
+            'message' => $this->pollMessage($result),
         ]);
+    }
+
+    /**
+     * @param  array{polled: int, imported: int, providers: list<array{id: string, name: string, imported: int, error: string|null}>}  $result
+     */
+    private function pollMessage(array $result): string
+    {
+        if ($result['imported'] > 0) {
+            return "Imported {$result['imported']} message(s).";
+        }
+
+        $errors = collect($result['providers'] ?? [])
+            ->pluck('error')
+            ->filter()
+            ->values();
+
+        if ($errors->isNotEmpty()) {
+            return 'Mailbox poll failed: '.$errors->first();
+        }
+
+        if (($result['polled'] ?? 0) === 0) {
+            return 'No IMAP-enabled mail providers configured.';
+        }
+
+        return 'Mailbox checked. No new messages.';
     }
 
     /**
