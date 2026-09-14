@@ -230,6 +230,104 @@ class PlatformMailConfigService
     }
 
     /**
+     * Decrypted providers that have IMAP inbox polling enabled.
+     *
+     * @return list<array<string, mixed>>
+     */
+    public function imapEnabledProviders(): array
+    {
+        return array_values(array_filter(
+            $this->decryptedProviders(),
+            fn (array $provider): bool => (bool) ($provider['imap_enabled'] ?? false)
+                && filled($provider['imap_host'] ?? null)
+                && (
+                    filled($provider['imap_password'] ?? null)
+                    || filled($provider['password'] ?? null)
+                )
+        ));
+    }
+
+    public function hasImapMailboxConfigured(): bool
+    {
+        return $this->imapEnabledProviders() !== [];
+    }
+
+    /**
+     * @return array{
+     *     id: string,
+     *     name: string,
+     *     host: string,
+     *     port: int,
+     *     encryption: string,
+     *     username: string,
+     *     password: string,
+     *     folder: string,
+     *     last_uid: int,
+     *     from_address: string|null,
+     *     from_name: string|null
+     * }|null
+     */
+    public function imapConnection(string $providerId): ?array
+    {
+        foreach ($this->decryptedProviders() as $provider) {
+            if (($provider['id'] ?? null) !== $providerId) {
+                continue;
+            }
+
+            $host = $this->filledValue($provider['imap_host'] ?? null);
+            $password = $this->filledValue($provider['imap_password'] ?? null)
+                ?? $this->filledValue($provider['password'] ?? null);
+            $username = $this->filledValue($provider['imap_username'] ?? null)
+                ?? $this->filledValue($provider['username'] ?? null)
+                ?? $this->filledValue($provider['from_address'] ?? null);
+
+            if ($host === null || $password === null || $username === null) {
+                return null;
+            }
+
+            return [
+                'id' => (string) $provider['id'],
+                'name' => (string) ($provider['name'] ?? 'Mailbox'),
+                'host' => $host,
+                'port' => isset($provider['imap_port']) && is_numeric($provider['imap_port'])
+                    ? (int) $provider['imap_port']
+                    : 993,
+                'encryption' => strtolower((string) ($provider['imap_encryption'] ?? 'ssl')),
+                'username' => $username,
+                'password' => $password,
+                'folder' => $this->filledValue($provider['imap_folder'] ?? null) ?? 'INBOX',
+                'last_uid' => isset($provider['imap_last_uid']) && is_numeric($provider['imap_last_uid'])
+                    ? (int) $provider['imap_last_uid']
+                    : 0,
+                'from_address' => $this->filledValue($provider['from_address'] ?? null),
+                'from_name' => $this->filledValue($provider['from_name'] ?? null),
+            ];
+        }
+
+        return null;
+    }
+
+    public function updateImapLastUid(string $providerId, int $uid): void
+    {
+        $providers = $this->rawProviders();
+        $changed = false;
+
+        foreach ($providers as $index => $provider) {
+            if (($provider['id'] ?? null) !== $providerId) {
+                continue;
+            }
+            $providers[$index]['imap_last_uid'] = max(0, $uid);
+            $changed = true;
+            break;
+        }
+
+        if ($changed) {
+            $this->persistProviders($providers);
+            $this->clearCache();
+        }
+    }
+
+    /**
      * Push resolved mail settings into Laravel config so existing Mail:: / mailable callers pick them up.
      */
     public function applyToRuntime(): void
@@ -559,6 +657,7 @@ class PlatformMailConfigService
 
         return array_map(function (array $provider): array {
             $password = $this->filledValue($provider['password'] ?? null);
+            $imapPassword = $this->filledValue($provider['imap_password'] ?? null);
 
             return [
                 'id' => $provider['id'],
@@ -573,6 +672,17 @@ class PlatformMailConfigService
                 'password_preview' => $this->maskSecret($password),
                 'from_address' => $provider['from_address'] ?? null,
                 'from_name' => $provider['from_name'] ?? null,
+                'imap_enabled' => (bool) ($provider['imap_enabled'] ?? false),
+                'imap_host' => $provider['imap_host'] ?? null,
+                'imap_port' => isset($provider['imap_port']) && is_numeric($provider['imap_port']) ? (int) $provider['imap_port'] : null,
+                'imap_encryption' => $provider['imap_encryption'] ?? 'ssl',
+                'imap_username' => $provider['imap_username'] ?? null,
+                'imap_password_configured' => filled($imapPassword) || filled($password),
+                'imap_password_preview' => $this->maskSecret($imapPassword ?: $password),
+                'imap_folder' => $provider['imap_folder'] ?? 'INBOX',
+                'imap_last_uid' => isset($provider['imap_last_uid']) && is_numeric($provider['imap_last_uid'])
+                    ? (int) $provider['imap_last_uid']
+                    : 0,
             ];
         }, $providers);
     }
@@ -586,6 +696,14 @@ class PlatformMailConfigService
             if (filled($provider['password'] ?? null)) {
                 try {
                     $provider['password'] = Crypt::decryptString((string) $provider['password']);
+                } catch (\Throwable) {
+                    // Already plaintext (should be rare).
+                }
+            }
+
+            if (filled($provider['imap_password'] ?? null)) {
+                try {
+                    $provider['imap_password'] = Crypt::decryptString((string) $provider['imap_password']);
                 } catch (\Throwable) {
                     // Already plaintext (should be rare).
                 }
@@ -744,6 +862,54 @@ class PlatformMailConfigService
             $password = Crypt::encryptString((string) $password);
         }
 
+        $imapEnabled = array_key_exists('imap_enabled', $input)
+            ? filter_var($input['imap_enabled'], FILTER_VALIDATE_BOOLEAN)
+            : (bool) ($existing['imap_enabled'] ?? false);
+
+        $imapHost = array_key_exists('imap_host', $input)
+            ? $this->filledValue(is_string($input['imap_host'] ?? null) ? $input['imap_host'] : null)
+            : ($existing['imap_host'] ?? null);
+
+        $imapPort = null;
+        if (array_key_exists('imap_port', $input)) {
+            if (is_numeric($input['imap_port'])) {
+                $imapPort = (int) $input['imap_port'];
+            }
+        } elseif (isset($existing['imap_port']) && is_numeric($existing['imap_port'])) {
+            $imapPort = (int) $existing['imap_port'];
+        }
+
+        $imapEncryption = array_key_exists('imap_encryption', $input)
+            ? ($this->filledValue(is_string($input['imap_encryption'] ?? null) ? $input['imap_encryption'] : null) ?? 'ssl')
+            : ($existing['imap_encryption'] ?? 'ssl');
+
+        $imapUsername = array_key_exists('imap_username', $input)
+            ? $this->filledValue(is_string($input['imap_username'] ?? null) ? $input['imap_username'] : null)
+            : ($existing['imap_username'] ?? null);
+
+        $imapFolder = array_key_exists('imap_folder', $input)
+            ? ($this->filledValue(is_string($input['imap_folder'] ?? null) ? $input['imap_folder'] : null) ?? 'INBOX')
+            : ($existing['imap_folder'] ?? 'INBOX');
+
+        $imapPassword = $existing['imap_password'] ?? null;
+        if (array_key_exists('imap_password', $input)) {
+            $incomingImap = is_string($input['imap_password']) ? trim($input['imap_password']) : '';
+            if ($incomingImap !== '') {
+                $imapPassword = Crypt::encryptString($incomingImap);
+            } elseif (filled($imapPassword) && ! $this->looksEncrypted((string) $imapPassword)) {
+                $imapPassword = Crypt::encryptString((string) $imapPassword);
+            }
+        } elseif (filled($imapPassword) && ! $this->looksEncrypted((string) $imapPassword)) {
+            $imapPassword = Crypt::encryptString((string) $imapPassword);
+        }
+
+        $imapLastUid = isset($existing['imap_last_uid']) && is_numeric($existing['imap_last_uid'])
+            ? (int) $existing['imap_last_uid']
+            : 0;
+        if (array_key_exists('imap_last_uid', $input) && is_numeric($input['imap_last_uid'])) {
+            $imapLastUid = max(0, (int) $input['imap_last_uid']);
+        }
+
         return [
             'id' => $existing['id'] ?? (string) Str::uuid(),
             'name' => $name,
@@ -756,6 +922,16 @@ class PlatformMailConfigService
             'password' => $password,
             'from_address' => $fromAddress,
             'from_name' => $fromName,
+            'imap_enabled' => $imapEnabled,
+            'imap_host' => $imapHost,
+            'imap_port' => $imapPort,
+            'imap_encryption' => in_array(strtolower((string) $imapEncryption), ['ssl', 'tls', 'none'], true)
+                ? strtolower((string) $imapEncryption)
+                : 'ssl',
+            'imap_username' => $imapUsername,
+            'imap_password' => $imapPassword,
+            'imap_folder' => $imapFolder ?: 'INBOX',
+            'imap_last_uid' => $imapLastUid,
         ];
     }
 
