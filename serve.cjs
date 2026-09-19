@@ -37,11 +37,15 @@ function findAvailablePort(startPort = 8000, maxAttempts = 10) {
   return null;
 }
 
+function artisan(command) {
+  execSync(`php artisan ${command}`, { stdio: 'inherit' });
+}
+
 function clearCache() {
-  execSync('php artisan config:clear');
-  execSync('php artisan cache:clear');
-  execSync('php artisan route:clear');
-  execSync('php artisan view:clear');
+  artisan('config:clear');
+  artisan('cache:clear');
+  artisan('route:clear');
+  artisan('view:clear');
   console.log('Cache cleared');
 }
 

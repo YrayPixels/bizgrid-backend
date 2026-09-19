@@ -16,6 +16,7 @@ class AdminEmailMessage extends Model
         'from_name',
         'to_emails',
         'cc_emails',
+        'bcc_emails',
         'subject',
         'body_text',
         'body_html',
@@ -36,6 +37,7 @@ class AdminEmailMessage extends Model
         return [
             'to_emails' => 'array',
             'cc_emails' => 'array',
+            'bcc_emails' => 'array',
             'metadata' => 'array',
             'imap_uid' => 'integer',
         ];
