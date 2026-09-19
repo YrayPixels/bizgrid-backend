@@ -12,6 +12,11 @@ return [
     'admin_app_url' => env('STOREHAUSE_ADMIN_APP_URL', 'http://localhost:5173'),
     'welcome_cc_email' => env('STOREHAUSE_WELCOME_CC_EMAIL', env('MAIL_FROM_ADDRESS')),
 
+    // Space admin compose/reply SMTP sends so providers don't treat bursts as spam.
+    'admin_mail' => [
+        'send_delay_seconds' => max(0, (int) env('ADMIN_MAIL_SEND_DELAY_SECONDS', 15)),
+    ],
+
     // Public social profiles promoted during BizFest application / welcome email.
     'bizfest_social_links' => array_values(array_filter([
         [

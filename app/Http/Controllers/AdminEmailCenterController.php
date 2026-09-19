@@ -134,7 +134,7 @@ class AdminEmailCenterController extends Controller
         return response()->json([
             'success' => true,
             'data' => $this->serializeThread($thread->fresh()->load(['messages' => fn ($q) => $q->orderBy('id')]), withMessages: true),
-            'message' => 'Reply sent.',
+            'message' => 'Reply queued.',
         ]);
     }
 
@@ -142,22 +142,35 @@ class AdminEmailCenterController extends Controller
     {
         $validator = Validator::make($request->all(), [
             'to' => 'nullable',
+            'cc' => 'nullable',
+            'bcc' => 'nullable',
             'merchant_ids' => 'nullable|array',
             'merchant_ids.*' => 'integer|min:1',
+            'cc_merchant_ids' => 'nullable|array',
+            'cc_merchant_ids.*' => 'integer|min:1',
+            'bcc_merchant_ids' => 'nullable|array',
+            'bcc_merchant_ids.*' => 'integer|min:1',
             'subject' => 'required|string|max:255',
-            'body_text' => 'required|string|max:20000',
-            'body_html' => 'nullable|string|max:50000',
+            'body_text' => 'nullable|string|max:20000',
+            'body_html' => 'nullable|string|max:200000',
+            'variables' => 'nullable|array|max:40',
             'provider_id' => 'nullable|string|max:64',
         ]);
 
         $validator->after(function ($validator) use ($request): void {
-            $to = $request->input('to');
-            $merchantIds = $request->input('merchant_ids');
-            $hasTo = (is_string($to) && trim($to) !== '')
-                || (is_array($to) && array_filter($to, fn ($v) => filled($v)) !== []);
-            $hasMerchants = is_array($merchantIds) && $merchantIds !== [];
-            if (! $hasTo && ! $hasMerchants) {
+            $hasRecipients = $this->hasRecipientInput($request->input('to'))
+                || $this->hasRecipientInput($request->input('cc'))
+                || $this->hasRecipientInput($request->input('bcc'))
+                || $this->hasIdList($request->input('merchant_ids'))
+                || $this->hasIdList($request->input('cc_merchant_ids'))
+                || $this->hasIdList($request->input('bcc_merchant_ids'));
+            if (! $hasRecipients) {
                 $validator->errors()->add('to', 'Add at least one recipient email or merchant.');
+            }
+            $hasBody = trim((string) $request->input('body_text', '')) !== ''
+                || trim((string) $request->input('body_html', '')) !== '';
+            if (! $hasBody) {
+                $validator->errors()->add('body_text', 'Add a message or HTML template.');
             }
         });
 
@@ -173,24 +186,45 @@ class AdminEmailCenterController extends Controller
         } catch (\InvalidArgumentException $e) {
             return response()->json(['message' => $e->getMessage()], 422);
         } catch (\Throwable $e) {
+            report($e);
+
             return response()->json([
-                'message' => 'Failed to send email.',
+                'message' => 'Failed to queue email.',
                 'error' => $e->getMessage(),
             ], 500);
         }
 
         $thread = $message->thread()->with(['messages' => fn ($q) => $q->orderBy('id')])->first();
+        $queuedCount = $thread?->message_count ?? 1;
 
         $this->audit->log($request, 'platform.email.composed', 'admin_email_thread', $thread?->id, [
             'message_id' => $message->id,
-            'to' => collect($message->to_emails ?? [])->pluck('email')->all(),
+            'to' => collect($thread?->messages ?? [])
+                ->flatMap(fn ($row) => collect($row->to_emails ?? [])->pluck('email'))
+                ->filter()
+                ->unique()
+                ->values()
+                ->all(),
+            'cc' => collect($thread?->messages ?? [])
+                ->flatMap(fn ($row) => collect($row->cc_emails ?? [])->pluck('email'))
+                ->filter()
+                ->unique()
+                ->values()
+                ->all(),
+            'bcc' => collect($thread?->messages ?? [])
+                ->flatMap(fn ($row) => collect($row->bcc_emails ?? [])->pluck('email'))
+                ->filter()
+                ->unique()
+                ->values()
+                ->all(),
             'merchant_ids' => $validator->validated()['merchant_ids'] ?? [],
+            'queued' => $queuedCount,
         ]);
 
         return response()->json([
             'success' => true,
             'data' => $thread ? $this->serializeThread($thread, withMessages: true) : null,
-            'message' => 'Email sent.',
+            'message' => $queuedCount === 1 ? 'Email queued.' : "Queued {$queuedCount} emails.",
         ], 201);
     }
 
@@ -274,6 +308,7 @@ class AdminEmailCenterController extends Controller
                 'from_name' => $message->from_name,
                 'to_emails' => $message->to_emails ?? [],
                 'cc_emails' => $message->cc_emails ?? [],
+                'bcc_emails' => $message->bcc_emails ?? [],
                 'subject' => $message->subject,
                 'body_text' => $message->body_text,
                 'body_html' => $message->body_html,
@@ -286,5 +321,19 @@ class AdminEmailCenterController extends Controller
         }
 
         return $payload;
+    }
+
+    private function hasRecipientInput(mixed $value): bool
+    {
+        if (is_string($value) && trim($value) !== '') {
+            return true;
+        }
+
+        return is_array($value) && array_filter($value, fn ($item) => filled($item)) !== [];
+    }
+
+    private function hasIdList(mixed $value): bool
+    {
+        return is_array($value) && $value !== [];
     }
 }
